@@ -8,26 +8,116 @@ embedded binary buffer and one named node per selectable face/group.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
+import logging
+import math
 import struct
 from dataclasses import dataclass
 from email.parser import BytesParser
 from email.policy import default as email_policy
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 import gmsh
 import meshio
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from geom.inventory import FaceInventory, get_inventory
 from geom.meshes import MeshInventory, _scan_inp_native_ids, load_mesh
 
 DEFAULT_MODEL_DIR = Path(".sim_intent_cache") / "models"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 SUPPORTED_SUFFIXES = {".step": "step", ".stp": "step", ".inp": "inp"}
+SELECTION_LOGGER = logging.getLogger("uvicorn.error")
+
+
+class SelectRequest(BaseModel):
+    """Frozen Task 8 click-selection request body."""
+
+    model_config = ConfigDict(extra="forbid")
+    entity_id: int = Field(gt=0)
+
+
+class HighlightRequest(BaseModel):
+    """Frozen highlight request plus an optional load-direction vector."""
+
+    model_config = ConfigDict(extra="forbid")
+    entity_ids: list[int] = Field(min_length=1)
+    style: str
+    vector: list[float] | None = Field(default=None, min_length=3, max_length=3)
+
+    @field_validator("entity_ids")
+    @classmethod
+    def entity_ids_are_positive_and_unique(cls, value: list[int]) -> list[int]:
+        if any(entity_id <= 0 for entity_id in value):
+            raise ValueError("entity ids must be positive")
+        if len(set(value)) != len(value):
+            raise ValueError("entity ids must be unique")
+        return value
+
+    @field_validator("style")
+    @classmethod
+    def normalize_style(cls, value: str) -> str:
+        normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "fixed_bc": "fixed_boundary_condition",
+            "load": "load_direction",
+        }
+        normalized = aliases.get(normalized, normalized)
+        allowed = {
+            "confirmed",
+            "proposed",
+            "candidate",
+            "fixed_boundary_condition",
+            "load_direction",
+        }
+        if normalized not in allowed:
+            raise ValueError(f"style must be one of: {', '.join(sorted(allowed))}")
+        return normalized
+
+    @field_validator("vector")
+    @classmethod
+    def vector_is_finite_and_nonzero(
+        cls, value: list[float] | None
+    ) -> list[float] | None:
+        if value is None:
+            return value
+        if not all(math.isfinite(component) for component in value):
+            raise ValueError("load direction vector must be finite")
+        if not any(component != 0.0 for component in value):
+            raise ValueError("load direction vector must be nonzero")
+        return value
+
+
+class ViewerEventBroker:
+    """Fan out transient Task 9 visual commands without session persistence."""
+
+    def __init__(self) -> None:
+        self._subscribers: set[asyncio.Queue[str]] = set()
+
+    async def publish(self, event: str, payload: dict[str, Any]) -> None:
+        message = f"event: {event}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
+        for subscriber in tuple(self._subscribers):
+            await subscriber.put(message)
+
+    async def stream(self) -> AsyncIterator[str]:
+        subscriber: asyncio.Queue[str] = asyncio.Queue()
+        self._subscribers.add(subscriber)
+        try:
+            yield ": viewer-connected\n\n"
+            while True:
+                try:
+                    yield await asyncio.wait_for(subscriber.get(), timeout=15.0)
+                except TimeoutError:
+                    yield ": keep-alive\n\n"
+        finally:
+            self._subscribers.discard(subscriber)
 
 
 @dataclass(frozen=True)
@@ -132,6 +222,12 @@ class ModelStore:
 def create_app(storage_dir: str | Path = DEFAULT_MODEL_DIR) -> FastAPI:
     app = FastAPI(title="sim-intent viewer backend")
     app.state.model_store = ModelStore(storage_dir)
+    app.state.viewer_events = ViewerEventBroker()
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def viewer_frontend() -> FileResponse:
+        return FileResponse(STATIC_DIR / "index.html")
 
     @app.post("/models", status_code=201)
     async def upload_model(
@@ -162,6 +258,26 @@ def create_app(storage_dir: str | Path = DEFAULT_MODEL_DIR) -> FastAPI:
             f'inline; filename="{Path(record.source_name).stem}.gltf"'
         )
         return response
+
+    @app.post("/select")
+    async def select_entity(selection: SelectRequest) -> dict[str, int | str]:
+        node_name = f"face_{selection.entity_id}"
+        SELECTION_LOGGER.info("Viewer selection recorded: %s", node_name)
+        return {"entity_id": selection.entity_id, "node_name": node_name}
+
+    @app.post("/highlight")
+    async def highlight_entities(highlight: HighlightRequest) -> dict[str, Any]:
+        payload = highlight.model_dump(exclude_none=True)
+        await app.state.viewer_events.publish("highlight", payload)
+        return payload
+
+    @app.get("/events", include_in_schema=False)
+    async def viewer_events() -> StreamingResponse:
+        return StreamingResponse(
+            app.state.viewer_events.stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # Task 8 names the plural routes; CLAUDE.md freezes the singular viewer
     # contract. Both resolve through the same handlers and payload schemas.

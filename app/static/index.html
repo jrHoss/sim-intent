@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>sim-intent viewer</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="sim-intent viewer home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>sim-intent</span>
+      </a>
+      <div class="model-controls">
+        <input id="model-file" type="file" accept=".step,.stp,.inp" hidden>
+        <button id="upload-button" class="primary-button" type="button">
+          <span>Load model</span>
+          <kbd>STEP / INP</kbd>
+        </button>
+        <span id="model-name" class="model-name">No model loaded</span>
+      </div>
+      <div id="connection-state" class="connection-state" data-state="connecting">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span>Connecting</span>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section id="viewer" class="viewer" aria-label="Interactive 3D model viewer">
+        <div class="viewer-grid" aria-hidden="true"></div>
+        <div id="drop-zone" class="empty-state">
+          <div class="empty-icon" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <p class="eyebrow">Geometry viewport</p>
+          <h1>Inspect engineering intent in 3D.</h1>
+          <p>Drop a STEP or Abaqus INP model here, or load one from disk.</p>
+          <button id="empty-load-button" class="ghost-button" type="button">Choose a model</button>
+        </div>
+
+        <div class="viewport-hud">
+          <div class="hud-card">
+            <span class="hud-label">Selection</span>
+            <strong id="selection-value">None</strong>
+          </div>
+          <div class="hud-card hint-card">
+            <span>Drag to orbit</span>
+            <span>Scroll to zoom</span>
+            <span>Click a face to select</span>
+          </div>
+        </div>
+
+        <div id="axes-widget" class="axes-widget" aria-label="Coordinate axes">
+          <canvas id="axes-canvas" width="104" height="104"></canvas>
+          <span class="axis-label axis-x">X</span>
+          <span class="axis-label axis-y">Y</span>
+          <span class="axis-label axis-z">Z</span>
+        </div>
+
+        <div id="loading" class="loading-panel" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <div>
+            <strong>Preparing geometry</strong>
+            <span id="loading-detail">Uploading model…</span>
+          </div>
+        </div>
+      </section>
+
+      <aside class="side-panel" aria-label="Viewer details">
+        <section class="panel-section model-section">
+          <p class="eyebrow">Active model</p>
+          <h2 id="panel-model-name">Waiting for geometry</h2>
+          <dl class="model-meta">
+            <div><dt>Type</dt><dd id="model-kind">—</dd></div>
+            <div><dt>Entities</dt><dd id="entity-count">—</dd></div>
+          </dl>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Visual language</p>
+              <h2>Highlights</h2>
+            </div>
+            <span class="live-badge">Live</span>
+          </div>
+          <ul class="legend">
+            <li><span class="swatch confirmed"></span><span>Confirmed</span></li>
+            <li><span class="swatch proposed"></span><span>Proposed</span></li>
+            <li><span class="swatch candidate"></span><span>Candidate</span></li>
+            <li><span class="swatch fixed"></span><span>Fixed boundary condition</span></li>
+            <li><span class="swatch load"></span><span>Load direction</span></li>
+          </ul>
+        </section>
+
+        <section class="panel-section activity-section">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Server acknowledged</p>
+              <h2>Click activity</h2>
+            </div>
+            <button id="clear-activity" class="text-button" type="button">Clear</button>
+          </div>
+          <ol id="activity-list" class="activity-list">
+            <li class="activity-empty">Face clicks will appear here.</li>
+          </ol>
+        </section>
+
+        <section class="panel-section status-section">
+          <p class="eyebrow">Status</p>
+          <p id="status-message" role="status">Ready to load a model.</p>
+        </section>
+      </aside>
+    </main>
+
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>
