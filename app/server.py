@@ -1,0 +1,421 @@
+"""FastAPI viewer backend (Task 8).
+
+Uploaded models are stored by a deterministic id derived from their bytes and
+safe source name. STEP inventories use :mod:`geom.inventory`; Abaqus INP
+inventories use :mod:`geom.meshes`. Viewer glTF is emitted as JSON with an
+embedded binary buffer and one named node per selectable face/group.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import struct
+from dataclasses import dataclass
+from email.parser import BytesParser
+from email.policy import default as email_policy
+from pathlib import Path
+from typing import Any
+
+import gmsh
+import meshio
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
+
+from geom.inventory import FaceInventory, get_inventory
+from geom.meshes import MeshInventory, _scan_inp_native_ids, load_mesh
+
+DEFAULT_MODEL_DIR = Path(".sim_intent_cache") / "models"
+SUPPORTED_SUFFIXES = {".step": "step", ".stp": "step", ".inp": "inp"}
+
+
+@dataclass(frozen=True)
+class ModelRecord:
+    model_id: str
+    source_name: str
+    kind: str
+    path: Path
+
+
+@dataclass(frozen=True)
+class FaceMesh:
+    face_id: int
+    positions: list[tuple[float, float, float]]
+    indices: list[int]
+
+
+class ModelStore:
+    """Filesystem-backed uploaded-model store with deterministic identifiers."""
+
+    def __init__(self, root: str | Path):
+        self.root = Path(root)
+
+    def add(self, source_name: str, content: bytes) -> ModelRecord:
+        source_name = _safe_source_name(source_name)
+        suffix = Path(source_name).suffix.lower()
+        kind = SUPPORTED_SUFFIXES.get(suffix)
+        if kind is None:
+            raise HTTPException(
+                status_code=415,
+                detail="unsupported model format; expected STEP (.step/.stp) or Abaqus INP (.inp)",
+            )
+        if not content:
+            raise HTTPException(status_code=400, detail="uploaded model is empty")
+
+        digest = hashlib.sha256()
+        digest.update(source_name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(content)
+        model_id = digest.hexdigest()
+        self.root.mkdir(parents=True, exist_ok=True)
+        model_dir = self.root / model_id
+        source_path = model_dir / source_name
+        metadata_path = model_dir / "model.json"
+
+        if metadata_path.is_file() and source_path.is_file():
+            return ModelRecord(model_id, source_name, kind, source_path)
+
+        model_dir.mkdir(parents=True, exist_ok=True)
+        source_path.write_bytes(content)
+        record = ModelRecord(model_id, source_name, kind, source_path)
+        try:
+            self.inventory(record)
+        except Exception as exc:
+            source_path.unlink(missing_ok=True)
+            metadata_path.unlink(missing_ok=True)
+            try:
+                model_dir.rmdir()
+            except OSError:
+                pass
+            if isinstance(exc, HTTPException):
+                raise
+            raise HTTPException(status_code=422, detail=f"could not parse model: {exc}") from exc
+
+        metadata_path.write_text(
+            json.dumps({"source_name": source_name, "kind": kind}, indent=2),
+            encoding="utf-8",
+        )
+        return record
+
+    def get(self, model_id: str) -> ModelRecord:
+        if len(model_id) != 64 or any(c not in "0123456789abcdef" for c in model_id):
+            raise HTTPException(status_code=404, detail="model not found")
+        model_dir = self.root / model_id
+        metadata_path = model_dir / "model.json"
+        if not metadata_path.is_file():
+            raise HTTPException(status_code=404, detail="model not found")
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            source_name = _safe_source_name(metadata["source_name"])
+            kind = metadata["kind"]
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=500, detail="stored model metadata is invalid") from exc
+        if kind not in {"step", "inp"}:
+            raise HTTPException(status_code=500, detail="stored model kind is invalid")
+        source_path = model_dir / source_name
+        if not source_path.is_file():
+            raise HTTPException(status_code=500, detail="stored model file is missing")
+        return ModelRecord(model_id, source_name, kind, source_path)
+
+    def inventory(self, record: ModelRecord) -> FaceInventory | MeshInventory:
+        if record.kind == "step":
+            inventory, _ = get_inventory(
+                record.path, cache_dir=record.path.parent / "inventory-cache"
+            )
+            return inventory
+        if record.kind == "inp":
+            return load_mesh(record.path)
+        raise ValueError(f"unsupported stored model kind: {record.kind}")
+
+
+def create_app(storage_dir: str | Path = DEFAULT_MODEL_DIR) -> FastAPI:
+    app = FastAPI(title="sim-intent viewer backend")
+    app.state.model_store = ModelStore(storage_dir)
+
+    @app.post("/models", status_code=201)
+    async def upload_model(
+        request: Request, filename: str | None = Query(default=None)
+    ) -> dict[str, str]:
+        source_name, content = await _uploaded_file(request, filename)
+        record = app.state.model_store.add(source_name, content)
+        return {
+            "id": record.model_id,
+            "source_name": record.source_name,
+            "kind": record.kind,
+        }
+
+    async def inventory_response(model_id: str) -> JSONResponse:
+        record = app.state.model_store.get(model_id)
+        inventory = app.state.model_store.inventory(record)
+        return JSONResponse(inventory.to_dict())
+
+    async def gltf_response(model_id: str) -> JSONResponse:
+        record = app.state.model_store.get(model_id)
+        inventory = app.state.model_store.inventory(record)
+        if record.kind == "step":
+            face_meshes = _tessellate_step(record.path)
+        else:
+            face_meshes = _tessellate_inp(record.path, inventory)
+        response = JSONResponse(_build_gltf(face_meshes), media_type="model/gltf+json")
+        response.headers["Content-Disposition"] = (
+            f'inline; filename="{Path(record.source_name).stem}.gltf"'
+        )
+        return response
+
+    # Task 8 names the plural routes; CLAUDE.md freezes the singular viewer
+    # contract. Both resolve through the same handlers and payload schemas.
+    app.add_api_route(
+        "/models/{model_id}/inventory", inventory_response, methods=["GET"]
+    )
+    app.add_api_route(
+        "/model/{model_id}/inventory", inventory_response, methods=["GET"]
+    )
+    app.add_api_route("/models/{model_id}/gltf", gltf_response, methods=["GET"])
+    app.add_api_route("/model/{model_id}/gltf", gltf_response, methods=["GET"])
+    return app
+
+
+async def _uploaded_file(
+    request: Request, filename_query: str | None
+) -> tuple[str, bytes]:
+    body = await request.body()
+    content_type = request.headers.get("content-type", "")
+    if content_type.lower().startswith("multipart/form-data"):
+        message = BytesParser(policy=email_policy).parsebytes(
+            b"Content-Type: "
+            + content_type.encode("latin-1")
+            + b"\r\nMIME-Version: 1.0\r\n\r\n"
+            + body
+        )
+        if not message.is_multipart():
+            raise HTTPException(status_code=400, detail="malformed multipart upload")
+        for part in message.iter_parts():
+            if part.get_param("name", header="content-disposition") == "file":
+                source_name = part.get_filename()
+                if not source_name:
+                    raise HTTPException(status_code=400, detail="uploaded file has no filename")
+                return source_name, part.get_payload(decode=True) or b""
+        raise HTTPException(status_code=400, detail="multipart upload requires a 'file' field")
+
+    source_name = filename_query or request.headers.get("x-filename")
+    if not source_name:
+        raise HTTPException(
+            status_code=400,
+            detail="raw upload requires a filename query parameter or X-Filename header",
+        )
+    return source_name, body
+
+
+def _safe_source_name(source_name: str) -> str:
+    if (
+        not source_name
+        or source_name in {".", ".."}
+        or "/" in source_name
+        or "\\" in source_name
+        or "\0" in source_name
+        or Path(source_name).name != source_name
+    ):
+        raise HTTPException(status_code=400, detail="invalid source filename")
+    return source_name
+
+
+def _tessellate_step(path: Path) -> list[FaceMesh]:
+    """Deterministically mesh STEP surfaces and keep triangles per CAD face."""
+    if gmsh.isInitialized():
+        raise RuntimeError("STEP tessellation requires exclusive use of gmsh")
+    gmsh.initialize()
+    try:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.option.setNumber("General.NumThreads", 1)
+        gmsh.option.setNumber("Mesh.MaxNumThreads1D", 1)
+        gmsh.option.setNumber("Mesh.MaxNumThreads2D", 1)
+        # A zero perturbation makes Gmsh's Delaunay triangulator reject
+        # coincident projected points on this fixture. Fix the seed and retain
+        # the documented tiny perturbation so output stays reproducible.
+        gmsh.option.setNumber("Mesh.RandomSeed", 1)
+        gmsh.option.setNumber("Mesh.RandomFactor", 1e-9)
+        gmsh.model.add(f"viewer_{path.stem}")
+        gmsh.model.occ.importShapes(str(path))
+        gmsh.model.occ.synchronize()
+        gmsh.model.mesh.generate(2)
+
+        node_tags, coordinates, _ = gmsh.model.mesh.getNodes()
+        coordinate_by_tag = {
+            int(tag): (
+                float(coordinates[3 * i]),
+                float(coordinates[3 * i + 1]),
+                float(coordinates[3 * i + 2]),
+            )
+            for i, tag in enumerate(node_tags)
+        }
+        result: list[FaceMesh] = []
+        for _, face_tag in sorted(gmsh.model.getEntities(2), key=lambda entity: entity[1]):
+            element_types, _, element_nodes = gmsh.model.mesh.getElements(2, face_tag)
+            triangles: list[tuple[int, int, int]] = []
+            for element_type, flattened in zip(element_types, element_nodes):
+                _, dimension, _, node_count, _, primary_count = (
+                    gmsh.model.mesh.getElementProperties(element_type)
+                )
+                if dimension != 2 or node_count != 3 or primary_count != 3:
+                    raise ValueError(
+                        f"face {face_tag} produced unsupported non-triangle elements"
+                    )
+                values = [int(tag) for tag in flattened]
+                triangles.extend(
+                    (values[i], values[i + 1], values[i + 2])
+                    for i in range(0, len(values), 3)
+                )
+            if not triangles:
+                raise ValueError(f"face {face_tag} produced no triangles")
+            result.append(_face_mesh_from_tagged_triangles(face_tag, triangles, coordinate_by_tag))
+        return result
+    finally:
+        gmsh.finalize()
+
+
+def _tessellate_inp(path: Path, inventory: MeshInventory) -> list[FaceMesh]:
+    """Build one selectable glTF mesh for each INP boundary facet group."""
+    mesh = meshio.read(path, file_format="abaqus")
+    native_node_ids, _ = _scan_inp_native_ids(path)
+    if len(native_node_ids) != len(mesh.points):
+        raise ValueError("INP native node ids do not align with mesh coordinates")
+    coordinate_by_tag = {
+        native_id: tuple(float(value) for value in mesh.points[i][:3])
+        for i, native_id in enumerate(native_node_ids)
+    }
+    facet_by_id = {facet.id: facet for facet in inventory.facets}
+    result = []
+    for group in sorted(inventory.facet_groups, key=lambda item: item.id):
+        triangles = [tuple(facet_by_id[fid].node_ids) for fid in group.facet_ids]
+        result.append(_face_mesh_from_tagged_triangles(group.id, triangles, coordinate_by_tag))
+    return result
+
+
+def _face_mesh_from_tagged_triangles(
+    face_id: int,
+    triangles: list[tuple[int, int, int]],
+    coordinate_by_tag: dict[int, tuple[float, float, float]],
+) -> FaceMesh:
+    """Canonicalize triangle order while preserving each triangle's winding."""
+    canonical = []
+    for triangle in triangles:
+        lowest = min(range(3), key=triangle.__getitem__)
+        rotated = triangle[lowest:] + triangle[:lowest]
+        canonical.append(rotated)
+    canonical.sort()
+    used_tags = sorted({tag for triangle in canonical for tag in triangle})
+    local_index = {tag: i for i, tag in enumerate(used_tags)}
+    try:
+        positions = [coordinate_by_tag[tag] for tag in used_tags]
+    except KeyError as exc:
+        raise ValueError(f"mesh references missing node {exc.args[0]}") from exc
+    indices = [local_index[tag] for triangle in canonical for tag in triangle]
+    return FaceMesh(face_id=face_id, positions=positions, indices=indices)
+
+
+def _build_gltf(face_meshes: list[FaceMesh]) -> dict[str, Any]:
+    """Encode face meshes as glTF 2.0 JSON with one embedded binary buffer."""
+    if not face_meshes:
+        raise ValueError("cannot create glTF without face meshes")
+    if len({mesh.face_id for mesh in face_meshes}) != len(face_meshes):
+        raise ValueError("glTF face ids must be unique")
+
+    binary = bytearray()
+    buffer_views: list[dict[str, Any]] = []
+    accessors: list[dict[str, Any]] = []
+    meshes: list[dict[str, Any]] = []
+    nodes: list[dict[str, Any]] = []
+
+    def align_four() -> None:
+        binary.extend(b"\0" * (-len(binary) % 4))
+
+    for face_mesh in sorted(face_meshes, key=lambda item: item.face_id):
+        if not face_mesh.positions or not face_mesh.indices:
+            raise ValueError(f"face {face_mesh.face_id} has empty geometry")
+        align_four()
+        position_offset = len(binary)
+        for xyz in face_mesh.positions:
+            binary.extend(struct.pack("<3f", *xyz))
+        position_view = len(buffer_views)
+        buffer_views.append(
+            {
+                "buffer": 0,
+                "byteOffset": position_offset,
+                "byteLength": len(face_mesh.positions) * 12,
+                "target": 34962,
+            }
+        )
+        position_accessor = len(accessors)
+        accessors.append(
+            {
+                "bufferView": position_view,
+                "componentType": 5126,
+                "count": len(face_mesh.positions),
+                "type": "VEC3",
+                "min": [min(p[axis] for p in face_mesh.positions) for axis in range(3)],
+                "max": [max(p[axis] for p in face_mesh.positions) for axis in range(3)],
+            }
+        )
+
+        align_four()
+        index_offset = len(binary)
+        for index in face_mesh.indices:
+            binary.extend(struct.pack("<I", index))
+        index_view = len(buffer_views)
+        buffer_views.append(
+            {
+                "buffer": 0,
+                "byteOffset": index_offset,
+                "byteLength": len(face_mesh.indices) * 4,
+                "target": 34963,
+            }
+        )
+        index_accessor = len(accessors)
+        accessors.append(
+            {
+                "bufferView": index_view,
+                "componentType": 5125,
+                "count": len(face_mesh.indices),
+                "type": "SCALAR",
+                "min": [min(face_mesh.indices)],
+                "max": [max(face_mesh.indices)],
+            }
+        )
+
+        mesh_index = len(meshes)
+        meshes.append(
+            {
+                "name": f"face_{face_mesh.face_id}",
+                "primitives": [
+                    {
+                        "attributes": {"POSITION": position_accessor},
+                        "indices": index_accessor,
+                        "material": 0,
+                        "mode": 4,
+                    }
+                ],
+            }
+        )
+        nodes.append({"name": f"face_{face_mesh.face_id}", "mesh": mesh_index})
+
+    encoded = base64.b64encode(binary).decode("ascii")
+    return {
+        "asset": {"version": "2.0", "generator": "sim-intent Task 8"},
+        "scene": 0,
+        "scenes": [{"nodes": list(range(len(nodes)))}],
+        "nodes": nodes,
+        "meshes": meshes,
+        "materials": [{"name": "default", "doubleSided": True}],
+        "buffers": [
+            {
+                "byteLength": len(binary),
+                "uri": "data:application/octet-stream;base64," + encoded,
+            }
+        ],
+        "bufferViews": buffer_views,
+        "accessors": accessors,
+    }
+
+
+app = create_app()
