@@ -1,0 +1,59 @@
+{
+  "analysis": {
+    "type": "static_structural",
+    "units": { "length": "mm", "force": "N", "stress": "MPa" }
+  },
+  "materials": [
+    {
+      "name": "steel",
+      "model": "linear_elastic_isotropic",
+      "E_MPa": 210000,
+      "nu": 0.3
+    }
+  ],
+  "regions": [
+    {
+      "id": "bolt_holes",
+      "entity_type": "cad_face",
+      "entity_ids": [18, 19, 24, 25],
+      "selection_method": "semantic_geometry_query",
+      "confidence": 0.94,
+      "source_instruction": "Fix the two bolt holes. Apply a total downward force of 5 kN to the upper mounting face. Use steel with E=210 GPa and nu=0.3. Generate a static structural analysis.",
+      "status": "proposed"
+    },
+    {
+      "id": "upper_mounting_face",
+      "entity_type": "cad_face",
+      "entity_ids": [7],
+      "selection_method": "multimodal_reference",
+      "confidence": 0.88,
+      "source_instruction": "Fix the two bolt holes. Apply a total downward force of 5 kN to the upper mounting face. Use steel with E=210 GPa and nu=0.3. Generate a static structural analysis.",
+      "status": "proposed"
+    }
+  ],
+  "bcs": [
+    {
+      "type": "fixed_displacement",
+      "region_ref": "bolt_holes",
+      "components": ["x", "y", "z"]
+    }
+  ],
+  "loads": [
+    {
+      "type": "resultant_surface_force",
+      "region_ref": "upper_mounting_face",
+      "vector": [0, -5000, 0]
+    }
+  ],
+  "assumptions": [
+    {
+      "text": "The 5 kN value was interpreted as total force, not pressure.",
+      "status": "pending"
+    },
+    {
+      "text": "The model coordinate system uses positive Y upward.",
+      "status": "pending"
+    }
+  ],
+  "validation_status": "unvalidated"
+}

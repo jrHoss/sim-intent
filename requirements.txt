@@ -1,0 +1,12 @@
+gmsh
+meshio
+fastapi
+uvicorn
+pydantic>=2
+anthropic
+numpy
+scipy
+typer
+rich
+pytest
+httpx

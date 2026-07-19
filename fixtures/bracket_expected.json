@@ -1,0 +1,34 @@
+{
+  "part": "bracket.step",
+  "total_faces": 12,
+  "ground_truth": {
+    "bolt_holes": {
+      "face_ids": [
+        11,
+        12
+      ],
+      "radius_mm": 5.5,
+      "axis": "Z",
+      "note": "the two coaxial-pattern base holes"
+    },
+    "wall_hole": {
+      "face_ids": [
+        10
+      ],
+      "radius_mm": 8.0,
+      "axis": "Y"
+    },
+    "fillet": {
+      "face_ids": [
+        3
+      ],
+      "radius_mm": 4.0,
+      "note": "cylindrical TYPE but NOT a hole; classifier must exclude via full-circle check / adjacency / length-vs-radius"
+    },
+    "planar_faces": 8
+  },
+  "traps": [
+    "fillet is Cylinder type",
+    "wall hole has different radius AND axis than bolt holes"
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "analysis": {
+    "type": "static_structural",
+    "units": { "length": "mm", "force": "N", "stress": "MPa" }
+  },
+  "materials": [
+    {
+      "name": "aluminum_6061",
+      "model": "linear_elastic_isotropic",
+      "E_MPa": 68900,
+      "nu": 0.33
+    }
+  ],
+  "regions": [
+    {
+      "id": "inner_cylinder",
+      "entity_type": "cad_face",
+      "entity_ids": [5],
+      "selection_method": "semantic_geometry_query",
+      "confidence": 0.97,
+      "source_instruction": "Apply 2 MPa pressure to the inner cylindrical surface.",
+      "status": "proposed"
+    },
+    {
+      "id": "bottom_face",
+      "entity_type": "cad_face",
+      "entity_ids": [2],
+      "selection_method": "user_click",
+      "confidence": 1.0,
+      "source_instruction": "Fix the bottom face.",
+      "status": "confirmed"
+    }
+  ],
+  "bcs": [
+    {
+      "type": "fixed_displacement",
+      "region_ref": "bottom_face",
+      "components": ["x", "y", "z"]
+    }
+  ],
+  "loads": [
+    {
+      "type": "pressure",
+      "region_ref": "inner_cylinder",
+      "magnitude": 2.0
+    }
+  ],
+  "assumptions": [
+    {
+      "text": "\"2 MPa\" was interpreted as pressure acting into the surface, not surface traction.",
+      "status": "pending"
+    }
+  ],
+  "validation_status": "unvalidated"
+}

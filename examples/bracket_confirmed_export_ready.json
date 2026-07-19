@@ -1,0 +1,82 @@
+{
+  "analysis": {
+    "type": "static_structural",
+    "units": { "length": "mm", "force": "N", "stress": "MPa" }
+  },
+  "materials": [
+    {
+      "name": "steel",
+      "model": "linear_elastic_isotropic",
+      "E_MPa": 210000,
+      "nu": 0.3
+    }
+  ],
+  "regions": [
+    {
+      "id": "bolt_holes",
+      "entity_type": "cad_face",
+      "entity_ids": [11, 12],
+      "selection_method": "semantic_geometry_query",
+      "confidence": 0.95,
+      "source_instruction": "Fix both bolt holes.",
+      "status": "confirmed"
+    },
+    {
+      "id": "top_of_wall",
+      "entity_type": "cad_face",
+      "entity_ids": [7],
+      "selection_method": "user_confirmed",
+      "confidence": 1.0,
+      "source_instruction": "Apply 5 kN downward across the top flange, and gravity in the negative Z direction.",
+      "status": "confirmed"
+    },
+    {
+      "id": "wall_hole",
+      "entity_type": "cad_face",
+      "entity_ids": [10],
+      "selection_method": "user_click",
+      "confidence": 1.0,
+      "source_instruction": "Prevent vertical motion on this hole.",
+      "status": "confirmed"
+    }
+  ],
+  "bcs": [
+    {
+      "type": "fixed_displacement",
+      "region_ref": "bolt_holes",
+      "components": ["x", "y", "z"]
+    },
+    {
+      "type": "prescribed_displacement",
+      "region_ref": "wall_hole",
+      "components": { "z": 0.0 }
+    }
+  ],
+  "loads": [
+    {
+      "type": "resultant_surface_force",
+      "region_ref": "top_of_wall",
+      "vector": [0, 0, -5000]
+    },
+    {
+      "type": "gravity",
+      "region_ref": null,
+      "vector": [0, 0, -9810]
+    }
+  ],
+  "assumptions": [
+    {
+      "text": "\"Downward\" was interpreted as the negative Z direction of the model coordinate system.",
+      "status": "accepted"
+    },
+    {
+      "text": "The 5 kN value was interpreted as total force, not force per node.",
+      "status": "accepted"
+    },
+    {
+      "text": "Gravity acceleration taken as 9810 mm/s^2 in -Z.",
+      "status": "accepted"
+    }
+  ],
+  "validation_status": "valid"
+}
