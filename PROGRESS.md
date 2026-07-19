@@ -1,5 +1,7 @@
 # PROGRESS
 
+- Task 7: DONE — ground/semantics.py is the single mm-N-MPa conversion and load-semantics layer (N/kN/MN, Pa/kPa/MPa/GPa, mm/m), distinguishes resultant force, pressure, traction, concentrated force, per-node totals, direction conventions, and gravity; every interpretation emits pending audit assumptions. The 20-case DoD table covers the sprint-goal 5 kN resultant, 2 MPa pressure, gravity -Z, and mixed-unit traps. 23/23 Task 7 tests, 101/101 total. Review correction: pressure now records the positive-into-surface sign convention explicitly.
+
 - Task 6: DONE — ground/queries.py deterministic JSON query engine (surface/hole selectors, true-radius and sign-independent axis filters, radius+axis hole groups, spatial/area ranks, adjacency/components, labels, set composition, candidate scores + margins), 12/12 new tests, 78/78 total. Bolt-hole grounding returns {11,12} through the r5.5 + Z-axis parallel group; it deliberately does not use coaxiality. Query execution consumes precomputed CylinderRecords alongside FaceInventory because true radius/axis cannot be derived from raw face bboxes.
 
 - Task 1: DONE — env gate ENV OK, 15/15 tests pass. Surprises: repo docs/fixtures live in sim_intent_starter/ (not workspace root); fixtures shipped in fixtures/, copied to tests/fixtures/ per plan; pytest.exe not on PATH (user-site install), use `python -m pytest`; sprint-goal example JSON predates rule-2 provenance fields, so the hand-authored example carries the instruction text verbatim in source_instruction with status=proposed.
