@@ -28,8 +28,17 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.session import (
+    InvalidRegionTransitionError,
+    RegionTransitionRequest,
+    SelectionSessionStore,
+    SessionIntentMissingError,
+    SessionRegionMissingError,
+    SessionSnapshot,
+)
 from geom.inventory import FaceInventory, get_inventory
 from geom.meshes import MeshInventory, _scan_inp_native_ids, load_mesh
+from ir.schema import SimulationIntent
 
 DEFAULT_MODEL_DIR = Path(".sim_intent_cache") / "models"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -222,6 +231,7 @@ class ModelStore:
 def create_app(storage_dir: str | Path = DEFAULT_MODEL_DIR) -> FastAPI:
     app = FastAPI(title="sim-intent viewer backend")
     app.state.model_store = ModelStore(storage_dir)
+    app.state.session_store = SelectionSessionStore()
     app.state.viewer_events = ViewerEventBroker()
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -278,6 +288,65 @@ def create_app(storage_dir: str | Path = DEFAULT_MODEL_DIR) -> FastAPI:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    def ensure_uploaded_model(session_id: str) -> None:
+        # Session ids are the deterministic uploaded-model ids.  Looking the
+        # model up first prevents orphan sessions and cross-model state.
+        app.state.model_store.get(session_id)
+
+    @app.get("/session/{session_id}/intent", response_model=SessionSnapshot)
+    async def get_session_intent(session_id: str) -> SessionSnapshot:
+        ensure_uploaded_model(session_id)
+        return app.state.session_store.get_or_create(session_id)
+
+    @app.put("/session/{session_id}/intent", response_model=SessionSnapshot)
+    async def put_session_intent(
+        session_id: str, intent: SimulationIntent
+    ) -> SessionSnapshot:
+        ensure_uploaded_model(session_id)
+        try:
+            return app.state.session_store.save_intent(session_id, intent)
+        except InvalidRegionTransitionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    async def transition_region(
+        session_id: str,
+        transition: RegionTransitionRequest,
+        target: str,
+    ) -> SessionSnapshot:
+        ensure_uploaded_model(session_id)
+        try:
+            if target == "confirmed":
+                return app.state.session_store.confirm_region(
+                    session_id, transition.region_id
+                )
+            return app.state.session_store.reject_region(
+                session_id, transition.region_id
+            )
+        except SessionIntentMissingError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except SessionRegionMissingError as exc:
+            raise HTTPException(
+                status_code=404, detail=f"region '{exc.args[0]}' not found"
+            ) from exc
+        except InvalidRegionTransitionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post(
+        "/session/{session_id}/confirm_region", response_model=SessionSnapshot
+    )
+    async def confirm_session_region(
+        session_id: str, transition: RegionTransitionRequest
+    ) -> SessionSnapshot:
+        return await transition_region(session_id, transition, "confirmed")
+
+    @app.post(
+        "/session/{session_id}/reject_region", response_model=SessionSnapshot
+    )
+    async def reject_session_region(
+        session_id: str, transition: RegionTransitionRequest
+    ) -> SessionSnapshot:
+        return await transition_region(session_id, transition, "rejected")
 
     # Task 8 names the plural routes; CLAUDE.md freezes the singular viewer
     # contract. Both resolve through the same handlers and payload schemas.
