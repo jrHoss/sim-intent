@@ -262,6 +262,8 @@ kbd {
 .audit-action:disabled { cursor: wait; opacity: 0.45; }
 .audit-export-button { width: 100%; margin-top: 18px; padding: 9px 10px; border: 1px solid var(--accent); border-radius: 6px; color: #07110d; background: var(--accent); cursor: pointer; font-size: 10px; font-weight: 800; }
 .audit-export-button:disabled { border-color: var(--line); color: #687572; background: #202927; cursor: not-allowed; }
+.audit-export-adapter { display: grid; gap: 6px; margin-top: 16px; color: var(--muted); font-size: 10px; }
+.audit-export-adapter select { width: 100%; padding: 7px; border: 1px solid var(--line); border-radius: 5px; color: var(--text); background: #121918; font: inherit; }
 .audit-action-status { margin: 9px 0 0; color: var(--muted); font-size: 9px; line-height: 1.45; }
 
 .viewer.dragging { box-shadow: inset 0 0 0 2px var(--accent); }

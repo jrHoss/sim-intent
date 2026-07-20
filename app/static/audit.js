@@ -5,6 +5,7 @@ const eligibilityValue = document.querySelector("#audit-export-eligibility");
 const blockingList = document.querySelector("#audit-blocking-list");
 const regionList = document.querySelector("#audit-region-list");
 const assumptionList = document.querySelector("#audit-assumption-list");
+const exportAdapter = document.querySelector("#audit-export-adapter");
 const exportButton = document.querySelector("#audit-export-button");
 const actionStatus = document.querySelector("#audit-action-status");
 
@@ -208,11 +209,25 @@ export function createAuditPanel({ onHighlight, onStatus }) {
     if (!modelId || !latestAudit?.export_eligible) return;
     exportButton.disabled = true;
     try {
-      const response = await fetch(`/session/${modelId}/export-gate`, { method: "POST" });
+      const gate = await fetch(`/session/${modelId}/export-gate`, { method: "POST" });
+      if (!gate.ok) throw new Error(await responseMessage(gate));
+      const response = await fetch(`/session/${modelId}/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adapter: exportAdapter.value }),
+      });
       if (!response.ok) throw new Error(await responseMessage(response));
-      const readiness = await response.json();
-      actionStatus.textContent = readiness.message;
-      onStatus(readiness.message);
+      const disposition = response.headers.get("Content-Disposition") || "";
+      const filenameMatch = disposition.match(/filename="([A-Za-z0-9_.-]+)"/);
+      const filename = filenameMatch ? filenameMatch[1] : "simulation-artifact.txt";
+      const url = URL.createObjectURL(await response.blob());
+      const download = document.createElement("a");
+      download.href = url;
+      download.download = filename;
+      download.click();
+      URL.revokeObjectURL(url);
+      actionStatus.textContent = `${filename} generated from the confirmed server intent.`;
+      onStatus(actionStatus.textContent);
     } catch (error) {
       actionStatus.textContent = error.message || "Readiness check failed.";
       onStatus(actionStatus.textContent, true);
@@ -222,8 +237,10 @@ export function createAuditPanel({ onHighlight, onStatus }) {
   });
 
   return {
-    async setModel(nextModelId) {
+    async setModel(nextModelId, modelKind = null) {
       modelId = nextModelId;
+      if (modelKind === "step") exportAdapter.value = "abaqus_py";
+      if (modelKind === "inp") exportAdapter.value = "ccx_inp";
       actionStatus.textContent = "";
       try {
         await refresh();

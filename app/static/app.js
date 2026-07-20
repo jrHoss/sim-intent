@@ -279,7 +279,7 @@ async function loadModel(file) {
     document.querySelector("#model-kind").textContent = model.kind.toUpperCase();
     document.querySelector("#entity-count").textContent = `${faceObjects.size} faces`;
     selectionValue.textContent = "None";
-    await auditPanel.setModel(model.id);
+    await auditPanel.setModel(model.id, model.kind);
     setStatus(`${model.source_name} loaded with ${faceObjects.size} selectable faces.`);
   } catch (error) {
     console.error(error);

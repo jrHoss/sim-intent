@@ -24,7 +24,7 @@ from typing import Any, AsyncIterator, Literal
 import gmsh
 import meshio
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -37,6 +37,16 @@ from app.session import (
     SessionIntentMissingError,
     SessionRegionMissingError,
     SessionSnapshot,
+)
+from export.abaqus_py import export_abaqus_py
+from export.ccx_inp import export_ccx_inp
+from export.common import (
+    CadModelMetadata,
+    ExportAdapterError,
+    ExportNotReadyError,
+    MeshModelMetadata,
+    UnsupportedModelTypeError,
+    blocking_issues,
 )
 from geom.inventory import FaceInventory, get_inventory
 from geom.meshes import MeshInventory, _scan_inp_native_ids, load_mesh
@@ -152,6 +162,12 @@ class ExportGateResponse(StrictModel):
     export_eligible: bool
     message: str
     blocking_issues: list[ValidationIssue]
+
+
+class ArtifactExportRequest(StrictModel):
+    """Select one Task 14 adapter; eligibility remains server-computed."""
+
+    adapter: str = Field(min_length=1, max_length=40)
 
 
 class ViewerEventBroker:
@@ -515,6 +531,125 @@ def create_app(storage_dir: str | Path = DEFAULT_MODEL_DIR) -> FastAPI:
                 "solver artifact generation belongs to Task 14."
             ),
             blocking_issues=[],
+        )
+
+    @app.post("/session/{session_id}/export")
+    async def export_session_artifact(
+        session_id: str, request: ArtifactExportRequest
+    ) -> Response:
+        """Regenerate an artifact from stored confirmed IR and model metadata."""
+
+        record = app.state.model_store.get(session_id)
+        try:
+            intent, report = app.state.session_store.intent_and_report(session_id)
+        except SessionIntentMissingError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        blockers = [issue for issue in report.issues if issue.blocks_export]
+        if not report.export_eligible:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "code": "export_not_ready",
+                    "message": "Export is blocked; resolve every listed readiness issue.",
+                    "validation_status": report.validation_status,
+                    "export_eligible": False,
+                    "blocking_issues": [
+                        issue.model_dump(mode="json") for issue in blockers
+                    ],
+                },
+            )
+
+        adapter = request.adapter.strip().lower()
+        if adapter not in {"abaqus_py", "ccx_inp"}:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "code": "unknown_adapter",
+                    "message": "Unknown export adapter; choose abaqus_py or ccx_inp.",
+                    "adapter": adapter,
+                },
+            )
+
+        try:
+            inventory = app.state.model_store.inventory(record)
+            if adapter == "abaqus_py":
+                if record.kind != "step" or not isinstance(inventory, FaceInventory):
+                    raise UnsupportedModelTypeError(
+                        "The abaqus_py adapter requires a STEP/CAD model."
+                    )
+                metadata = CadModelMetadata(
+                    source_path=record.path,
+                    source_name=record.source_name,
+                    source_sha256=inventory.file_sha256,
+                    face_ids=tuple(sorted(face.tag for face in inventory.faces)),
+                )
+                result = export_abaqus_py(intent, metadata)
+            else:
+                if record.kind != "inp" or not isinstance(inventory, MeshInventory):
+                    raise UnsupportedModelTypeError(
+                        "The ccx_inp adapter requires an existing Abaqus INP mesh model."
+                    )
+                node_ids, element_blocks = _scan_inp_native_ids(record.path)
+                metadata = MeshModelMetadata(
+                    source_path=record.path,
+                    inventory=inventory,
+                    node_ids=tuple(node_ids),
+                    element_ids=tuple(
+                        element_id
+                        for block in element_blocks
+                        for element_id in block
+                    ),
+                )
+                result = export_ccx_inp(intent, metadata)
+        except ExportNotReadyError as exc:
+            # The adapter independently recomputes Task 13 validation and the
+            # SimulationIntent.export_payload() confirmation gate.
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "code": exc.code,
+                    "message": exc.safe_message,
+                    "validation_status": exc.report.validation_status,
+                    "export_eligible": False,
+                    "blocking_issues": [
+                        issue.model_dump(mode="json")
+                        for issue in blocking_issues(exc)
+                    ],
+                },
+            )
+        except ExportAdapterError as exc:
+            status_code = 500 if exc.code == "artifact_generation_failed" else 422
+            return JSONResponse(
+                status_code=status_code,
+                content={
+                    "code": exc.code,
+                    "message": exc.safe_message,
+                    "adapter": adapter,
+                },
+            )
+        except Exception:
+            # Do not expose exception text: parser/generator errors can contain
+            # local paths or implementation details.
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "code": "artifact_generation_failed",
+                    "message": "Artifact generation failed unexpectedly.",
+                    "adapter": adapter,
+                },
+            )
+
+        return Response(
+            content=result.artifact_bytes,
+            media_type=result.media_type,
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{result.suggested_filename}"'
+                ),
+                "X-Artifact-SHA256": result.checksum_sha256,
+                "X-Solver-Executed": "false",
+            },
         )
 
     # Task 8 names the plural routes; CLAUDE.md freezes the singular viewer

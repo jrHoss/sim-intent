@@ -141,8 +141,15 @@
               <h3>Assumptions</h3>
               <div id="audit-assumption-list" class="audit-card-list"></div>
             </div>
+            <label class="audit-export-adapter" for="audit-export-adapter">
+              Adapter
+              <select id="audit-export-adapter">
+                <option value="abaqus_py">Abaqus Python (STEP)</option>
+                <option value="ccx_inp">CalculiX INP (mesh)</option>
+              </select>
+            </label>
             <button id="audit-export-button" class="audit-export-button" type="button" disabled>
-              Check export readiness
+              Export artifact
             </button>
             <p id="audit-action-status" class="audit-action-status" role="status"></p>
           </div>
