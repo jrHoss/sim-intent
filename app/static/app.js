@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { createAuditPanel } from "/static/audit.js";
 
 const viewer = document.querySelector("#viewer");
 const fileInput = document.querySelector("#model-file");
@@ -60,6 +61,7 @@ const arrows = new Map();
 let modelRoot = null;
 let modelSize = 1;
 let pointerStart = null;
+let auditPanel = null;
 
 const COLORS = {
   base: 0xaebcb8,
@@ -277,6 +279,7 @@ async function loadModel(file) {
     document.querySelector("#model-kind").textContent = model.kind.toUpperCase();
     document.querySelector("#entity-count").textContent = `${faceObjects.size} faces`;
     selectionValue.textContent = "None";
+    await auditPanel.setModel(model.id);
     setStatus(`${model.source_name} loaded with ${faceObjects.size} selectable faces.`);
   } catch (error) {
     console.error(error);
@@ -396,6 +399,10 @@ for (const eventName of ["dragleave", "drop"]) {
 viewer.addEventListener("drop", (event) => loadModel(event.dataTransfer.files[0]));
 
 window.addEventListener("resize", resize);
+auditPanel = createAuditPanel({
+  onHighlight: (command) => applyHighlight(command),
+  onStatus: (message, error = false) => setStatus(message, error),
+});
 resize();
 connectHighlightEvents();
 animate();

@@ -48,6 +48,7 @@
   "assumptions": [
     {
       "text": "\"2 MPa\" was interpreted as pressure acting into the surface, not surface traction.",
+      "criticality": "unit_critical",
       "status": "pending"
     }
   ],

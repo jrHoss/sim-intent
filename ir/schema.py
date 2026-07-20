@@ -14,6 +14,7 @@ Pydantic v2 models per EXECUTION_PLAN Task 1 and CLAUDE.md standing rules:
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Annotated, Literal, Union
 
@@ -162,9 +163,39 @@ Load = Annotated[
 # Assumptions / top-level intent
 # --------------------------------------------------------------------------
 
+AssumptionCriticality = Literal["unit_critical", "noncritical"]
+
+
 class Assumption(StrictModel):
-    text: str
+    """Auditable inference with a stable identity and explicit criticality.
+
+    Task 1 assumptions predate explicit identifiers and criticality.  Defaults
+    keep those payloads valid, while the identifier is deterministically
+    derived from immutable assumption content instead of an array index.
+    """
+
+    id: str = Field(default="", min_length=1)
+    text: str = Field(min_length=1)
+    criticality: AssumptionCriticality = "noncritical"
     status: Literal["pending", "accepted", "rejected"]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _assign_stable_id(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        text = value.get("text")
+        criticality = value.get("criticality", "noncritical")
+        if not isinstance(text, str) or not isinstance(criticality, str):
+            return value
+        digest = hashlib.sha256(
+            f"{criticality}\0{text}".encode("utf-8")
+        ).hexdigest()[:16]
+        expected = f"assumption_{digest}"
+        supplied = value.get("id")
+        if supplied not in (None, "", expected):
+            raise ValueError("assumption id does not match its immutable content")
+        return {**value, "id": expected}
 
 
 ValidationStatus = Literal["unvalidated", "valid", "invalid"]
@@ -184,6 +215,9 @@ class SimulationIntent(StrictModel):
         region_ids = [r.id for r in self.regions]
         if len(set(region_ids)) != len(region_ids):
             raise ValueError("duplicate region ids")
+        assumption_ids = [assumption.id for assumption in self.assumptions]
+        if len(set(assumption_ids)) != len(assumption_ids):
+            raise ValueError("duplicate assumption ids")
         known = set(region_ids)
         for item in [*self.bcs, *self.loads]:
             ref = item.region_ref

@@ -115,6 +115,39 @@
           </ol>
         </section>
 
+        <section id="audit-panel" class="panel-section audit-section" aria-labelledby="audit-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Task 13 review gate</p>
+              <h2 id="audit-heading">Intent audit</h2>
+            </div>
+            <span id="audit-validation-status" class="audit-badge" data-status="unvalidated">Unvalidated</span>
+          </div>
+          <p id="audit-empty" class="audit-empty">Load a model with a saved intent session to review provenance and readiness.</p>
+          <div id="audit-content" hidden>
+            <div class="audit-readiness">
+              <span>Export eligibility</span>
+              <strong id="audit-export-eligibility">Blocked</strong>
+            </div>
+            <div class="audit-blockers">
+              <h3>Blocking issues</h3>
+              <ul id="audit-blocking-list"></ul>
+            </div>
+            <div class="audit-group">
+              <h3>Regions</h3>
+              <div id="audit-region-list" class="audit-card-list"></div>
+            </div>
+            <div class="audit-group">
+              <h3>Assumptions</h3>
+              <div id="audit-assumption-list" class="audit-card-list"></div>
+            </div>
+            <button id="audit-export-button" class="audit-export-button" type="button" disabled>
+              Check export readiness
+            </button>
+            <p id="audit-action-status" class="audit-action-status" role="status"></p>
+          </div>
+        </section>
+
         <section class="panel-section status-section">
           <p class="eyebrow">Status</p>
           <p id="status-message" role="status">Ready to load a model.</p>

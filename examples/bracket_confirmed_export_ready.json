@@ -47,9 +47,9 @@
       "components": ["x", "y", "z"]
     },
     {
-      "type": "prescribed_displacement",
+      "type": "fixed_displacement",
       "region_ref": "wall_hole",
-      "components": { "z": 0.0 }
+      "components": ["z"]
     }
   ],
   "loads": [
@@ -67,14 +67,17 @@
   "assumptions": [
     {
       "text": "\"Downward\" was interpreted as the negative Z direction of the model coordinate system.",
+      "criticality": "unit_critical",
       "status": "accepted"
     },
     {
       "text": "The 5 kN value was interpreted as total force, not force per node.",
+      "criticality": "unit_critical",
       "status": "accepted"
     },
     {
       "text": "Gravity acceleration taken as 9810 mm/s^2 in -Z.",
+      "criticality": "unit_critical",
       "status": "accepted"
     }
   ],

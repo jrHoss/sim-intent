@@ -48,10 +48,12 @@
   "assumptions": [
     {
       "text": "The 5 kN value was interpreted as total force, not pressure.",
+      "criticality": "unit_critical",
       "status": "pending"
     },
     {
       "text": "The model coordinate system uses positive Y upward.",
+      "criticality": "unit_critical",
       "status": "pending"
     }
   ],

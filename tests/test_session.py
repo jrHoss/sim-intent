@@ -145,9 +145,11 @@ def test_ir_draft_round_trips_and_populates_selection_state(session_app):
 
     assert retrieved.status_code == 200
     assert retrieved.json() == saved
-    assert saved["intent"] == SimulationIntent.model_validate(
-        intent_payload()
-    ).model_dump(mode="json")
+    expected_intent = SimulationIntent.model_validate(intent_payload()).model_dump(
+        mode="json"
+    )
+    expected_intent["validation_status"] = "valid"
+    assert saved["intent"] == expected_intent
     assert saved["selected_entities"] == {
         "fixed_region": [1],
         "loaded_region": [2],

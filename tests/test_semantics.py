@@ -39,6 +39,7 @@ def test_phrase_table(phrase, load_type, value, vector):
     result = interpret_load(phrase)
     assert (result.type, result.value, result.vector) == (load_type, value, vector)
     assert result.assumptions and all(a.status == "pending" for a in result.assumptions)
+    assert all(a.criticality == "unit_critical" for a in result.assumptions)
 
 
 def test_per_node_force_is_totalled_twentieth_case():

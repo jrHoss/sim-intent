@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from email.parser import BytesParser
 from email.policy import default as email_policy
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
 
 import gmsh
 import meshio
@@ -29,16 +29,27 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.session import (
+    InvalidAssumptionTransitionError,
     InvalidRegionTransitionError,
     RegionTransitionRequest,
     SelectionSessionStore,
+    SessionAssumptionMissingError,
     SessionIntentMissingError,
     SessionRegionMissingError,
     SessionSnapshot,
 )
 from geom.inventory import FaceInventory, get_inventory
 from geom.meshes import MeshInventory, _scan_inp_native_ids, load_mesh
-from ir.schema import SimulationIntent
+from ir.schema import (
+    Assumption,
+    EntityType,
+    RegionStatus,
+    SelectionMethod,
+    SimulationIntent,
+    StrictModel,
+    ValidationStatus,
+)
+from ir.validate import ValidationIssue, ValidationReport
 
 DEFAULT_MODEL_DIR = Path(".sim_intent_cache") / "models"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -102,6 +113,45 @@ class HighlightRequest(BaseModel):
         if not any(component != 0.0 for component in value):
             raise ValueError("load direction vector must be nonzero")
         return value
+
+
+class AuditRegion(StrictModel):
+    """Region provenance plus all conditions that reference the region."""
+
+    id: str
+    entity_type: EntityType
+    entity_ids: list[int] | list[str]
+    selection_method: SelectionMethod
+    confidence: float
+    source_instruction: str
+    status: RegionStatus
+    boundary_conditions: list[dict[str, Any]]
+    loads: list[dict[str, Any]]
+
+
+class AuditResponse(StrictModel):
+    """Backend source of truth for the Task 13 audit panel."""
+
+    session_id: str
+    model_id: str
+    validation_status: ValidationStatus
+    export_eligible: bool
+    blocking_reasons: list[str]
+    regions: list[AuditRegion]
+    assumptions: list[Assumption]
+    validation_report: ValidationReport
+
+
+class ExportGateResponse(StrictModel):
+    """Readiness only; Task 13 never claims to have generated an artifact."""
+
+    session_id: str
+    model_id: str
+    status: Literal["blocked", "ready"]
+    validation_status: ValidationStatus
+    export_eligible: bool
+    message: str
+    blocking_issues: list[ValidationIssue]
 
 
 class ViewerEventBroker:
@@ -306,7 +356,7 @@ def create_app(storage_dir: str | Path = DEFAULT_MODEL_DIR) -> FastAPI:
         ensure_uploaded_model(session_id)
         try:
             return app.state.session_store.save_intent(session_id, intent)
-        except InvalidRegionTransitionError as exc:
+        except (InvalidRegionTransitionError, InvalidAssumptionTransitionError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     async def transition_region(
@@ -347,6 +397,125 @@ def create_app(storage_dir: str | Path = DEFAULT_MODEL_DIR) -> FastAPI:
         session_id: str, transition: RegionTransitionRequest
     ) -> SessionSnapshot:
         return await transition_region(session_id, transition, "rejected")
+
+    async def transition_assumption(
+        session_id: str,
+        assumption_id: str,
+        target: Literal["accepted", "rejected"],
+    ) -> SessionSnapshot:
+        ensure_uploaded_model(session_id)
+        try:
+            if target == "accepted":
+                return app.state.session_store.accept_assumption(
+                    session_id, assumption_id
+                )
+            return app.state.session_store.reject_assumption(
+                session_id, assumption_id
+            )
+        except SessionIntentMissingError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except SessionAssumptionMissingError as exc:
+            raise HTTPException(
+                status_code=404, detail=f"assumption '{exc.args[0]}' not found"
+            ) from exc
+        except InvalidAssumptionTransitionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post(
+        "/session/{session_id}/assumptions/{assumption_id}/accept",
+        response_model=SessionSnapshot,
+    )
+    async def accept_session_assumption(
+        session_id: str, assumption_id: str
+    ) -> SessionSnapshot:
+        return await transition_assumption(session_id, assumption_id, "accepted")
+
+    @app.post(
+        "/session/{session_id}/assumptions/{assumption_id}/reject",
+        response_model=SessionSnapshot,
+    )
+    async def reject_session_assumption(
+        session_id: str, assumption_id: str
+    ) -> SessionSnapshot:
+        return await transition_assumption(session_id, assumption_id, "rejected")
+
+    def audit_response(session_id: str) -> AuditResponse:
+        ensure_uploaded_model(session_id)
+        try:
+            intent, report = app.state.session_store.intent_and_report(session_id)
+        except SessionIntentMissingError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        regions = []
+        for region in intent.regions:
+            regions.append(
+                AuditRegion(
+                    **region.model_dump(mode="python"),
+                    boundary_conditions=[
+                        bc.model_dump(mode="json")
+                        for bc in intent.bcs
+                        if bc.region_ref == region.id
+                    ],
+                    loads=[
+                        load.model_dump(mode="json")
+                        for load in intent.loads
+                        if load.region_ref == region.id
+                    ],
+                )
+            )
+        blocking = [issue for issue in report.issues if issue.blocks_export]
+        return AuditResponse(
+            session_id=session_id,
+            model_id=session_id,
+            validation_status=report.validation_status,
+            export_eligible=report.export_eligible,
+            blocking_reasons=[issue.message for issue in blocking],
+            regions=regions,
+            assumptions=[item.model_copy(deep=True) for item in intent.assumptions],
+            validation_report=report,
+        )
+
+    @app.get("/session/{session_id}/audit", response_model=AuditResponse)
+    async def get_session_audit(session_id: str) -> AuditResponse:
+        return audit_response(session_id)
+
+    @app.post(
+        "/session/{session_id}/export-gate",
+        response_model=ExportGateResponse,
+    )
+    async def check_session_export_gate(
+        session_id: str,
+    ) -> ExportGateResponse | JSONResponse:
+        audit = audit_response(session_id)
+        blocking = [
+            issue
+            for issue in audit.validation_report.issues
+            if issue.blocks_export
+        ]
+        if not audit.export_eligible:
+            response = ExportGateResponse(
+                session_id=session_id,
+                model_id=session_id,
+                status="blocked",
+                validation_status=audit.validation_status,
+                export_eligible=False,
+                message="Export is blocked; resolve every listed readiness issue.",
+                blocking_issues=blocking,
+            )
+            return JSONResponse(
+                status_code=409, content=response.model_dump(mode="json")
+            )
+        return ExportGateResponse(
+            session_id=session_id,
+            model_id=session_id,
+            status="ready",
+            validation_status=audit.validation_status,
+            export_eligible=True,
+            message=(
+                "Task 13 readiness confirmed. No artifact was generated; "
+                "solver artifact generation belongs to Task 14."
+            ),
+            blocking_issues=[],
+        )
 
     # Task 8 names the plural routes; CLAUDE.md freezes the singular viewer
     # contract. Both resolve through the same handlers and payload schemas.

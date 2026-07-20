@@ -1,0 +1,41 @@
+{
+  "analysis": {
+    "type": "static_structural",
+    "units": { "length": "mm", "force": "N", "stress": "MPa" }
+  },
+  "materials": [
+    {
+      "name": "steel",
+      "model": "linear_elastic_isotropic",
+      "E_MPa": 210000,
+      "nu": 0.3
+    }
+  ],
+  "regions": [
+    {
+      "id": "bolt_holes",
+      "entity_type": "cad_face",
+      "entity_ids": [11, 12],
+      "selection_method": "semantic_geometry_query",
+      "confidence": 0.95,
+      "source_instruction": "Fix the two bolt holes.",
+      "status": "proposed"
+    }
+  ],
+  "bcs": [
+    {
+      "type": "fixed_displacement",
+      "region_ref": "bolt_holes",
+      "components": ["x", "y", "z"]
+    }
+  ],
+  "loads": [],
+  "assumptions": [
+    {
+      "text": "The model coordinate system and mm-N-MPa convention were used for this grounded constraint.",
+      "criticality": "unit_critical",
+      "status": "pending"
+    }
+  ],
+  "validation_status": "unvalidated"
+}

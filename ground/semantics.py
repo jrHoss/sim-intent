@@ -39,6 +39,12 @@ _QUANTITY_RE = re.compile(
 SUPPORTED_QUANTITY_UNITS = ("N", "kN", "MN", "Pa", "kPa", "MPa", "GPa", "mm", "m")
 
 
+def _critical_assumption(text: str) -> Assumption:
+    """Mark Task 7 unit/load/direction semantics as export-critical."""
+
+    return Assumption(text=text, criticality="unit_critical", status="pending")
+
+
 def semantics_vocabulary() -> dict[str, list[str]]:
     """Return the Task 7 load/unit vocabulary in deterministic prompt form."""
     return {
@@ -131,7 +137,7 @@ def parse_direction(
             raise ValueError("no supported direction found")
     vector = [0.0, 0.0, 0.0]
     vector["xyz".index(axis)] = sign
-    return (vector[0], vector[1], vector[2]), Assumption(text=reason, status="pending")
+    return (vector[0], vector[1], vector[2]), _critical_assumption(reason)
 
 
 def interpret_load(
@@ -159,7 +165,7 @@ def interpret_load(
         vector = tuple(value * component for component in direction)
         assumptions.extend([
             direction_assumption,
-            Assumption(text="Standard gravity was interpreted as 9810 mm/s^2.", status="pending"),
+            _critical_assumption("Standard gravity was interpreted as 9810 mm/s^2."),
         ])
         return SemanticLoad("gravity", value, "mm/s^2", vector, tuple(assumptions))
 
@@ -177,11 +183,12 @@ def interpret_load(
         else:
             load_type, vector = "pressure", None
             semantic = "pressure because stress units were supplied"
-            assumptions.append(Assumption(
-                text="Positive pressure was interpreted as acting into the surface.",
-                status="pending",
+            assumptions.append(_critical_assumption(
+                "Positive pressure was interpreted as acting into the surface."
             ))
-        assumptions.append(Assumption(text=f"The {quantity.unit} value was interpreted as {semantic}.", status="pending"))
+        assumptions.append(_critical_assumption(
+            f"The {quantity.unit} value was interpreted as {semantic}."
+        ))
         return SemanticLoad(load_type, quantity.value, quantity.unit, vector, tuple(assumptions))
 
     count = node_count if node_count is not None else region_count
@@ -190,18 +197,18 @@ def interpret_load(
         if count is None or count <= 0:
             raise ValueError("a positive node_count is required for a per-node force")
         value *= count
-        assumptions.append(Assumption(
-            text=f"The per-node force was converted to a total over {count} nodes.", status="pending"
+        assumptions.append(_critical_assumption(
+            f"The per-node force was converted to a total over {count} nodes."
         ))
 
     concentrated = any(token in lower for token in ("concentrated", "point load", "at node", "on node"))
     load_type = "concentrated_force" if concentrated else "resultant_surface_force"
     direction, direction_assumption = parse_direction(phrase, downward_axis=downward_axis)
     assumptions.append(direction_assumption)
-    assumptions.append(Assumption(
-        text=("The force value was interpreted as a concentrated force."
-              if concentrated else "The force value was interpreted as a total resultant, not pressure."),
-        status="pending",
+    assumptions.append(_critical_assumption(
+        "The force value was interpreted as a concentrated force."
+        if concentrated
+        else "The force value was interpreted as a total resultant, not pressure."
     ))
     vector = tuple(value * component for component in direction)
     return SemanticLoad(load_type, value, quantity.unit, vector, tuple(assumptions))
