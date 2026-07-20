@@ -17,7 +17,7 @@ OUT (do not build, even if it seems easy): mesh generation/repair, solver execut
 6. Deterministic layer gets 100% test pass, no flaky tolerance. LLM layer is tested with mocked responses in CI; live API only in smoke scripts.
 7. Never modify tests/fixtures/. bracket_expected.json defines ground truth.
 8. Frontend is served by FastAPI as static files; one interface contract with backend: GET /model/{id}/gltf, GET /model/{id}/inventory, POST /highlight {entity_ids, style}, click events POST /select {entity_id}. Freeze this contract at Task 8; additive changes only.
-9. Dependencies: gmsh, meshio, fastapi, uvicorn, pydantic v2, anthropic, numpy, scipy, typer, rich, pytest, httpx. Frontend: three.js via CDN, vanilla JS, no build step, no npm. Ask before adding anything.
+9. Dependencies: gmsh, meshio, fastapi, uvicorn, pydantic v2, openai, numpy, scipy, typer, rich, pytest, httpx. Frontend: three.js via CDN, vanilla JS, no build step, no npm. Ask before adding anything.
 10. Every module created in a task gets its test file in the same task.
 11. Known fixture traps (deliberate): the bracket's fillet (face 3) is surface-type Cylinder; "find cylindrical faces" must not equal "find holes". A hole = cylindrical face subtending a full circle with free interior (adjacency check) and bounded length. The wall hole (face 10) differs from bolt holes (11,12) in both radius and axis; radius clustering + axis grouping must separate them.
 

@@ -19,6 +19,18 @@ from geom.inventory import FaceInventory
 from geom.labels import adjacency_graph, area_rank, component_of, extreme_face_labels, height_rank
 
 
+TOP_POSITION_PREDICATES = frozenset({"top", "upper", "highest", "above"})
+BOTTOM_POSITION_PREDICATES = frozenset({"bottom", "lower", "lowest", "below"})
+LARGEST_POSITION_PREDICATES = frozenset({"largest", "area_max"})
+SMALLEST_POSITION_PREDICATES = frozenset({"smallest", "area_min"})
+POSITION_PREDICATES = (
+    TOP_POSITION_PREDICATES
+    | BOTTOM_POSITION_PREDICATES
+    | LARGEST_POSITION_PREDICATES
+    | SMALLEST_POSITION_PREDICATES
+)
+
+
 @dataclass(frozen=True)
 class Query:
     """A JSON-serializable sequence of query operations."""
@@ -181,9 +193,9 @@ class QueryEngine:
             elif name == "rank_by":
                 predicate = op.get("position", op.get("predicate"))
                 count = int(op.get("n", 1))
-                if predicate in {"top", "upper", "highest", "above"}:
+                if predicate in TOP_POSITION_PREDICATES:
                     ranking = height_rank([f for f in self.inventory.faces if f.tag in ids])
-                elif predicate in {"bottom", "lower", "lowest", "below"}:
+                elif predicate in BOTTOM_POSITION_PREDICATES:
                     ranking = [
                         face.tag
                         for face in sorted(
@@ -191,9 +203,9 @@ class QueryEngine:
                             key=lambda f: (f.centroid[2], f.tag),
                         )
                     ]
-                elif predicate in {"largest", "area_max"}:
+                elif predicate in LARGEST_POSITION_PREDICATES:
                     ranking = area_rank([f for f in self.inventory.faces if f.tag in ids])
-                elif predicate in {"smallest", "area_min"}:
+                elif predicate in SMALLEST_POSITION_PREDICATES:
                     ranking = [
                         face.tag
                         for face in sorted(
@@ -346,3 +358,36 @@ def union(*queries: Query | list[dict[str, Any]]) -> dict[str, Any]:
 
 def difference(*queries: Query | list[dict[str, Any]]) -> dict[str, Any]:
     return _combine("difference", *queries)
+
+
+# Public vocabulary derived from the actual Task 6 operation constructors.
+# Operations requiring already-resolved ids remain available to deterministic
+# Python callers but are excluded from the model-safe subset.
+QUERY_OPERATION_FACTORIES = {
+    factory.__name__: factory
+    for factory in (
+        find_faces,
+        holes,
+        hole_groups,
+        filter_radius,
+        filter_axis,
+        rank_by,
+        area_max,
+        area_min,
+        adjacent_to,
+        in_component,
+        labeled,
+        intersect,
+        union,
+        difference,
+    )
+}
+QUERY_OPERATION_NAMES = frozenset(QUERY_OPERATION_FACTORIES)
+ID_REFERENCING_QUERY_OPERATIONS = frozenset({"adjacent_to", "in_component"})
+LLM_SAFE_QUERY_OPERATION_NAMES = QUERY_OPERATION_NAMES - ID_REFERENCING_QUERY_OPERATIONS
+
+
+def query_vocabulary(*, llm_safe_only: bool = False) -> list[str]:
+    """Return the deterministic Task 6 operation names in stable order."""
+    names = LLM_SAFE_QUERY_OPERATION_NAMES if llm_safe_only else QUERY_OPERATION_NAMES
+    return sorted(names)

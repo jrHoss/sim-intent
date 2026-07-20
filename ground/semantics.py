@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal, cast, get_args
 
 from ir.schema import Assumption
 
@@ -36,6 +36,25 @@ _QUANTITY_RE = re.compile(
     r"(GPa|MPa|kPa|Pa|MN|kN|N|mm|m)\b",
     re.IGNORECASE,
 )
+SUPPORTED_QUANTITY_UNITS = ("N", "kN", "MN", "Pa", "kPa", "MPa", "GPa", "mm", "m")
+
+
+def semantics_vocabulary() -> dict[str, list[str]]:
+    """Return the Task 7 load/unit vocabulary in deterministic prompt form."""
+    return {
+        "load_types": list(get_args(LoadType)),
+        "quantity_units": list(SUPPORTED_QUANTITY_UNITS),
+        "direction_terms": [
+            "downward",
+            "upward",
+            "negative X",
+            "positive X",
+            "negative Y",
+            "positive Y",
+            "negative Z",
+            "positive Z",
+        ],
+    }
 
 
 @dataclass(frozen=True)

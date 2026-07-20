@@ -1,6 +1,6 @@
 # EXECUTION_PLAN.md — sim-intent prototype
 
-Implements sprint-goal.md as 15 sequential Claude Code tasks. Each task = one session, ends with its Definition of Done (DoD) command passing plus `pytest tests/ -x` green plus a line in PROGRESS.md. Tasks 1-7 are the headless core (no UI, no live LLM needed). Tasks 8-10 the viewer. Tasks 11-15 interpretation, export, evaluation. If working in a team, tasks 8-10 can run in parallel with 5-7 by a second person; the plan works solo too.
+Implements sprint-goal.md as 15 sequential implementation tasks. Each task = one session, ends with its Definition of Done (DoD) command passing plus `pytest tests/ -x` green plus a line in PROGRESS.md. Tasks 1-7 are the headless core (no UI, no live LLM needed). Tasks 8-10 the viewer. Tasks 11-15 interpretation, export, evaluation. If working in a team, tasks 8-10 can run in parallel with 5-7 by a second person; the plan works solo too.
 
 ```
 STEP/INP ─> [T2 parser] ─> [T3-4 geometry index] ─┐
@@ -57,7 +57,7 @@ DoD: `uvicorn app.server:app` -> browser: bracket renders, clicking a bolt hole 
 DoD: `pytest tests/test_session.py`: full state machine proposed->confirmed->export-eligible; rejecting a region reopens it.
 
 ## Task 11 — LLM interpreter (text -> typed ops)
-`llm/interpreter.py`: Claude structured output. Input: instruction + FaceInventory summary (labels, hole groups with radii/axes, areas; NOT raw coordinates dump) + semantics module vocabulary. Output: list of intents, each = {op_list (Task 6 vocabulary only), bc/load payload (value+unit strings), target_description}. Hard rule: schema forbids entity_ids in LLM output (validator rejects). Mocked tests in CI; `scripts/smoke_llm.py` for live.
+`llm/interpreter.py`: OpenAI Responses API structured output. Input: instruction + FaceInventory summary (labels, hole groups with radii/axes, areas; NOT raw coordinates dump) + semantics module vocabulary. Output: list of intents, each = {op_list (Task 6 vocabulary only), bc/load payload (value+unit strings), target_description}. Hard rule: schema forbids entity_ids in LLM output (validator rejects). Mocked tests in CI; `scripts/smoke_llm.py` for live.
 DoD: `pytest tests/test_interpreter.py` (mocked): "fix the two bolt holes" -> ops [holes, group_coaxial/filter_radius...] not IDs; "5 kN downward on the upper mounting face" -> resultant_surface_force + rank_by(upper) ops; malformed LLM reply -> clean re-ask path.
 
 ## Task 12 — Grounding engine + ambiguity

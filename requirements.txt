@@ -3,7 +3,7 @@ meshio
 fastapi
 uvicorn
 pydantic>=2
-anthropic
+openai
 numpy
 scipy
 typer
