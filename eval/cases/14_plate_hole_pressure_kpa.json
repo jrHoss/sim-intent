@@ -1,0 +1,22 @@
+{
+  "case_id": "plate_hole_pressure_kpa",
+  "model_fixture": "plate_hole.step",
+  "instruction": "Apply 2000 kPa pressure to the hole surface.",
+  "click_evidence": [],
+  "clarification_response": null,
+  "expected_conditions": [{
+    "intent_index": 0,
+    "entity_ids": [7],
+    "region_entity_type": "cad_face",
+    "condition_type": "pressure",
+    "components": null,
+    "vector": null,
+    "magnitude": 2.0,
+    "internal_unit": "MPa",
+    "expected_ir_subset": {"type": "pressure", "region_ref": "region_1", "magnitude": 2.0}
+  }],
+  "clarification_required": false,
+  "expected_structured_ir_subset": {"regions": [{"entity_ids": [7]}]},
+  "artifact_export_eligible": false,
+  "explanation": "This is the kPa equivalent of 2 MPa on the plate hole."
+}

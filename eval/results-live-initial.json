@@ -1,0 +1,1061 @@
+{
+  "cases": [
+    {
+      "actual_condition_types": [
+        "fixed_displacement"
+      ],
+      "actual_entity_ids": [
+        [
+          8
+        ]
+      ],
+      "actual_normalized_values": [
+        {
+          "components": [
+            "x",
+            "y",
+            "z"
+          ],
+          "unit": "none"
+        }
+      ],
+      "case_id": "bracket_bottom_fixed",
+      "clarification_expected": false,
+      "clarification_observed": false,
+      "clarifications_used": 0,
+      "expected_condition_types": [
+        "fixed_displacement"
+      ],
+      "expected_entity_ids": [
+        [
+          8
+        ]
+      ],
+      "expected_normalized_values": [
+        {
+          "components": [
+            "x",
+            "y",
+            "z"
+          ],
+          "unit": "none"
+        }
+      ],
+      "explanation": "All frozen expected fields match.",
+      "export_result": null,
+      "failure_category": null,
+      "harness_error": null,
+      "interpreter_output": {
+        "intents": [
+          {
+            "bc": {
+              "components": [
+                "x",
+                "y",
+                "z"
+              ],
+              "type": "fixed_displacement"
+            },
+            "load": null,
+            "op_list": [
+              {
+                "name": "bottom_face",
+                "op": "labeled"
+              }
+            ],
+            "target_description": "bottom face"
+          }
+        ]
+      },
+      "status": "PASS",
+      "validation_status": "valid"
+    },
+    {
+      "actual_condition_types": [
+        "fixed_displacement"
+      ],
+      "actual_entity_ids": [
+        [
+          5
+        ]
+      ],
+      "actual_normalized_values": [
+        {
+          "components": [
+            "z"
+          ],
+          "unit": "none"
+        }
+      ],
+      "case_id": "bracket_vertical_click",
+      "clarification_expected": false,
+      "clarification_observed": false,
+      "clarifications_used": 0,
+      "expected_condition_types": [
+        "fixed_displacement"
+      ],
+      "expected_entity_ids": [
+        [
+          5
+        ]
+      ],
+      "expected_normalized_values": [
+        {
+          "components": [
+            "y"
+          ],
+          "unit": "none"
+        }
+      ],
+      "explanation": "Normalized components, vector, magnitude, or internal units differ.",
+      "export_result": null,
+      "failure_category": "unit",
+      "harness_error": null,
+      "interpreter_output": {
+        "intents": [
+          {
+            "bc": {
+              "components": [
+                "z"
+              ],
+              "type": "fixed_displacement"
+            },
+            "load": null,
+            "op_list": [
+              {
+                "op": "find_faces",
+                "surface_type": null
+              }
+            ],
+            "target_description": "this face"
+          }
+        ]
+      },
+      "status": "FAIL",
+      "validation_status": "valid"
+    },
+    {
+      "actual_condition_types": [
+        "fixed_displacement"
+      ],
+      "actual_entity_ids": [
+        [
+          11,
+          12
+        ]
+      ],
+      "actual_normalized_values": [
+        {
+          "components": [
+            "x",
+            "y",
+            "z"
+          ],
+          "unit": "none"
+        }
+      ],
+      "case_id": "bracket_bolt_holes_fixed",
+      "clarification_expected": false,
+      "clarification_observed": false,
+      "clarifications_used": 0,
+      "expected_condition_types": [
+        "fixed_displacement"
+      ],
+      "expected_entity_ids": [
+        [
+          11,
+          12
+        ]
+      ],
+      "expected_normalized_values": [
+        {
+          "components": [
+            "x",
+            "y",
+            "z"
+          ],
+          "unit": "none"
+        }
+      ],
+      "explanation": "All frozen expected fields match.",
+      "export_result": null,
+      "failure_category": null,
+      "harness_error": null,
+      "interpreter_output": {
+        "intents": [
+          {
+            "bc": {
+              "components": [
+                "x",
+                "y",
+                "z"
+              ],
+              "type": "fixed_displacement"
+            },
+            "load": null,
+            "op_list": [
+              {
+                "max_size": 2,
+                "min_size": 2,
+                "op": "hole_groups"
+              },
+              {
+                "op": "filter_radius",
+                "radius": 5.5,
+                "rtol": 0.05
+              }
+            ],
+            "target_description": "Both bolt-hole cylindrical surfaces in the two-hole group"
+          }
+        ]
+      },
+      "status": "PASS",
+      "validation_status": "valid"
+    },
+    {
+      "actual_condition_types": [
+        "pressure"
+      ],
+      "actual_entity_ids": [
+        [
+          10
+        ]
+      ],
+      "actual_normalized_values": [
+        {
+          "magnitude": 2.0,
+          "unit": "MPa"
+        }
+      ],
+      "case_id": "bracket_inner_pressure_clarify",
+      "clarification_expected": true,
+      "clarification_observed": true,
+      "clarifications_used": 1,
+      "expected_condition_types": [
+        "pressure"
+      ],
+      "expected_entity_ids": [
+        [
+          10
+        ]
+      ],
+      "expected_normalized_values": [
+        {
+          "magnitude": 2.0,
+          "unit": "MPa"
+        }
+      ],
+      "explanation": "All frozen expected fields match.",
+      "export_result": null,
+      "failure_category": null,
+      "harness_error": null,
+      "interpreter_output": {
+        "intents": [
+          {
+            "bc": null,
+            "load": {
+              "magnitude": "2 MPa",
+              "type": "pressure"
+            },
+            "op_list": [
+              {
+                "op": "holes"
+              }
+            ],
+            "target_description": "inner cylindrical surface"
+          }
+        ]
+      },
+      "status": "PASS_AFTER_CLARIFICATION",
+      "validation_status": "valid"
+    },
+    {
+      "actual_condition_types": [
+        "resultant_surface_force"
+      ],
+      "actual_entity_ids": [
+        [
+          4
+        ]
+      ],
+      "actual_normalized_values": [
+        {
+          "unit": "N",
+          "vector": [
+            0.0,
+            -5000.0,
+            0.0
+          ]
+        }
+      ],
+      "case_id": "bracket_top_force_5kn",
+      "clarification_expected": false,
+      "clarification_observed": false,
+      "clarifications_used": 0,
+      "expected_condition_types": [
+        "resultant_surface_force"
+      ],
+      "expected_entity_ids": [
+        [
+          4
+        ]
+      ],
+      "expected_normalized_values": [
+        {
+          "unit": "N",
+          "vector": [
+            0.0,
+            -5000.0,
+            0.0
+          ]
+        }
+      ],
+      "explanation": "All frozen expected fields match.",
+      "export_result": null,
+      "failure_category": null,
+      "harness_error": null,
+      "interpreter_output": {
+        "intents": [
+          {
+            "bc": null,
+            "load": {
+              "direction": "downward",
+              "magnitude": "5 kN",
+              "type": "resultant_surface_force"
+            },
+            "op_list": [
+              {
+                "name": "top_face",
+                "op": "labeled"
+              }
+            ],
+            "target_description": "top flange"
+          }
+        ]
+      },
+      "status": "PASS",
+      "validation_status": "valid"
+    },
+    {
+      "actual_condition_types": [
+        "gravity"
+      ],
+      "actual_entity_ids": [
+        []
+      ],
+      "actual_normalized_values": [
+        {
+          "unit": "mm/s^2",
+          "vector": [
+            0.0,
+            0.0,
+            -9810.0
+          ]
+        }
+      ],
+      "case_id": "bracket_gravity_neg_z",
+      "clarification_expected": false,
+      "clarification_observed": false,
+      "clarifications_used": 0,
+      "expected_condition_types": [
+        "gravity"
+      ],
+      "expected_entity_ids": [
+        []
+      ],
+      "expected_normalized_values": [
+        {
+          "unit": "mm/s^2",
+          "vector": [
+            0.0,
+            0.0,
+            -9810.0
+          ]
+        }
+      ],
+      "explanation": "All frozen expected fields match.",
+      "export_result": null,
+      "failure_category": null,
+      "harness_error": null,
+      "interpreter_output": {
+        "intents": [
+          {
+            "bc": null,
+            "load": {
+              "direction": "negative Z",
+              "type": "gravity"
+            },
+            "op_list": [
+              {
+                "op": "find_faces",
+                "surface_type": null
+              }
+            ],
+            "target_description": "all faces"
+          }
+        ]
+      },
+      "status": "PASS",
+      "validation_status": "valid"
+    },
+    {
+      "actual_condition_types": [
+        "fixed_displacement"
+      ],
+      "actual_entity_ids": [
+        [
+          1
+        ]
+      ],
+      "actual_normalized_values": [
+        {
+          "components": [
+            "x",
+            "y",
+            "z"
+          ],
+          "unit": "none"
+        }
+      ],
+      "case_id": "bracket_red_face_click",
+      "clarification_expected": false,
+      "clarification_observed": false,
+      "clarifications_used": 0,
+      "expected_condition_types": [
+        "fixed_displacement"
+      ],
+      "expected_entity_ids": [
+        [
+          1
+        ]
+      ],
+      "expected_normalized_values": [
+        {
+          "components": [
+            "x",
+            "y",
+            "z"
+          ],
+          "unit": "none"
+        }
+      ],
+      "explanation": "All frozen expected fields match.",
+      "export_result": null,
+      "failure_category": null,
+      "harness_error": null,
+      "interpreter_output": {
+        "intents": [
+          {
+            "bc": {
+              "components": [
+                "x",
+                "y",
+                "z"
+              ],
+              "type": "fixed_displacement"
+            },
+            "load": null,
+            "op_list": [
+              {
+                "op": "find_faces",
+                "surface_type": null
+              }
+            ],
+            "target_description": "face marked in red"
+          }
+        ]
+      },
+      "status": "PASS",
+      "validation_status": "valid"
+    },
+    {
+      "actual_condition_types": [
+        "fixed_displacement"
+      ],
+      "actual_entity_ids": [
+        [
+          11,
+          12
+        ]
+      ],
+      "actual_normalized_values": [
+        {
+          "components": [
+            "x",
+            "y",
+            "z"
+          ],
+          "unit": "none"
+        }
+      ],
+      "case_id": "bracket_circled_holes_click",
+      "clarification_expected": false,
+      "clarification_observed": false,
+      "clarifications_used": 0,
+      "expected_condition_types": [
+        "fixed_displacement"
+      ],
+      "expected_entity_ids": [
+        [
+          11,
+          12
+        ]
+      ],
+      "expected_normalized_values": [
+        {
+          "components": [
+            "x",
+            "y",
+            "z"
+          ],
+          "unit": "none"
+        }
+      ],
+      "explanation": "All frozen expected fields match.",
+      "export_result": null,
+      "failure_category": null,
+      "harness_error": null,
+      "interpreter_output": {
+        "intents": [
+          {
+            "bc": {
+              "components": [
+                "x",
+                "y",
+                "z"
+              ],
+              "type": "fixed_displacement"
+            },
+            "load": null,
+            "op_list": [
+              {
+                "max_size": 2,
+                "min_size": 2,
+                "op": "hole_groups"
+              }
+            ],
+            "target_description": "the group consisting of the two circled holes"
+          }
+        ]
+      },
+      "status": "PASS",
+      "validation_status": "valid"
+    },
+    {
+      "actual_condition_types": [],
+      "actual_entity_ids": [],
+      "actual_normalized_values": [],
+      "case_id": "bracket_left_side_clarify",
+      "clarification_expected": true,
+      "clarification_observed": false,
+      "clarifications_used": 0,
+      "expected_condition_types": [
+        "fixed_displacement"
+      ],
+      "expected_entity_ids": [
+        [
+          1
+        ]
+      ],
+      "expected_normalized_values": [
+        {
+          "components": [
+            "x",
+            "y",
+            "z"
+          ],
+          "unit": "none"
+        }
+      ],
+      "explanation": "The system selected a region where the frozen case requires clarification.",
+      "export_result": null,
+      "failure_category": "ambiguity-unflagged",
+      "harness_error": null,
+      "interpreter_output": {
+        "intents": [
+          {
+            "bc": {
+              "components": [
+                "x",
+                "y",
+                "z"
+              ],
+              "type": "fixed_displacement"
+            },
+            "load": null,
+            "op_list": [
+              {
+                "name": "left_face",
+                "op": "labeled"
+              }
+            ],
+            "target_description": "left side"
+          }
+        ]
+      },
+      "status": "FAIL",
+      "validation_status": null
+    },
+    {
+      "actual_condition_types": [
+        "resultant_surface_force"
+      ],
+      "actual_entity_ids": [
+        [
+          3
+        ]
+      ],
+      "actual_normalized_values": [
+        {
+          "unit": "N",
+          "vector": [
+            0.0,
+            -5000.0,
+            0.0
+          ]
+        }
+      ],
+      "case_id": "plate_top_force_5000n",
+      "clarification_expected": false,
+      "clarification_observed": false,
+      "clarifications_used": 0,
+      "expected_condition_types": [
+        "resultant_surface_force"
+      ],
+      "expected_entity_ids": [
+        [
+          3
+        ]
+      ],
+      "expected_normalized_values": [
+        {
+          "unit": "N",
+          "vector": [
+            0.0,
+            -5000.0,
+            0.0
+          ]
+        }
+      ],
+      "explanation": "All frozen expected fields match.",
+      "export_result": null,
+      "failure_category": null,
+      "harness_error": null,
+      "interpreter_output": {
+        "intents": [
+          {
+            "bc": null,
+            "load": {
+              "direction": "downward",
+              "magnitude": "5000 N",
+              "type": "resultant_surface_force"
+            },
+            "op_list": [
+              {
+                "name": "top_face",
+                "op": "labeled"
+              }
+            ],
+            "target_description": "top face"
+          }
+        ]
+      },
+      "status": "PASS",
+      "validation_status": "valid"
+    },
+    {
+      "actual_condition_types": [
+        "resultant_surface_force"
+      ],
+      "actual_entity_ids": [
+        [
+          3
+        ]
+      ],
+      "actual_normalized_values": [
+        {
+          "unit": "N",
+          "vector": [
+            0.0,
+            -5000.0,
+            0.0
+          ]
+        }
+      ],
+      "case_id": "plate_top_force_5kn",
+      "clarification_expected": false,
+      "clarification_observed": false,
+      "clarifications_used": 0,
+      "expected_condition_types": [
+        "resultant_surface_force"
+      ],
+      "expected_entity_ids": [
+        [
+          3
+        ]
+      ],
+      "expected_normalized_values": [
+        {
+          "unit": "N",
+          "vector": [
+            0.0,
+            -5000.0,
+            0.0
+          ]
+        }
+      ],
+      "explanation": "All frozen expected fields match.",
+      "export_result": null,
+      "failure_category": null,
+      "harness_error": null,
+      "interpreter_output": {
+        "intents": [
+          {
+            "bc": null,
+            "load": {
+              "direction": "downward",
+              "magnitude": "5 kN",
+              "type": "resultant_surface_force"
+            },
+            "op_list": [
+              {
+                "name": "top_face",
+                "op": "labeled"
+              }
+            ],
+            "target_description": "top face"
+          }
+        ]
+      },
+      "status": "PASS",
+      "validation_status": "valid"
+    },
+    {
+      "actual_condition_types": [
+        "resultant_surface_force"
+      ],
+      "actual_entity_ids": [
+        [
+          3
+        ]
+      ],
+      "actual_normalized_values": [
+        {
+          "unit": "N",
+          "vector": [
+            0.0,
+            -5000.0,
+            0.0
+          ]
+        }
+      ],
+      "case_id": "plate_top_force_0_005mn",
+      "clarification_expected": false,
+      "clarification_observed": false,
+      "clarifications_used": 0,
+      "expected_condition_types": [
+        "resultant_surface_force"
+      ],
+      "expected_entity_ids": [
+        [
+          3
+        ]
+      ],
+      "expected_normalized_values": [
+        {
+          "unit": "N",
+          "vector": [
+            0.0,
+            -5000.0,
+            0.0
+          ]
+        }
+      ],
+      "explanation": "All frozen expected fields match.",
+      "export_result": null,
+      "failure_category": null,
+      "harness_error": null,
+      "interpreter_output": {
+        "intents": [
+          {
+            "bc": null,
+            "load": {
+              "direction": "downward",
+              "magnitude": "0.005 MN",
+              "type": "resultant_surface_force"
+            },
+            "op_list": [
+              {
+                "name": "top_face",
+                "op": "labeled"
+              }
+            ],
+            "target_description": "top face"
+          }
+        ]
+      },
+      "status": "PASS",
+      "validation_status": "valid"
+    },
+    {
+      "actual_condition_types": [
+        "pressure"
+      ],
+      "actual_entity_ids": [
+        [
+          7
+        ]
+      ],
+      "actual_normalized_values": [
+        {
+          "magnitude": 2.0,
+          "unit": "MPa"
+        }
+      ],
+      "case_id": "plate_hole_pressure_pa",
+      "clarification_expected": false,
+      "clarification_observed": false,
+      "clarifications_used": 0,
+      "expected_condition_types": [
+        "pressure"
+      ],
+      "expected_entity_ids": [
+        [
+          7
+        ]
+      ],
+      "expected_normalized_values": [
+        {
+          "magnitude": 2.0,
+          "unit": "MPa"
+        }
+      ],
+      "explanation": "All frozen expected fields match.",
+      "export_result": null,
+      "failure_category": null,
+      "harness_error": null,
+      "interpreter_output": {
+        "intents": [
+          {
+            "bc": null,
+            "load": {
+              "magnitude": "2000000 Pa",
+              "type": "pressure"
+            },
+            "op_list": [
+              {
+                "op": "holes"
+              }
+            ],
+            "target_description": "the hole surface"
+          }
+        ]
+      },
+      "status": "PASS",
+      "validation_status": "valid"
+    },
+    {
+      "actual_condition_types": [
+        "pressure"
+      ],
+      "actual_entity_ids": [
+        [
+          7
+        ]
+      ],
+      "actual_normalized_values": [
+        {
+          "magnitude": 2.0,
+          "unit": "MPa"
+        }
+      ],
+      "case_id": "plate_hole_pressure_kpa",
+      "clarification_expected": false,
+      "clarification_observed": false,
+      "clarifications_used": 0,
+      "expected_condition_types": [
+        "pressure"
+      ],
+      "expected_entity_ids": [
+        [
+          7
+        ]
+      ],
+      "expected_normalized_values": [
+        {
+          "magnitude": 2.0,
+          "unit": "MPa"
+        }
+      ],
+      "explanation": "All frozen expected fields match.",
+      "export_result": null,
+      "failure_category": null,
+      "harness_error": null,
+      "interpreter_output": {
+        "intents": [
+          {
+            "bc": null,
+            "load": {
+              "magnitude": "2000 kPa",
+              "type": "pressure"
+            },
+            "op_list": [
+              {
+                "op": "holes"
+              },
+              {
+                "op": "filter_radius",
+                "radius": 15.0,
+                "rtol": 0.05
+              }
+            ],
+            "target_description": "the hole surface"
+          }
+        ]
+      },
+      "status": "PASS",
+      "validation_status": "valid"
+    },
+    {
+      "actual_condition_types": [
+        "fixed_displacement",
+        "resultant_surface_force"
+      ],
+      "actual_entity_ids": [
+        [
+          11,
+          12
+        ],
+        [
+          4
+        ]
+      ],
+      "actual_normalized_values": [
+        {
+          "components": [
+            "x",
+            "y",
+            "z"
+          ],
+          "unit": "none"
+        },
+        {
+          "unit": "N",
+          "vector": [
+            0.0,
+            -5000.0,
+            0.0
+          ]
+        }
+      ],
+      "case_id": "bracket_combined_export",
+      "clarification_expected": false,
+      "clarification_observed": false,
+      "clarifications_used": 0,
+      "expected_condition_types": [
+        "fixed_displacement",
+        "resultant_surface_force"
+      ],
+      "expected_entity_ids": [
+        [
+          11,
+          12
+        ],
+        [
+          4
+        ]
+      ],
+      "expected_normalized_values": [
+        {
+          "components": [
+            "x",
+            "y",
+            "z"
+          ],
+          "unit": "none"
+        },
+        {
+          "unit": "N",
+          "vector": [
+            0.0,
+            -5000.0,
+            0.0
+          ]
+        }
+      ],
+      "explanation": "All frozen expected fields match.",
+      "export_result": {
+        "adapter": "abaqus_py",
+        "bytes": 4144,
+        "export_eligible": true,
+        "filename": "bracket_abaqus.py",
+        "sha256": "b33921a554ce741872a845b3221a9c2d2be50b0e8b944a30e8f4505a023472f4",
+        "validation_status": "valid"
+      },
+      "failure_category": null,
+      "harness_error": null,
+      "interpreter_output": {
+        "intents": [
+          {
+            "bc": {
+              "components": [
+                "x",
+                "y",
+                "z"
+              ],
+              "type": "fixed_displacement"
+            },
+            "load": null,
+            "op_list": [
+              {
+                "max_size": 2,
+                "min_size": 2,
+                "op": "hole_groups"
+              }
+            ],
+            "target_description": "both bolt holes"
+          },
+          {
+            "bc": null,
+            "load": {
+              "direction": "downward",
+              "magnitude": "5 kN",
+              "type": "resultant_surface_force"
+            },
+            "op_list": [
+              {
+                "name": "top_face",
+                "op": "labeled"
+              }
+            ],
+            "target_description": "top flange"
+          }
+        ]
+      },
+      "status": "PASS",
+      "validation_status": "valid"
+    }
+  ],
+  "clarifications_used": 1,
+  "fail_count": 2,
+  "fixture_hashes": {
+    "bracket.step": "d81d158aa3b0a5464407496bd1782eba375f853e870fba6edd8cf485825f3c90",
+    "plate_hole.step": "446cf12fed1139d2bfae5e483c1c34905b1444a8d05154a6bd972f1eaa214712"
+  },
+  "known_limitations": [
+    "No solver was executed and the Abaqus artifact was not run in Abaqus.",
+    "Abaqus face ordering assumes OCC tag n maps to imported part.faces[n-1].",
+    "Click evidence is supported; general screenshot or drawing recognition is not.",
+    "No meshing, contact, nonlinear, thermal, dynamic, or result-validation workflow is included.",
+    "The optional CalculiX live check requires an installed ccx executable."
+  ],
+  "manifest_hash": "47c0d7275b9a065a7f5e3316ed60b7ffff58913e0b1e5045c857f663e1f6775b",
+  "mode": "LIVE",
+  "model_name": "gpt-5.6-sol",
+  "pass_after_clarification_count": 1,
+  "pass_count": 12,
+  "revision": "7bd789c60d9b9e8b812b6fb7c0f29212587072e0+dirty",
+  "score": 13,
+  "threshold_achieved": true,
+  "total": 15
+}

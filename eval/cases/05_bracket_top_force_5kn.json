@@ -1,0 +1,22 @@
+{
+  "case_id": "bracket_top_force_5kn",
+  "model_fixture": "bracket.step",
+  "instruction": "Apply 5 kN downward across the top flange.",
+  "click_evidence": [],
+  "clarification_response": null,
+  "expected_conditions": [{
+    "intent_index": 0,
+    "entity_ids": [4],
+    "region_entity_type": "cad_face",
+    "condition_type": "resultant_surface_force",
+    "components": null,
+    "vector": [0.0, -5000.0, 0.0],
+    "magnitude": null,
+    "internal_unit": "N",
+    "expected_ir_subset": {"type": "resultant_surface_force", "region_ref": "region_1", "vector": [0.0, -5000.0, 0.0]}
+  }],
+  "clarification_required": false,
+  "expected_structured_ir_subset": {"regions": [{"id": "region_1", "entity_ids": [4]}]},
+  "artifact_export_eligible": false,
+  "explanation": "Bracket face 4 is the established top label and 5 kN total force normalizes to 5000 N in negative Y."
+}

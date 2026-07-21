@@ -1,0 +1,22 @@
+{
+  "case_id": "bracket_bottom_fixed",
+  "model_fixture": "bracket.step",
+  "instruction": "Fix the bottom face.",
+  "click_evidence": [],
+  "clarification_response": null,
+  "expected_conditions": [{
+    "intent_index": 0,
+    "entity_ids": [8],
+    "region_entity_type": "cad_face",
+    "condition_type": "fixed_displacement",
+    "components": ["x", "y", "z"],
+    "vector": null,
+    "magnitude": null,
+    "internal_unit": "none",
+    "expected_ir_subset": {"type": "fixed_displacement", "region_ref": "region_1", "components": ["x", "y", "z"]}
+  }],
+  "clarification_required": false,
+  "expected_structured_ir_subset": {"analysis": {"type": "static_structural", "units": {"length": "mm", "force": "N", "stress": "MPa"}}},
+  "artifact_export_eligible": false,
+  "explanation": "The established bracket bottom label is planar face 8."
+}

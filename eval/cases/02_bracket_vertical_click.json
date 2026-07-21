@@ -1,0 +1,22 @@
+{
+  "case_id": "bracket_vertical_click",
+  "model_fixture": "bracket.step",
+  "instruction": "Prevent vertical motion on this face.",
+  "click_evidence": [{"intent_index": 0, "entity_ids": [5]}],
+  "clarification_response": null,
+  "expected_conditions": [{
+    "intent_index": 0,
+    "entity_ids": [5],
+    "region_entity_type": "cad_face",
+    "condition_type": "fixed_displacement",
+    "components": ["y"],
+    "vector": null,
+    "magnitude": null,
+    "internal_unit": "none",
+    "expected_ir_subset": {"type": "fixed_displacement", "region_ref": "region_1", "components": ["y"]}
+  }],
+  "clarification_required": false,
+  "expected_structured_ir_subset": {"regions": [{"id": "region_1", "selection_method": "user_click", "status": "proposed"}]},
+  "artifact_export_eligible": false,
+  "explanation": "The deterministic click identifies bracket face 5; vertical motion maps to only the Y component."
+}

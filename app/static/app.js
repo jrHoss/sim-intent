@@ -15,6 +15,18 @@ const selectionValue = document.querySelector("#selection-value");
 const activityList = document.querySelector("#activity-list");
 const clearActivity = document.querySelector("#clear-activity");
 const connectionState = document.querySelector("#connection-state");
+const instructionInput = document.querySelector("#instruction-input");
+const interpretButton = document.querySelector("#interpret-button");
+const interpretError = document.querySelector("#interpret-error");
+const interpretNotices = document.querySelector("#interpret-notices");
+const useCurrentClicks = document.querySelector("#use-current-clicks");
+const interpretMode = document.querySelector("#interpret-mode");
+const clarificationPanel = document.querySelector("#clarification-panel");
+const clarificationQuestion = document.querySelector("#clarification-question");
+const clarificationCandidates = document.querySelector("#clarification-candidates");
+const typedOutput = document.querySelector("#typed-output");
+const fallbackCase = document.querySelector("#fallback-case");
+const fallbackButton = document.querySelector("#fallback-button");
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(38, 1, 0.01, 100000);
@@ -62,6 +74,8 @@ let modelRoot = null;
 let modelSize = 1;
 let pointerStart = null;
 let auditPanel = null;
+let activeModel = null;
+const selectedClicks = new Set();
 
 const COLORS = {
   base: 0xaebcb8,
@@ -279,7 +293,11 @@ async function loadModel(file) {
     document.querySelector("#model-kind").textContent = model.kind.toUpperCase();
     document.querySelector("#entity-count").textContent = `${faceObjects.size} faces`;
     selectionValue.textContent = "None";
+    activeModel = model;
+    selectedClicks.clear();
+    interpretButton.disabled = model.kind !== "step";
     await auditPanel.setModel(model.id, model.kind);
+    await loadFallbackChoices();
     setStatus(`${model.source_name} loaded with ${faceObjects.size} selectable faces.`);
   } catch (error) {
     console.error(error);
@@ -293,7 +311,10 @@ async function loadModel(file) {
 async function responseError(response) {
   try {
     const payload = await response.json();
-    return payload.detail || `Request failed (${response.status})`;
+    if (typeof payload.detail === "string") return payload.detail;
+    if (payload.detail && typeof payload.detail.message === "string") return payload.detail.message;
+    if (typeof payload.message === "string") return payload.message;
+    return JSON.stringify(payload.detail || payload);
   } catch {
     return `Request failed (${response.status})`;
   }
@@ -310,10 +331,137 @@ async function selectFace(entityId) {
     });
     if (!response.ok) throw new Error(await responseError(response));
     const selection = await response.json();
+    selectedClicks.add(entityId);
     addActivity(selection.node_name);
     setStatus(`${selection.node_name} recorded by the server.`);
   } catch (error) {
     setStatus(error.message || "Selection could not be recorded.", true);
+  }
+}
+
+function setInterpretMode(mode) {
+  interpretMode.textContent = mode;
+  interpretMode.dataset.mode = mode;
+}
+
+function renderInterpretation(result) {
+  setInterpretMode(result.mode);
+  typedOutput.textContent = JSON.stringify(result.interpretation, null, 2);
+  interpretNotices.replaceChildren();
+  for (const notice of result.notices || []) {
+    const paragraph = document.createElement("p");
+    paragraph.textContent = notice;
+    interpretNotices.append(paragraph);
+  }
+  interpretNotices.hidden = !result.notices?.length;
+  clarificationCandidates.replaceChildren();
+  clarificationPanel.hidden = result.state !== "clarification";
+  if (result.state === "clarification") {
+    const requests = result.grounding.results.filter((item) => item.clarification);
+    clarificationQuestion.textContent = requests.map((item) => item.clarification.question).join(" ");
+    for (const item of requests) {
+      for (const candidate of item.clarification.candidate_sets) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.intentIndex = String(item.intent_index);
+        button.dataset.entityIds = candidate.entity_ids.join(",");
+        button.textContent = `${candidate.label}: ${candidate.entity_ids.map((id) => `face_${id}`).join(", ")}`;
+        clarificationCandidates.append(button);
+      }
+    }
+    setStatus("Clarification required. Choose one highlighted candidate; this does not confirm it.");
+  } else {
+    setStatus(
+      result.notices?.length
+        ? result.notices.join(" ")
+        : `${result.mode} interpretation saved as proposed. Review provenance before confirmation.`,
+    );
+    auditPanel.refresh();
+  }
+}
+
+async function interpretInstruction() {
+  if (!activeModel || !instructionInput.value.trim()) return;
+  interpretButton.disabled = true;
+  interpretButton.textContent = "Interpretingâ€¦";
+  interpretButton.setAttribute("aria-busy", "true");
+  interpretError.hidden = true;
+  interpretError.textContent = "";
+  interpretNotices.hidden = true;
+  interpretNotices.replaceChildren();
+  setStatus("Interpreting instruction on the serverâ€¦");
+  try {
+    const response = await fetch(`/session/${activeModel.id}/interpret`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: instructionInput.value.trim(),
+        clicked_entity_ids: useCurrentClicks.checked ? [...selectedClicks].sort((a, b) => a - b) : [],
+      }),
+    });
+    if (!response.ok) throw new Error(await responseError(response));
+    renderInterpretation(await response.json());
+  } catch (error) {
+    const message = error.message || "Interpretation failed.";
+    interpretError.textContent = message;
+    interpretError.hidden = false;
+    typedOutput.textContent = `Interpretation unavailable: ${message}`;
+    setStatus(message, true);
+  } finally {
+    interpretButton.textContent = "Interpret";
+    interpretButton.removeAttribute("aria-busy");
+    interpretButton.disabled = !activeModel || activeModel.kind !== "step";
+  }
+}
+
+clarificationCandidates.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-entity-ids]");
+  if (!button || !activeModel) return;
+  for (const candidate of clarificationCandidates.querySelectorAll("button")) candidate.disabled = true;
+  try {
+    const response = await fetch(`/session/${activeModel.id}/clarify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        intent_index: Number(button.dataset.intentIndex),
+        entity_ids: button.dataset.entityIds.split(",").map(Number),
+      }),
+    });
+    if (!response.ok) throw new Error(await responseError(response));
+    renderInterpretation(await response.json());
+  } catch (error) {
+    setStatus(error.message || "Clarification failed.", true);
+  }
+});
+
+async function loadFallbackChoices() {
+  fallbackCase.replaceChildren();
+  fallbackButton.disabled = true;
+  if (!activeModel || activeModel.kind !== "step") return;
+  const response = await fetch(`/session/${activeModel.id}/fallback-cases`);
+  if (!response.ok) return;
+  const payload = await response.json();
+  for (const caseId of payload.case_ids) {
+    const option = document.createElement("option");
+    option.value = caseId;
+    option.textContent = caseId;
+    fallbackCase.append(option);
+  }
+  fallbackCase.disabled = payload.case_ids.length === 0;
+  fallbackButton.disabled = payload.case_ids.length === 0;
+}
+
+async function loadFallback() {
+  if (!activeModel || !fallbackCase.value) return;
+  fallbackButton.disabled = true;
+  try {
+    const response = await fetch(`/session/${activeModel.id}/fallback/${fallbackCase.value}`, { method: "POST" });
+    if (!response.ok) throw new Error(await responseError(response));
+    renderInterpretation(await response.json());
+  } catch (error) {
+    setStatus(error.message || "Fallback could not be loaded.", true);
+  } finally {
+    fallbackButton.disabled = false;
   }
 }
 
@@ -382,7 +530,11 @@ clearActivity.addEventListener("click", () => {
   empty.className = "activity-empty";
   empty.textContent = "Face clicks will appear here.";
   activityList.append(empty);
+  selectedClicks.clear();
+  selectionValue.textContent = "None";
 });
+interpretButton.addEventListener("click", interpretInstruction);
+fallbackButton.addEventListener("click", loadFallback);
 
 for (const eventName of ["dragenter", "dragover"]) {
   viewer.addEventListener(eventName, (event) => {

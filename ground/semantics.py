@@ -10,12 +10,13 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
-from typing import Literal, cast, get_args
+from typing import Literal, Sequence, cast, get_args
 
 from ir.schema import Assumption
 
 
 QuantityKind = Literal["force", "stress", "length"]
+ConstraintAxis = Literal["x", "y", "z"]
 LoadType = Literal[
     "resultant_surface_force", "surface_traction", "pressure", "gravity", "concentrated_force"
 ]
@@ -37,6 +38,16 @@ _QUANTITY_RE = re.compile(
     re.IGNORECASE,
 )
 SUPPORTED_QUANTITY_UNITS = ("N", "kN", "MN", "Pa", "kPa", "MPa", "GPa", "mm", "m")
+_VERTICAL_MOTION_RE = re.compile(
+    r"\bvertical\s+(?:motion|movement|displacement|translation)\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_CONSTRAINT_AXIS_RE = re.compile(
+    r"(?:\b[xyz]\s*(?:-|\s)?(?:axis|direction|motion|movement|displacement|translation)\b|"
+    r"\b(?:positive|negative|plus|minus)\s*[xyz]\b|"
+    r"\b(?:in|along)\s+(?:the\s+)?[xyz]\b)",
+    re.IGNORECASE,
+)
 
 
 def _critical_assumption(text: str) -> Assumption:
@@ -138,6 +149,28 @@ def parse_direction(
     vector = [0.0, 0.0, 0.0]
     vector["xyz".index(axis)] = sign
     return (vector[0], vector[1], vector[2]), _critical_assumption(reason)
+
+
+def normalize_fixed_displacement_components(
+    text: str,
+    components: Sequence[ConstraintAxis],
+    *,
+    vertical_axis: ConstraintAxis = "y",
+) -> tuple[list[ConstraintAxis], Assumption | None]:
+    """Apply the Task 7 model-axis convention to qualitative constraints.
+
+    An explicit axis always wins. Otherwise, ``vertical motion`` and its
+    supported synonyms constrain only the configured vertical axis.
+    """
+
+    normalized = list(components)
+    if not _VERTICAL_MOTION_RE.search(text):
+        return normalized, None
+    if _EXPLICIT_CONSTRAINT_AXIS_RE.search(text):
+        return normalized, None
+    return [vertical_axis], _critical_assumption(
+        f"Vertical motion was interpreted as the {vertical_axis.upper()} displacement component per model convention."
+    )
 
 
 def interpret_load(

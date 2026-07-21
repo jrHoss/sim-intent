@@ -1,0 +1,180 @@
+{
+  "case_id": "plate_top_force_0_005mn",
+  "clarification_used": false,
+  "final_grounding": {
+    "results": [
+      {
+        "bc": null,
+        "clarification": null,
+        "click_evidence": null,
+        "intent_index": 0,
+        "load": {
+          "direction": "downward",
+          "magnitude": "0.005 MN",
+          "type": "resultant_surface_force"
+        },
+        "query_evidence": {
+          "candidate_set_margin": 1.0,
+          "entity_ids": [
+            3
+          ],
+          "op_list": [
+            {
+              "name": "top_face",
+              "op": "labeled"
+            }
+          ],
+          "per_candidate_scores": {
+            "3": 1.0
+          },
+          "score_margin": 1.0
+        },
+        "region": {
+          "confidence": 1.0,
+          "entity_ids": [
+            3
+          ],
+          "entity_type": "cad_face",
+          "id": "region_1",
+          "selection_method": "semantic_geometry_query",
+          "source_instruction": "Apply 0.005 MN downward across the top face.",
+          "status": "proposed"
+        },
+        "source_instruction": "Apply 0.005 MN downward across the top face.",
+        "target_description": "the top face"
+      }
+    ]
+  },
+  "initial_grounding": {
+    "results": [
+      {
+        "bc": null,
+        "clarification": null,
+        "click_evidence": null,
+        "intent_index": 0,
+        "load": {
+          "direction": "downward",
+          "magnitude": "0.005 MN",
+          "type": "resultant_surface_force"
+        },
+        "query_evidence": {
+          "candidate_set_margin": 1.0,
+          "entity_ids": [
+            3
+          ],
+          "op_list": [
+            {
+              "name": "top_face",
+              "op": "labeled"
+            }
+          ],
+          "per_candidate_scores": {
+            "3": 1.0
+          },
+          "score_margin": 1.0
+        },
+        "region": {
+          "confidence": 1.0,
+          "entity_ids": [
+            3
+          ],
+          "entity_type": "cad_face",
+          "id": "region_1",
+          "selection_method": "semantic_geometry_query",
+          "source_instruction": "Apply 0.005 MN downward across the top face.",
+          "status": "proposed"
+        },
+        "source_instruction": "Apply 0.005 MN downward across the top face.",
+        "target_description": "the top face"
+      }
+    ]
+  },
+  "mode": "REPLAY",
+  "model_fixture": "plate_hole.step",
+  "model_sha256": "446cf12fed1139d2bfae5e483c1c34905b1444a8d05154a6bd972f1eaa214712",
+  "proposed_ir": {
+    "analysis": {
+      "type": "static_structural",
+      "units": {
+        "force": "N",
+        "length": "mm",
+        "stress": "MPa"
+      }
+    },
+    "assumptions": [
+      {
+        "criticality": "noncritical",
+        "id": "assumption_c784e73d6fe19efe",
+        "status": "pending",
+        "text": "The prototype demonstration material was set to steel (E=210000 MPa, nu=0.3)."
+      },
+      {
+        "criticality": "unit_critical",
+        "id": "assumption_198c971613948153",
+        "status": "pending",
+        "text": "Downward was interpreted as the negative Y axis per model convention."
+      },
+      {
+        "criticality": "unit_critical",
+        "id": "assumption_5a8c19523aa8306a",
+        "status": "pending",
+        "text": "The force value was interpreted as a total resultant, not pressure."
+      }
+    ],
+    "bcs": [],
+    "loads": [
+      {
+        "region_ref": "region_1",
+        "type": "resultant_surface_force",
+        "vector": [
+          0.0,
+          -5000.0,
+          0.0
+        ]
+      }
+    ],
+    "materials": [
+      {
+        "E_MPa": 210000.0,
+        "density_tonne_per_mm3": null,
+        "model": "linear_elastic_isotropic",
+        "name": "steel",
+        "nu": 0.3
+      }
+    ],
+    "regions": [
+      {
+        "confidence": 1.0,
+        "entity_ids": [
+          3
+        ],
+        "entity_type": "cad_face",
+        "id": "region_1",
+        "selection_method": "semantic_geometry_query",
+        "source_instruction": "Apply 0.005 MN downward across the top face.",
+        "status": "proposed"
+      }
+    ],
+    "validation_status": "unvalidated"
+  },
+  "typed_interpreter_output": {
+    "intents": [
+      {
+        "bc": null,
+        "load": {
+          "direction": "downward",
+          "magnitude": "0.005 MN",
+          "type": "resultant_surface_force"
+        },
+        "op_list": [
+          {
+            "name": "top_face",
+            "op": "labeled"
+          }
+        ],
+        "target_description": "the top face"
+      }
+    ]
+  },
+  "validation_status_before_review": "invalid"
+}

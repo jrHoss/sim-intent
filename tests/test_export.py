@@ -232,6 +232,7 @@ def test_abaqus_provenance_material_bc_static_step_and_resultant_mapping(cad_mod
 
 def test_abaqus_prescribed_traction_pressure_and_gravity_mappings(cad_model):
     payload = canonical_payload()
+    payload["materials"][0]["density_tonne_per_mm3"] = 7.85e-9
     payload["bcs"] = [
         {
             "type": "prescribed_displacement",
@@ -261,6 +262,20 @@ def test_abaqus_prescribed_traction_pressure_and_gravity_mappings(cad_model):
     assert "positive magnitude acts into the surface" in text
     assert "model.Gravity" in text
     assert "comp1=0, comp2=0, comp3=-9810" in text
+    assert text.count("material.Density(") == 1
+    assert "material.Density(table=((7.85e-09,),))" in text
+
+
+def test_abaqus_gravity_without_density_is_blocked_before_artifact(cad_model):
+    payload = canonical_payload()
+    payload["loads"] = [
+        {"type": "gravity", "region_ref": None, "vector": [0, 0, -9810]}
+    ]
+    with pytest.raises(ExportNotReadyError) as caught:
+        export_abaqus_py(SimulationIntent.model_validate(payload), cad_model)
+    assert "material.density_required_for_gravity" in {
+        issue.code for issue in caught.value.report.issues
+    }
 
 
 def test_abaqus_concentrated_force_fails_instead_of_inventing_point(cad_model):
@@ -472,9 +487,14 @@ def test_ccx_gravity_uses_validated_magnitude_and_direction(mesh_model):
             {"type": "gravity", "region_ref": "volume", "vector": [0, 0, -9810]}
         ],
     )
+    material = intent.materials[0].model_copy(
+        update={"density_tonne_per_mm3": 7.85e-9}, deep=True
+    )
+    intent = intent.model_copy(update={"materials": [material]}, deep=True)
     text = export_ccx_inp(intent, mesh_model).artifact_text
     assert "ALL_VOLUME, GRAV, 9810, 0, 0, -1" in text
     assert "Reuses preserved native ELSET ALL_VOLUME" in text
+    assert "*DENSITY\n7.85e-09" in text
 
 
 def test_ccx_unsupported_entity_and_load_types_fail_explicitly(mesh_model):

@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import struct
 from dataclasses import dataclass
 from email.parser import BytesParser
@@ -38,6 +39,12 @@ from app.session import (
     SessionRegionMissingError,
     SessionSnapshot,
 )
+from app.orchestration import (
+    OrchestrationError,
+    interpret_and_propose,
+    merge_session_intents,
+    propose_from_interpretation,
+)
 from export.abaqus_py import export_abaqus_py
 from export.ccx_inp import export_ccx_inp
 from export.common import (
@@ -48,7 +55,9 @@ from export.common import (
     UnsupportedModelTypeError,
     blocking_issues,
 )
+from geom.cylinders import analyze_cylinders
 from geom.inventory import FaceInventory, get_inventory
+from ground.engine import ClickEvidence, GroundingBatch
 from geom.meshes import MeshInventory, _scan_inp_native_ids, load_mesh
 from ir.schema import (
     Assumption,
@@ -60,6 +69,14 @@ from ir.schema import (
     ValidationStatus,
 )
 from ir.validate import ValidationIssue, ValidationReport
+from llm.interpreter import (
+    DEFAULT_MODEL,
+    Interpretation,
+    Interpreter,
+    InterpreterError,
+    InterpreterProviderError,
+    UnsupportedMaterialInputError,
+)
 
 DEFAULT_MODEL_DIR = Path(".sim_intent_cache") / "models"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -168,6 +185,51 @@ class ArtifactExportRequest(StrictModel):
     """Select one Task 14 adapter; eligibility remains server-computed."""
 
     adapter: str = Field(min_length=1, max_length=40)
+
+
+class InterpretRequest(StrictModel):
+    instruction: str = Field(min_length=1, max_length=2_000)
+    clicked_entity_ids: list[int] = Field(default_factory=list)
+
+    @field_validator("clicked_entity_ids")
+    @classmethod
+    def _unique_clicks(cls, value: list[int]) -> list[int]:
+        if any(entity_id <= 0 for entity_id in value) or len(value) != len(set(value)):
+            raise ValueError("clicked entity IDs must be positive and unique")
+        return value
+
+
+class ClarificationChoice(StrictModel):
+    intent_index: int = Field(ge=0)
+    entity_ids: list[int] = Field(min_length=1)
+
+    @field_validator("entity_ids")
+    @classmethod
+    def _valid_choice(cls, value: list[int]) -> list[int]:
+        if any(entity_id <= 0 for entity_id in value) or len(value) != len(set(value)):
+            raise ValueError("clarification entity IDs must be positive and unique")
+        return value
+
+
+class InterpretResponse(StrictModel):
+    mode: Literal["LIVE", "REPLAY"]
+    fallback: bool
+    state: Literal["proposed", "clarification"]
+    instruction: str
+    interpretation: dict[str, Any]
+    grounding: GroundingBatch
+    intent: SimulationIntent | None
+    clarification_count: int = Field(ge=0, le=1)
+    model_name: str
+    notices: list[str] = Field(default_factory=list)
+
+
+@dataclass
+class PendingInterpretation:
+    instruction: str
+    interpretation: Interpretation
+    click_evidence_by_intent: dict[int, ClickEvidence]
+    grounding: GroundingBatch
 
 
 class ViewerEventBroker:
@@ -299,6 +361,8 @@ def create_app(storage_dir: str | Path = DEFAULT_MODEL_DIR) -> FastAPI:
     app.state.model_store = ModelStore(storage_dir)
     app.state.session_store = SelectionSessionStore()
     app.state.viewer_events = ViewerEventBroker()
+    app.state.interpreter = Interpreter()
+    app.state.pending_interpretations: dict[str, PendingInterpretation] = {}
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/", include_in_schema=False)
@@ -353,6 +417,230 @@ def create_app(storage_dir: str | Path = DEFAULT_MODEL_DIR) -> FastAPI:
             app.state.viewer_events.stream(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    def step_geometry(model_id: str) -> tuple[ModelRecord, FaceInventory, dict]:
+        record = app.state.model_store.get(model_id)
+        if record.kind != "step":
+            raise HTTPException(
+                status_code=422,
+                detail="Natural-language Task 15 grounding currently requires a STEP model.",
+            )
+        inventory = app.state.model_store.inventory(record)
+        assert isinstance(inventory, FaceInventory)
+        return record, inventory, analyze_cylinders(record.path)
+
+    def save_proposal(
+        model_id: str,
+        proposal: SimulationIntent,
+        *,
+        source_instruction: str,
+    ) -> tuple[SimulationIntent, list[str]]:
+        current = app.state.session_store.get_or_create(model_id).intent
+        merge_result = merge_session_intents(
+            current,
+            proposal,
+            source_instruction=source_instruction,
+        )
+        snapshot = app.state.session_store.save_intent(model_id, merge_result.intent)
+        assert snapshot.intent is not None
+        return snapshot.intent, list(merge_result.duplicate_notices)
+
+    async def publish_grounding(grounding: GroundingBatch) -> None:
+        for result in grounding.results:
+            if result.clarification is not None:
+                for candidate in result.clarification.candidate_sets:
+                    await app.state.viewer_events.publish(
+                        "highlight", {"entity_ids": candidate.entity_ids, "style": "candidate"}
+                    )
+                continue
+            if result.region is None:
+                continue
+            await app.state.viewer_events.publish(
+                "highlight", {"entity_ids": result.region.entity_ids, "style": "proposed"}
+            )
+            if result.bc is not None:
+                await app.state.viewer_events.publish(
+                    "highlight",
+                    {"entity_ids": result.region.entity_ids, "style": "fixed_boundary_condition"},
+                )
+
+    @app.post("/session/{session_id}/interpret", response_model=InterpretResponse)
+    async def interpret_session_instruction(
+        session_id: str, request: InterpretRequest
+    ) -> InterpretResponse:
+        _, inventory, cylinders = step_geometry(session_id)
+        clicks = (
+            {0: ClickEvidence.for_inventory(inventory, request.clicked_entity_ids)}
+            if request.clicked_entity_ids
+            else {}
+        )
+        try:
+            proposal = interpret_and_propose(
+                instruction=request.instruction,
+                inventory=inventory,
+                cylinders=cylinders,
+                interpreter=app.state.interpreter,
+                click_evidence_by_intent=clicks,
+            )
+        except InterpreterError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "llm_parse", "message": str(exc), "attempts": exc.attempts},
+            ) from exc
+        except UnsupportedMaterialInputError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": exc.code,
+                    "message": exc.safe_message,
+                    "mode": "LIVE",
+                    "supported_mechanism": "reviewed_default_density_for_gravity",
+                },
+            ) from exc
+        except InterpreterProviderError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": exc.code,
+                    "message": exc.safe_message,
+                    "mode": "LIVE",
+                    "fallback_available": True,
+                },
+            ) from exc
+        except (OrchestrationError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        await publish_grounding(proposal.grounding)
+        if proposal.clarifications:
+            app.state.pending_interpretations[session_id] = PendingInterpretation(
+                instruction=request.instruction,
+                interpretation=proposal.interpretation,
+                click_evidence_by_intent=clicks,
+                grounding=proposal.grounding,
+            )
+            return InterpretResponse(
+                mode="LIVE", fallback=False, state="clarification",
+                instruction=request.instruction,
+                interpretation=proposal.interpretation.model_dump(mode="json"),
+                grounding=proposal.grounding, intent=None, clarification_count=1,
+                model_name=getattr(app.state.interpreter.transport, "model", DEFAULT_MODEL),
+            )
+        assert proposal.intent is not None
+        saved, notices = save_proposal(
+            session_id,
+            proposal.intent,
+            source_instruction=request.instruction,
+        )
+        app.state.pending_interpretations.pop(session_id, None)
+        return InterpretResponse(
+            mode="LIVE", fallback=False, state="proposed", instruction=request.instruction,
+            interpretation=proposal.interpretation.model_dump(mode="json"),
+            grounding=proposal.grounding, intent=saved, clarification_count=0,
+            model_name=getattr(app.state.interpreter.transport, "model", DEFAULT_MODEL),
+            notices=notices,
+        )
+
+    @app.post("/session/{session_id}/clarify", response_model=InterpretResponse)
+    async def clarify_session_instruction(
+        session_id: str, choice: ClarificationChoice
+    ) -> InterpretResponse:
+        _, inventory, cylinders = step_geometry(session_id)
+        pending = app.state.pending_interpretations.pop(session_id, None)
+        if pending is None:
+            raise HTTPException(status_code=409, detail="no unresolved clarification exists")
+        alternatives = [
+            candidate.entity_ids
+            for result in pending.grounding.results
+            if result.clarification is not None and result.intent_index == choice.intent_index
+            for candidate in result.clarification.candidate_sets
+        ]
+        if sorted(choice.entity_ids) not in [sorted(ids) for ids in alternatives]:
+            raise HTTPException(status_code=422, detail="choice must match a returned candidate set")
+        clicks = dict(pending.click_evidence_by_intent)
+        clicks[choice.intent_index] = ClickEvidence.for_inventory(inventory, choice.entity_ids)
+        proposal = propose_from_interpretation(
+            instruction=pending.instruction,
+            interpretation=pending.interpretation,
+            inventory=inventory,
+            cylinders=cylinders,
+            click_evidence_by_intent=clicks,
+        )
+        if proposal.clarifications:
+            raise HTTPException(
+                status_code=409,
+                detail="the single allowed clarification did not resolve the intent",
+            )
+        assert proposal.intent is not None
+        saved, notices = save_proposal(
+            session_id,
+            proposal.intent,
+            source_instruction=pending.instruction,
+        )
+        await publish_grounding(proposal.grounding)
+        return InterpretResponse(
+            mode="LIVE", fallback=False, state="proposed", instruction=pending.instruction,
+            interpretation=pending.interpretation.model_dump(mode="json"),
+            grounding=proposal.grounding, intent=saved, clarification_count=1,
+            model_name=getattr(app.state.interpreter.transport, "model", DEFAULT_MODEL),
+            notices=notices,
+        )
+
+    def fallback_payload(session_id: str, case_id: str) -> tuple[dict[str, Any], SimulationIntent]:
+        if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", case_id) is None:
+            raise HTTPException(status_code=404, detail="fallback case not found")
+        _, inventory, _ = step_geometry(session_id)
+        path = Path(__file__).resolve().parents[1] / "eval" / "fallback" / f"{case_id}.json"
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="fallback case not found")
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if payload.get("mode") != "REPLAY" or payload.get("model_sha256") != inventory.file_sha256:
+                raise ValueError("fallback model hash or mode does not match")
+            Interpretation.model_validate(payload["typed_interpreter_output"], strict=True)
+            intent = SimulationIntent.model_validate(payload["proposed_ir"], strict=True)
+            if any(region.status != "proposed" for region in intent.regions):
+                raise ValueError("fallback regions must remain proposed")
+        except (KeyError, ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=422, detail=f"fallback data is invalid: {exc}") from exc
+        return payload, intent
+
+    @app.get("/session/{session_id}/fallback-cases")
+    async def list_session_fallback_cases(session_id: str) -> dict[str, Any]:
+        _, inventory, _ = step_geometry(session_id)
+        directory = Path(__file__).resolve().parents[1] / "eval" / "fallback"
+        case_ids = []
+        for path in sorted(directory.glob("*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            if payload.get("mode") == "REPLAY" and payload.get("model_sha256") == inventory.file_sha256:
+                case_ids.append(payload.get("case_id"))
+        return {"mode": "REPLAY", "model_id": session_id, "case_ids": case_ids}
+
+    @app.post("/session/{session_id}/fallback/{case_id}", response_model=InterpretResponse)
+    async def load_session_fallback(session_id: str, case_id: str) -> InterpretResponse:
+        payload, intent = fallback_payload(session_id, case_id)
+        instruction = next(
+            (region.source_instruction for region in intent.regions),
+            "Apply whole-model gravity.",
+        )
+        saved, notices = save_proposal(
+            session_id,
+            intent,
+            source_instruction=instruction,
+        )
+        grounding = GroundingBatch.model_validate_json(
+            json.dumps(payload["final_grounding"]), strict=True
+        )
+        await publish_grounding(grounding)
+        return InterpretResponse(
+            mode="REPLAY", fallback=True, state="proposed",
+            instruction=instruction,
+            interpretation=payload["typed_interpreter_output"], grounding=grounding,
+            intent=saved, clarification_count=1 if payload.get("clarification_used") else 0,
+            model_name="checked-in typed responses",
+            notices=notices,
         )
 
     def ensure_uploaded_model(session_id: str) -> None:

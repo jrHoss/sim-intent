@@ -1,0 +1,1 @@
+{"intents":[{"op_list":[{"op":"holes"}],"bc":{"type":"fixed_displacement","components":["x","y","z"]},"load":null,"target_description":"the two circled holes"}]}

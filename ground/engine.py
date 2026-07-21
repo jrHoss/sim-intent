@@ -131,7 +131,13 @@ class GroundedIntent(StrictModel):
     def _one_payload_and_one_outcome(self) -> "GroundedIntent":
         if (self.bc is None) == (self.load is None):
             raise ValueError("grounded intent requires exactly one BC/load payload")
-        if (self.region is None) == (self.clarification is None):
+        whole_model_gravity = (
+            self.load is not None
+            and self.load.type == "gravity"
+            and self.region is None
+            and self.clarification is None
+        )
+        if not whole_model_gravity and (self.region is None) == (self.clarification is None):
             raise ValueError("grounded intent requires exactly one grounding outcome")
         return self
 
@@ -381,6 +387,19 @@ class GroundingEngine:
             score_margin=float(query_result.score_margin),
             candidate_set_margin=set_margin,
         )
+
+        # Gravity is explicitly a whole-model load in the solver-neutral IR.
+        # The real Task 6 query still executes and remains auditable, but no
+        # arbitrary face selection is promoted into a region.
+        if intent.load is not None and intent.load.type == "gravity":
+            return GroundedIntent(
+                intent_index=intent_index,
+                source_instruction=source_instruction,
+                target_description=intent.target_description,
+                load=intent.load,
+                query_evidence=query_evidence,
+                click_evidence=click_evidence,
+            )
 
         def clarify(
             reason: ClarificationReason,

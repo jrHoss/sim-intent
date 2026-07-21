@@ -1,0 +1,1 @@
+{"intents":[{"op_list":[{"op":"find_faces","surface_type":"Plane"}],"bc":{"type":"fixed_displacement","components":["x","y","z"]},"load":null,"target_description":"the left side"}]}

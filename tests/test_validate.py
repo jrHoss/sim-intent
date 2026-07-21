@@ -90,6 +90,51 @@ def test_valid_confirmed_intent_passes_and_is_export_eligible():
     assert report.issues == []
 
 
+def test_non_gravity_intent_does_not_require_density():
+    candidate = intent()
+    assert candidate.materials[0].density_tonne_per_mm3 is None
+    assert "material.density_required_for_gravity" not in codes(
+        validate_intent(candidate)
+    )
+
+
+def test_gravity_without_density_is_blocked():
+    candidate = intent().model_copy(
+        update={
+            "loads": [
+                GravityLoad(
+                    type="gravity", region_ref=None, vector=[0.0, 0.0, -9810.0]
+                )
+            ]
+        },
+        deep=True,
+    )
+    report = validate_intent(candidate)
+    assert "material.density_required_for_gravity" in codes(report)
+    assert report.export_eligible is False
+
+
+def test_gravity_with_positive_density_is_valid():
+    candidate = intent()
+    material = candidate.materials[0].model_copy(
+        update={"density_tonne_per_mm3": 7.85e-9}, deep=True
+    )
+    candidate = candidate.model_copy(
+        update={
+            "materials": [material],
+            "loads": [
+                GravityLoad(
+                    type="gravity", region_ref=None, vector=[0.0, 0.0, -9810.0]
+                )
+            ],
+        },
+        deep=True,
+    )
+    report = validate_intent(candidate)
+    assert "material.density_required_for_gravity" not in codes(report)
+    assert report.export_eligible is True
+
+
 def test_proposed_region_is_valid_draft_but_blocks_export():
     report = validate_intent(intent(region_status="proposed"))
     assert report.validation_status == "valid"

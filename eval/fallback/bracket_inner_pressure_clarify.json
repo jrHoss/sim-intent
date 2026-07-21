@@ -1,0 +1,235 @@
+{
+  "case_id": "bracket_inner_pressure_clarify",
+  "clarification_used": true,
+  "final_grounding": {
+    "results": [
+      {
+        "bc": null,
+        "clarification": null,
+        "click_evidence": {
+          "entity_ids": [
+            10
+          ],
+          "inventory_sha256": "d81d158aa3b0a5464407496bd1782eba375f853e870fba6edd8cf485825f3c90"
+        },
+        "intent_index": 0,
+        "load": {
+          "magnitude": "2 MPa",
+          "type": "pressure"
+        },
+        "query_evidence": {
+          "candidate_set_margin": 0.0,
+          "entity_ids": [
+            10,
+            11,
+            12
+          ],
+          "op_list": [
+            {
+              "op": "holes"
+            }
+          ],
+          "per_candidate_scores": {
+            "10": 1.0,
+            "11": 1.0,
+            "12": 1.0
+          },
+          "score_margin": 0.0
+        },
+        "region": {
+          "confidence": 0.99,
+          "entity_ids": [
+            10
+          ],
+          "entity_type": "cad_face",
+          "id": "region_1",
+          "selection_method": "user_click",
+          "source_instruction": "Apply 2 MPa pressure to the inner cylindrical surface.",
+          "status": "proposed"
+        },
+        "source_instruction": "Apply 2 MPa pressure to the inner cylindrical surface.",
+        "target_description": "the inner cylindrical surface"
+      }
+    ]
+  },
+  "initial_grounding": {
+    "results": [
+      {
+        "bc": null,
+        "clarification": {
+          "candidate_sets": [
+            {
+              "confidence": 1.0,
+              "entity_ids": [
+                10
+              ],
+              "entity_type": "cad_face",
+              "inventory_sha256": "d81d158aa3b0a5464407496bd1782eba375f853e870fba6edd8cf485825f3c90",
+              "label": "hole (radius 8 mm, axis +Y)",
+              "score": 1.0,
+              "source": "query"
+            },
+            {
+              "confidence": 1.0,
+              "entity_ids": [
+                11
+              ],
+              "entity_type": "cad_face",
+              "inventory_sha256": "d81d158aa3b0a5464407496bd1782eba375f853e870fba6edd8cf485825f3c90",
+              "label": "hole (radius 5.5 mm, axis +Z)",
+              "score": 1.0,
+              "source": "query"
+            },
+            {
+              "confidence": 1.0,
+              "entity_ids": [
+                12
+              ],
+              "entity_type": "cad_face",
+              "inventory_sha256": "d81d158aa3b0a5464407496bd1782eba375f853e870fba6edd8cf485825f3c90",
+              "label": "hole (radius 5.5 mm, axis +Z)",
+              "score": 1.0,
+              "source": "query"
+            }
+          ],
+          "click_evidence": null,
+          "kind": "clarification_request",
+          "query_evidence": {
+            "candidate_set_margin": 0.0,
+            "entity_ids": [
+              10,
+              11,
+              12
+            ],
+            "op_list": [
+              {
+                "op": "holes"
+              }
+            ],
+            "per_candidate_scores": {
+              "10": 1.0,
+              "11": 1.0,
+              "12": 1.0
+            },
+            "score_margin": 0.0
+          },
+          "question": "The best geometry alternatives score too similarly. Which highlighted candidate is correct?",
+          "reason": "low_score_margin",
+          "requested_count": null,
+          "source_instruction": "Apply 2 MPa pressure to the inner cylindrical surface.",
+          "target_description": "the inner cylindrical surface"
+        },
+        "click_evidence": null,
+        "intent_index": 0,
+        "load": {
+          "magnitude": "2 MPa",
+          "type": "pressure"
+        },
+        "query_evidence": {
+          "candidate_set_margin": 0.0,
+          "entity_ids": [
+            10,
+            11,
+            12
+          ],
+          "op_list": [
+            {
+              "op": "holes"
+            }
+          ],
+          "per_candidate_scores": {
+            "10": 1.0,
+            "11": 1.0,
+            "12": 1.0
+          },
+          "score_margin": 0.0
+        },
+        "region": null,
+        "source_instruction": "Apply 2 MPa pressure to the inner cylindrical surface.",
+        "target_description": "the inner cylindrical surface"
+      }
+    ]
+  },
+  "mode": "REPLAY",
+  "model_fixture": "bracket.step",
+  "model_sha256": "d81d158aa3b0a5464407496bd1782eba375f853e870fba6edd8cf485825f3c90",
+  "proposed_ir": {
+    "analysis": {
+      "type": "static_structural",
+      "units": {
+        "force": "N",
+        "length": "mm",
+        "stress": "MPa"
+      }
+    },
+    "assumptions": [
+      {
+        "criticality": "noncritical",
+        "id": "assumption_c784e73d6fe19efe",
+        "status": "pending",
+        "text": "The prototype demonstration material was set to steel (E=210000 MPa, nu=0.3)."
+      },
+      {
+        "criticality": "unit_critical",
+        "id": "assumption_65838ec4daa367b5",
+        "status": "pending",
+        "text": "Positive pressure was interpreted as acting into the surface."
+      },
+      {
+        "criticality": "unit_critical",
+        "id": "assumption_d28d2cbd114ae44d",
+        "status": "pending",
+        "text": "The MPa value was interpreted as pressure because stress units were supplied."
+      }
+    ],
+    "bcs": [],
+    "loads": [
+      {
+        "magnitude": 2.0,
+        "region_ref": "region_1",
+        "type": "pressure"
+      }
+    ],
+    "materials": [
+      {
+        "E_MPa": 210000.0,
+        "density_tonne_per_mm3": null,
+        "model": "linear_elastic_isotropic",
+        "name": "steel",
+        "nu": 0.3
+      }
+    ],
+    "regions": [
+      {
+        "confidence": 0.99,
+        "entity_ids": [
+          10
+        ],
+        "entity_type": "cad_face",
+        "id": "region_1",
+        "selection_method": "user_click",
+        "source_instruction": "Apply 2 MPa pressure to the inner cylindrical surface.",
+        "status": "proposed"
+      }
+    ],
+    "validation_status": "unvalidated"
+  },
+  "typed_interpreter_output": {
+    "intents": [
+      {
+        "bc": null,
+        "load": {
+          "magnitude": "2 MPa",
+          "type": "pressure"
+        },
+        "op_list": [
+          {
+            "op": "holes"
+          }
+        ],
+        "target_description": "the inner cylindrical surface"
+      }
+    ]
+  },
+  "validation_status_before_review": "invalid"
+}

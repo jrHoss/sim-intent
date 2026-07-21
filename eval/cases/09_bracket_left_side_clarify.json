@@ -1,0 +1,22 @@
+{
+  "case_id": "bracket_left_side_clarify",
+  "model_fixture": "bracket.step",
+  "instruction": "Fix the left side.",
+  "click_evidence": [],
+  "clarification_response": {"intent_index": 0, "entity_ids": [1]},
+  "expected_conditions": [{
+    "intent_index": 0,
+    "entity_ids": [1],
+    "region_entity_type": "cad_face",
+    "condition_type": "fixed_displacement",
+    "components": ["x", "y", "z"],
+    "vector": null,
+    "magnitude": null,
+    "internal_unit": "none",
+    "expected_ir_subset": {"type": "fixed_displacement", "region_ref": "region_1", "components": ["x", "y", "z"]}
+  }],
+  "clarification_required": true,
+  "expected_structured_ir_subset": {"regions": [{"id": "region_1", "entity_ids": [1], "status": "proposed"}]},
+  "artifact_export_eligible": false,
+  "explanation": "A generic side reference is intentionally treated as ambiguous; one engineer choice selects the established left face 1."
+}

@@ -1,0 +1,22 @@
+{
+  "case_id": "bracket_inner_pressure_clarify",
+  "model_fixture": "bracket.step",
+  "instruction": "Apply 2 MPa pressure to the inner cylindrical surface.",
+  "click_evidence": [],
+  "clarification_response": {"intent_index": 0, "entity_ids": [10]},
+  "expected_conditions": [{
+    "intent_index": 0,
+    "entity_ids": [10],
+    "region_entity_type": "cad_face",
+    "condition_type": "pressure",
+    "components": null,
+    "vector": null,
+    "magnitude": 2.0,
+    "internal_unit": "MPa",
+    "expected_ir_subset": {"type": "pressure", "region_ref": "region_1", "magnitude": 2.0}
+  }],
+  "clarification_required": true,
+  "expected_structured_ir_subset": {"analysis": {"units": {"length": "mm", "force": "N", "stress": "MPa"}}},
+  "artifact_export_eligible": false,
+  "explanation": "The bracket has three true inner cylindrical hole faces, so one clarification selects wall hole face 10; fillet 3 is not a hole."
+}

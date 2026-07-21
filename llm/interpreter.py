@@ -16,7 +16,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Protocol, Union
 
-from openai import OpenAI
+from openai import OpenAI, OpenAIError
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -49,6 +49,30 @@ class InterpreterError(RuntimeError):
         super().__init__(message)
         self.attempts = attempts
         self.last_reason = last_reason
+
+
+class InterpreterProviderError(RuntimeError):
+    """Safe provider/configuration failure outside LLM parse taxonomy."""
+
+    def __init__(self, code: str, safe_message: str) -> None:
+        super().__init__(safe_message)
+        self.code = code
+        self.safe_message = safe_message
+
+
+class UnsupportedMaterialInputError(RuntimeError):
+    """Material definitions are outside the Task 11 typed-output contract."""
+
+    code = "unsupported_material_input"
+    safe_message = (
+        "Natural-language material definitions are not supported in Task 15. "
+        "Submit the geometry, boundary-condition, and load instructions without "
+        "material properties. For gravity, the server supplies reviewed default "
+        "steel density and requires explicit engineer acceptance before export."
+    )
+
+    def __init__(self) -> None:
+        super().__init__(self.safe_message)
 
 
 class StrictModel(BaseModel):
@@ -605,14 +629,30 @@ class OpenAIStructuredOutputTransport:
         self.max_output_tokens = max_output_tokens
 
     def complete(self, request: ModelRequest) -> Any:
-        client = self._client if self._client is not None else OpenAI()
-        response = client.responses.parse(
-            model=self.model,
-            max_output_tokens=self.max_output_tokens,
-            instructions=request.system,
-            input=request.messages,
-            text_format=OpenAIWireInterpretation,
-        )
+        if self._client is None and not (
+            os.environ.get("OPENAI_API_KEY")
+            or os.environ.get("OPENAI_ADMIN_KEY")
+        ):
+            raise InterpreterProviderError(
+                "provider_not_configured",
+                "Live interpretation is unavailable because the OpenAI provider is not configured. Set OPENAI_API_KEY on the server or use a clearly labeled REPLAY fallback case.",
+            )
+        try:
+            client = self._client if self._client is not None else OpenAI()
+            response = client.responses.parse(
+                model=self.model,
+                max_output_tokens=self.max_output_tokens,
+                instructions=request.system,
+                input=request.messages,
+                text_format=OpenAIWireInterpretation,
+            )
+        except InterpreterProviderError:
+            raise
+        except OpenAIError as exc:
+            raise InterpreterProviderError(
+                "provider_unavailable",
+                "Live interpretation could not reach the configured OpenAI provider. Check the server-side credentials and provider availability, then retry.",
+            ) from exc
         parsed = response.output_parsed
         if parsed is None:
             raise ValueError("OpenAI response did not contain parsed structured output")
@@ -634,7 +674,57 @@ Hard rules:
 - Describe direction in words. Do not turn it into a numeric vector.
 - Do not execute operations, resolve geometry, create Regions, score ambiguity, mutate state, highlight, validate a final IR, confirm, or export.
 - Keep multiple conditions as separate intents in their original order.
+- Material definitions are outside this schema; never encode or silently reinterpret them.
+- Under the Task 7 model convention, qualitative vertical motion means the Y displacement component unless the user explicitly names another axis.
+- A lateral directional "side" (left, right, front, or back) is not an exact face label. Use a broad planar find_faces operation so deterministic grounding can expose plausible candidates and confidence.
 """
+
+
+_MATERIAL_INPUT_PATTERN = re.compile(
+    r"\b(?:young(?:'s|s)?\s+modulus|poisson(?:'s|s)?\s+ratio|density|material\s+propert(?:y|ies)|assign\s+(?:a\s+|the\s+)?material)\b",
+    re.IGNORECASE,
+)
+
+
+def _reject_unsupported_material_input(instruction: str) -> None:
+    if _MATERIAL_INPUT_PATTERN.search(instruction):
+        raise UnsupportedMaterialInputError()
+
+
+_VAGUE_LATERAL_SIDE_PATTERN = re.compile(
+    r"\b(left|right|front|back)(?:-hand)?\s+side\b",
+    re.IGNORECASE,
+)
+
+
+def _preserve_directional_side_ambiguity(
+    interpretation: Interpretation,
+    instruction: str,
+) -> Interpretation:
+    """Prevent a vague lateral side from becoming an exact extreme-face label."""
+
+    intents = []
+    for intent in interpretation.intents:
+        match = _VAGUE_LATERAL_SIDE_PATTERN.search(intent.target_description)
+        if match is None and len(interpretation.intents) == 1:
+            match = _VAGUE_LATERAL_SIDE_PATTERN.search(instruction)
+        if match is None or len(intent.op_list) != 1:
+            intents.append(intent)
+            continue
+        operation = intent.op_list[0]
+        expected_label = f"{match.group(1).lower()}_face"
+        if not isinstance(operation, LabeledOp) or operation.name.lower() != expected_label:
+            intents.append(intent)
+            continue
+        intents.append(
+            intent.model_copy(
+                update={
+                    "op_list": [FindFacesOp(op="find_faces", surface_type="Plane")]
+                },
+                deep=True,
+            )
+        )
+    return interpretation.model_copy(update={"intents": intents}, deep=True)
 
 
 def build_user_prompt(instruction: str, summary: FaceInventorySummary) -> str:
@@ -645,6 +735,10 @@ def build_user_prompt(instruction: str, summary: FaceInventorySummary) -> str:
         "supported_task6_query_operations": query_vocabulary(llm_safe_only=True),
         "excluded_id_referencing_task6_operations": ["adjacent_to", "in_component"],
         "supported_task7_semantics": semantics_vocabulary(),
+        "model_axis_convention": {
+            "vertical_displacement_component": "y",
+            "downward_load_direction": "negative Y",
+        },
         "supported_boundary_conditions": ["fixed_displacement", "prescribed_displacement"],
     }
     return json.dumps(prompt_payload, sort_keys=True, separators=(",", ":"))
@@ -706,6 +800,7 @@ class Interpreter:
     ) -> Interpretation:
         if not instruction.strip():
             raise ValueError("instruction cannot be empty")
+        _reject_unsupported_material_input(instruction)
         summary_payload = (
             inventory_summary.model_dump(mode="json")
             if isinstance(inventory_summary, FaceInventorySummary)
@@ -727,6 +822,7 @@ class Interpreter:
                 _assert_no_direct_entity_references(payload)
                 result = Interpretation.model_validate(payload, strict=True)
                 _validate_labels(result, summary)
+                result = _preserve_directional_side_ambiguity(result, instruction)
                 result._attempts = attempt
                 return result
             except (ValidationError, ValueError, TypeError, json.JSONDecodeError) as exc:

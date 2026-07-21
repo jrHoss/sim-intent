@@ -19,6 +19,7 @@ from llm.interpreter import (
     Interpretation,
     OpenAIStructuredOutputTransport,
     OpenAIWireInterpretation,
+    UnsupportedMaterialInputError,
 )
 
 
@@ -226,6 +227,19 @@ def test_repeated_invalid_responses_stop_at_retry_limit():
     assert len(transport.requests) == 3
 
 
+def test_material_rich_instruction_is_rejected_before_any_retry():
+    transport = SequenceTransport(fixed_holes(), fixed_holes(), fixed_holes())
+    instruction = (
+        "Use steel with Young's modulus 210 GPa, Poisson's ratio 0.3, and density "
+        "7850 kg/m^3. Fix both bolt holes and apply gravity in negative Z."
+    )
+    with pytest.raises(UnsupportedMaterialInputError) as caught:
+        Interpreter(transport=transport, max_retries=2).interpret(instruction, SUMMARY)
+    assert caught.value.code == "unsupported_material_input"
+    assert "not supported in Task 15" in caught.value.safe_message
+    assert transport.requests == []
+
+
 def test_multiple_intents_preserve_separation_and_order():
     combined = {
         "intents": [fixed_holes()["intents"][0], downward_force()["intents"][0]]
@@ -237,6 +251,46 @@ def test_multiple_intents_preserve_separation_and_order():
         "fixed_displacement",
         "resultant_surface_force",
     ]
+
+
+def test_vague_lateral_side_keeps_ambiguity_for_grounding():
+    payload = {
+        "intents": [
+            {
+                "op_list": [{"op": "labeled", "name": "left_face"}],
+                "bc": {"type": "fixed_displacement", "components": ["x", "y", "z"]},
+                "load": None,
+                "target_description": "the left side",
+            }
+        ]
+    }
+    result = Interpreter(transport=SequenceTransport(payload)).interpret(
+        "Fix the left side.", SUMMARY
+    )
+    assert result.intents[0].op_list[0].model_dump(mode="json") == {
+        "op": "find_faces",
+        "surface_type": "Plane",
+    }
+
+
+def test_explicit_left_face_keeps_exact_label_operation():
+    payload = {
+        "intents": [
+            {
+                "op_list": [{"op": "labeled", "name": "left_face"}],
+                "bc": {"type": "fixed_displacement", "components": ["x", "y", "z"]},
+                "load": None,
+                "target_description": "the left face",
+            }
+        ]
+    }
+    result = Interpreter(transport=SequenceTransport(payload)).interpret(
+        "Fix the left face.", SUMMARY
+    )
+    assert result.intents[0].op_list[0].model_dump(mode="json") == {
+        "op": "labeled",
+        "name": "left_face",
+    }
 
 
 def test_mocked_tests_never_construct_openai_client(monkeypatch):

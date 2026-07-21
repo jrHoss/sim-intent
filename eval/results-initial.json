@@ -1,0 +1,15 @@
+{
+  "fixture_hashes": {
+    "bracket.step": "d81d158aa3b0a5464407496bd1782eba375f853e870fba6edd8cf485825f3c90",
+    "plate_hole.step": "446cf12fed1139d2bfae5e483c1c34905b1444a8d05154a6bd972f1eaa214712"
+  },
+  "manifest_hash": "47c0d7275b9a065a7f5e3316ed60b7ffff58913e0b1e5045c857f663e1f6775b",
+  "mode": "LIVE",
+  "model_name": "gpt-5.6-sol",
+  "reason": "OPENAI_API_KEY is required for LIVE evaluation; no replay score was substituted",
+  "replay_results": "results-replay.md",
+  "revision": "7bd789c60d9b9e8b812b6fb7c0f29212587072e0+dirty",
+  "score": null,
+  "status": "UNAVAILABLE",
+  "threshold_achieved": null
+}

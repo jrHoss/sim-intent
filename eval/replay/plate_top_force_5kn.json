@@ -1,0 +1,1 @@
+{"intents":[{"op_list":[{"op":"labeled","name":"top_face"}],"bc":null,"load":{"type":"resultant_surface_force","magnitude":"5 kN","direction":"downward"},"target_description":"the top face"}]}

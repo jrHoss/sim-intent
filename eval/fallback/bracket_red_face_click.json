@@ -1,0 +1,215 @@
+{
+  "case_id": "bracket_red_face_click",
+  "clarification_used": false,
+  "final_grounding": {
+    "results": [
+      {
+        "bc": {
+          "components": [
+            "x",
+            "y",
+            "z"
+          ],
+          "type": "fixed_displacement"
+        },
+        "clarification": null,
+        "click_evidence": {
+          "entity_ids": [
+            1
+          ],
+          "inventory_sha256": "d81d158aa3b0a5464407496bd1782eba375f853e870fba6edd8cf485825f3c90"
+        },
+        "intent_index": 0,
+        "load": null,
+        "query_evidence": {
+          "candidate_set_margin": 0.0,
+          "entity_ids": [
+            1,
+            2,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "op_list": [
+            {
+              "op": "find_faces",
+              "surface_type": "Plane"
+            }
+          ],
+          "per_candidate_scores": {
+            "1": 1.0,
+            "2": 1.0,
+            "4": 1.0,
+            "5": 1.0,
+            "6": 1.0,
+            "7": 1.0,
+            "8": 1.0,
+            "9": 1.0
+          },
+          "score_margin": 0.0
+        },
+        "region": {
+          "confidence": 0.99,
+          "entity_ids": [
+            1
+          ],
+          "entity_type": "cad_face",
+          "id": "region_1",
+          "selection_method": "user_click",
+          "source_instruction": "Use the face marked in red. Fix it.",
+          "status": "proposed"
+        },
+        "source_instruction": "Use the face marked in red. Fix it.",
+        "target_description": "the face marked in red"
+      }
+    ]
+  },
+  "initial_grounding": {
+    "results": [
+      {
+        "bc": {
+          "components": [
+            "x",
+            "y",
+            "z"
+          ],
+          "type": "fixed_displacement"
+        },
+        "clarification": null,
+        "click_evidence": {
+          "entity_ids": [
+            1
+          ],
+          "inventory_sha256": "d81d158aa3b0a5464407496bd1782eba375f853e870fba6edd8cf485825f3c90"
+        },
+        "intent_index": 0,
+        "load": null,
+        "query_evidence": {
+          "candidate_set_margin": 0.0,
+          "entity_ids": [
+            1,
+            2,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "op_list": [
+            {
+              "op": "find_faces",
+              "surface_type": "Plane"
+            }
+          ],
+          "per_candidate_scores": {
+            "1": 1.0,
+            "2": 1.0,
+            "4": 1.0,
+            "5": 1.0,
+            "6": 1.0,
+            "7": 1.0,
+            "8": 1.0,
+            "9": 1.0
+          },
+          "score_margin": 0.0
+        },
+        "region": {
+          "confidence": 0.99,
+          "entity_ids": [
+            1
+          ],
+          "entity_type": "cad_face",
+          "id": "region_1",
+          "selection_method": "user_click",
+          "source_instruction": "Use the face marked in red. Fix it.",
+          "status": "proposed"
+        },
+        "source_instruction": "Use the face marked in red. Fix it.",
+        "target_description": "the face marked in red"
+      }
+    ]
+  },
+  "mode": "REPLAY",
+  "model_fixture": "bracket.step",
+  "model_sha256": "d81d158aa3b0a5464407496bd1782eba375f853e870fba6edd8cf485825f3c90",
+  "proposed_ir": {
+    "analysis": {
+      "type": "static_structural",
+      "units": {
+        "force": "N",
+        "length": "mm",
+        "stress": "MPa"
+      }
+    },
+    "assumptions": [
+      {
+        "criticality": "noncritical",
+        "id": "assumption_c784e73d6fe19efe",
+        "status": "pending",
+        "text": "The prototype demonstration material was set to steel (E=210000 MPa, nu=0.3)."
+      }
+    ],
+    "bcs": [
+      {
+        "components": [
+          "x",
+          "y",
+          "z"
+        ],
+        "region_ref": "region_1",
+        "type": "fixed_displacement"
+      }
+    ],
+    "loads": [],
+    "materials": [
+      {
+        "E_MPa": 210000.0,
+        "density_tonne_per_mm3": null,
+        "model": "linear_elastic_isotropic",
+        "name": "steel",
+        "nu": 0.3
+      }
+    ],
+    "regions": [
+      {
+        "confidence": 0.99,
+        "entity_ids": [
+          1
+        ],
+        "entity_type": "cad_face",
+        "id": "region_1",
+        "selection_method": "user_click",
+        "source_instruction": "Use the face marked in red. Fix it.",
+        "status": "proposed"
+      }
+    ],
+    "validation_status": "unvalidated"
+  },
+  "typed_interpreter_output": {
+    "intents": [
+      {
+        "bc": {
+          "components": [
+            "x",
+            "y",
+            "z"
+          ],
+          "type": "fixed_displacement"
+        },
+        "load": null,
+        "op_list": [
+          {
+            "op": "find_faces",
+            "surface_type": "Plane"
+          }
+        ],
+        "target_description": "the face marked in red"
+      }
+    ]
+  },
+  "validation_status_before_review": "valid"
+}

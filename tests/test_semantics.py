@@ -2,7 +2,13 @@
 
 import pytest
 
-from ground.semantics import convert_value, interpret_load, parse_direction, parse_quantity
+from ground.semantics import (
+    convert_value,
+    interpret_load,
+    normalize_fixed_displacement_components,
+    parse_direction,
+    parse_quantity,
+)
 
 
 @pytest.mark.parametrize(
@@ -58,6 +64,19 @@ def test_downward_model_convention_is_audited():
     vector, assumption = parse_direction("downward", downward_axis="z")
     assert vector == (0, 0, -1)
     assert "model convention" in assumption.text
+
+
+def test_vertical_motion_uses_y_model_axis_and_explicit_axis_wins():
+    components, assumption = normalize_fixed_displacement_components(
+        "Prevent vertical motion on this face.", ["z"]
+    )
+    assert components == ["y"]
+    assert assumption is not None and assumption.criticality == "unit_critical"
+
+    explicit, no_assumption = normalize_fixed_displacement_components(
+        "Prevent vertical motion along Z.", ["z"]
+    )
+    assert explicit == ["z"] and no_assumption is None
 
 
 def test_invalid_and_mismatched_units_rejected():

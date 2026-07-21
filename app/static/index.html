@@ -115,6 +115,39 @@
           </ol>
         </section>
 
+        <section class="panel-section intent-section" aria-labelledby="intent-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Task 15 orchestration</p>
+              <h2 id="intent-heading">Engineering instruction</h2>
+            </div>
+            <span id="interpret-mode" class="audit-badge" data-mode="LIVE">LIVE</span>
+          </div>
+          <label class="intent-label" for="instruction-input">Instruction</label>
+          <textarea id="instruction-input" rows="3" placeholder="Fix both bolt holes."></textarea>
+          <label class="intent-click-option">
+            <input id="use-current-clicks" type="checkbox" checked>
+            Use current face clicks as evidence
+          </label>
+          <button id="interpret-button" class="audit-export-button" type="button" disabled>Interpret</button>
+          <p id="interpret-error" class="intent-error" role="alert" hidden></p>
+          <div id="interpret-notices" class="intent-notices" role="status" hidden></div>
+          <div id="clarification-panel" class="clarification-panel" hidden>
+            <h3>Choose one highlighted candidate</h3>
+            <p id="clarification-question"></p>
+            <div id="clarification-candidates" class="clarification-candidates"></div>
+          </div>
+          <details class="typed-output">
+            <summary>Typed model output</summary>
+            <pre id="typed-output">No interpretation yet.</pre>
+          </details>
+          <div class="fallback-controls">
+            <label for="fallback-case">Replay fallback</label>
+            <select id="fallback-case" disabled><option value="">Load a STEP model first</option></select>
+            <button id="fallback-button" class="ghost-button" type="button" disabled>Load REPLAY case</button>
+          </div>
+        </section>
+
         <section id="audit-panel" class="panel-section audit-section" aria-labelledby="audit-heading">
           <div class="section-heading">
             <div>

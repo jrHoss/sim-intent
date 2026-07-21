@@ -1,0 +1,189 @@
+{
+  "case_id": "bracket_gravity_neg_z",
+  "clarification_used": false,
+  "final_grounding": {
+    "results": [
+      {
+        "bc": null,
+        "clarification": null,
+        "click_evidence": null,
+        "intent_index": 0,
+        "load": {
+          "direction": "negative Z",
+          "type": "gravity"
+        },
+        "query_evidence": {
+          "candidate_set_margin": 0.0,
+          "entity_ids": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12
+          ],
+          "op_list": [
+            {
+              "op": "find_faces",
+              "surface_type": null
+            }
+          ],
+          "per_candidate_scores": {
+            "1": 1.0,
+            "10": 1.0,
+            "11": 1.0,
+            "12": 1.0,
+            "2": 1.0,
+            "3": 1.0,
+            "4": 1.0,
+            "5": 1.0,
+            "6": 1.0,
+            "7": 1.0,
+            "8": 1.0,
+            "9": 1.0
+          },
+          "score_margin": 0.0
+        },
+        "region": null,
+        "source_instruction": "Apply gravity in the negative Z direction.",
+        "target_description": "the entire model"
+      }
+    ]
+  },
+  "initial_grounding": {
+    "results": [
+      {
+        "bc": null,
+        "clarification": null,
+        "click_evidence": null,
+        "intent_index": 0,
+        "load": {
+          "direction": "negative Z",
+          "type": "gravity"
+        },
+        "query_evidence": {
+          "candidate_set_margin": 0.0,
+          "entity_ids": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12
+          ],
+          "op_list": [
+            {
+              "op": "find_faces",
+              "surface_type": null
+            }
+          ],
+          "per_candidate_scores": {
+            "1": 1.0,
+            "10": 1.0,
+            "11": 1.0,
+            "12": 1.0,
+            "2": 1.0,
+            "3": 1.0,
+            "4": 1.0,
+            "5": 1.0,
+            "6": 1.0,
+            "7": 1.0,
+            "8": 1.0,
+            "9": 1.0
+          },
+          "score_margin": 0.0
+        },
+        "region": null,
+        "source_instruction": "Apply gravity in the negative Z direction.",
+        "target_description": "the entire model"
+      }
+    ]
+  },
+  "mode": "REPLAY",
+  "model_fixture": "bracket.step",
+  "model_sha256": "d81d158aa3b0a5464407496bd1782eba375f853e870fba6edd8cf485825f3c90",
+  "proposed_ir": {
+    "analysis": {
+      "type": "static_structural",
+      "units": {
+        "force": "N",
+        "length": "mm",
+        "stress": "MPa"
+      }
+    },
+    "assumptions": [
+      {
+        "criticality": "unit_critical",
+        "id": "assumption_abe38140cf24a93a",
+        "status": "pending",
+        "text": "For gravity, the prototype demonstration material was set to steel (E=210000 MPa, nu=0.3, density=7850 kg/m^3 = 7.85e-9 tonne/mm^3 internal)."
+      },
+      {
+        "criticality": "unit_critical",
+        "id": "assumption_13a5f93df77580e6",
+        "status": "pending",
+        "text": "Direction was interpreted as the explicit negative Z axis."
+      },
+      {
+        "criticality": "unit_critical",
+        "id": "assumption_751d3442100b139e",
+        "status": "pending",
+        "text": "Standard gravity was interpreted as 9810 mm/s^2."
+      }
+    ],
+    "bcs": [],
+    "loads": [
+      {
+        "region_ref": null,
+        "type": "gravity",
+        "vector": [
+          0.0,
+          0.0,
+          -9810.0
+        ]
+      }
+    ],
+    "materials": [
+      {
+        "E_MPa": 210000.0,
+        "density_tonne_per_mm3": 7.85e-09,
+        "model": "linear_elastic_isotropic",
+        "name": "steel",
+        "nu": 0.3
+      }
+    ],
+    "regions": [],
+    "validation_status": "unvalidated"
+  },
+  "typed_interpreter_output": {
+    "intents": [
+      {
+        "bc": null,
+        "load": {
+          "direction": "negative Z",
+          "type": "gravity"
+        },
+        "op_list": [
+          {
+            "op": "find_faces",
+            "surface_type": null
+          }
+        ],
+        "target_description": "the entire model"
+      }
+    ]
+  },
+  "validation_status_before_review": "invalid"
+}

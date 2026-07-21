@@ -113,12 +113,21 @@ def export_ccx_inp(intent: SimulationIntent, model: MeshModelMetadata):
     lines.extend(
         _set_definition("elset", all_elements_name, tuple(sorted(model.element_ids)))
     )
+    material = intent.materials[0]
     lines.extend(
         [
             "",
             f"*MATERIAL, NAME={material_name}",
             "*ELASTIC",
-            f"{format_float(intent.materials[0].E_MPa)}, {format_float(intent.materials[0].nu)}",
+            f"{format_float(material.E_MPa)}, {format_float(material.nu)}",
+        ]
+    )
+    if material.density_tonne_per_mm3 is not None:
+        lines.extend(
+            ["*DENSITY", format_float(material.density_tonne_per_mm3)]
+        )
+    lines.extend(
+        [
             f"*SOLID SECTION, ELSET={all_elements_name}, MATERIAL={material_name}",
             "",
             "*STEP, NAME=STATIC_STEP",

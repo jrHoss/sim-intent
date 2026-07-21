@@ -1,0 +1,315 @@
+{
+  "case_id": "bracket_combined_export",
+  "clarification_used": false,
+  "final_grounding": {
+    "results": [
+      {
+        "bc": {
+          "components": [
+            "x",
+            "y",
+            "z"
+          ],
+          "type": "fixed_displacement"
+        },
+        "clarification": null,
+        "click_evidence": null,
+        "intent_index": 0,
+        "load": null,
+        "query_evidence": {
+          "candidate_set_margin": 1.0,
+          "entity_ids": [
+            11,
+            12
+          ],
+          "op_list": [
+            {
+              "max_size": 2,
+              "min_size": 2,
+              "op": "hole_groups"
+            }
+          ],
+          "per_candidate_scores": {
+            "11": 1.0,
+            "12": 1.0
+          },
+          "score_margin": 0.0
+        },
+        "region": {
+          "confidence": 1.0,
+          "entity_ids": [
+            11,
+            12
+          ],
+          "entity_type": "cad_face",
+          "id": "region_1",
+          "selection_method": "semantic_geometry_query",
+          "source_instruction": "Fix both bolt holes and apply a total downward force of 5 kN to the top flange.",
+          "status": "proposed"
+        },
+        "source_instruction": "Fix both bolt holes and apply a total downward force of 5 kN to the top flange.",
+        "target_description": "both bolt holes"
+      },
+      {
+        "bc": null,
+        "clarification": null,
+        "click_evidence": null,
+        "intent_index": 1,
+        "load": {
+          "direction": "downward",
+          "magnitude": "5 kN",
+          "type": "resultant_surface_force"
+        },
+        "query_evidence": {
+          "candidate_set_margin": 1.0,
+          "entity_ids": [
+            4
+          ],
+          "op_list": [
+            {
+              "name": "top_face",
+              "op": "labeled"
+            }
+          ],
+          "per_candidate_scores": {
+            "4": 1.0
+          },
+          "score_margin": 1.0
+        },
+        "region": {
+          "confidence": 1.0,
+          "entity_ids": [
+            4
+          ],
+          "entity_type": "cad_face",
+          "id": "region_2",
+          "selection_method": "semantic_geometry_query",
+          "source_instruction": "Fix both bolt holes and apply a total downward force of 5 kN to the top flange.",
+          "status": "proposed"
+        },
+        "source_instruction": "Fix both bolt holes and apply a total downward force of 5 kN to the top flange.",
+        "target_description": "the top flange"
+      }
+    ]
+  },
+  "initial_grounding": {
+    "results": [
+      {
+        "bc": {
+          "components": [
+            "x",
+            "y",
+            "z"
+          ],
+          "type": "fixed_displacement"
+        },
+        "clarification": null,
+        "click_evidence": null,
+        "intent_index": 0,
+        "load": null,
+        "query_evidence": {
+          "candidate_set_margin": 1.0,
+          "entity_ids": [
+            11,
+            12
+          ],
+          "op_list": [
+            {
+              "max_size": 2,
+              "min_size": 2,
+              "op": "hole_groups"
+            }
+          ],
+          "per_candidate_scores": {
+            "11": 1.0,
+            "12": 1.0
+          },
+          "score_margin": 0.0
+        },
+        "region": {
+          "confidence": 1.0,
+          "entity_ids": [
+            11,
+            12
+          ],
+          "entity_type": "cad_face",
+          "id": "region_1",
+          "selection_method": "semantic_geometry_query",
+          "source_instruction": "Fix both bolt holes and apply a total downward force of 5 kN to the top flange.",
+          "status": "proposed"
+        },
+        "source_instruction": "Fix both bolt holes and apply a total downward force of 5 kN to the top flange.",
+        "target_description": "both bolt holes"
+      },
+      {
+        "bc": null,
+        "clarification": null,
+        "click_evidence": null,
+        "intent_index": 1,
+        "load": {
+          "direction": "downward",
+          "magnitude": "5 kN",
+          "type": "resultant_surface_force"
+        },
+        "query_evidence": {
+          "candidate_set_margin": 1.0,
+          "entity_ids": [
+            4
+          ],
+          "op_list": [
+            {
+              "name": "top_face",
+              "op": "labeled"
+            }
+          ],
+          "per_candidate_scores": {
+            "4": 1.0
+          },
+          "score_margin": 1.0
+        },
+        "region": {
+          "confidence": 1.0,
+          "entity_ids": [
+            4
+          ],
+          "entity_type": "cad_face",
+          "id": "region_2",
+          "selection_method": "semantic_geometry_query",
+          "source_instruction": "Fix both bolt holes and apply a total downward force of 5 kN to the top flange.",
+          "status": "proposed"
+        },
+        "source_instruction": "Fix both bolt holes and apply a total downward force of 5 kN to the top flange.",
+        "target_description": "the top flange"
+      }
+    ]
+  },
+  "mode": "REPLAY",
+  "model_fixture": "bracket.step",
+  "model_sha256": "d81d158aa3b0a5464407496bd1782eba375f853e870fba6edd8cf485825f3c90",
+  "proposed_ir": {
+    "analysis": {
+      "type": "static_structural",
+      "units": {
+        "force": "N",
+        "length": "mm",
+        "stress": "MPa"
+      }
+    },
+    "assumptions": [
+      {
+        "criticality": "noncritical",
+        "id": "assumption_c784e73d6fe19efe",
+        "status": "pending",
+        "text": "The prototype demonstration material was set to steel (E=210000 MPa, nu=0.3)."
+      },
+      {
+        "criticality": "unit_critical",
+        "id": "assumption_198c971613948153",
+        "status": "pending",
+        "text": "Downward was interpreted as the negative Y axis per model convention."
+      },
+      {
+        "criticality": "unit_critical",
+        "id": "assumption_5a8c19523aa8306a",
+        "status": "pending",
+        "text": "The force value was interpreted as a total resultant, not pressure."
+      }
+    ],
+    "bcs": [
+      {
+        "components": [
+          "x",
+          "y",
+          "z"
+        ],
+        "region_ref": "region_1",
+        "type": "fixed_displacement"
+      }
+    ],
+    "loads": [
+      {
+        "region_ref": "region_2",
+        "type": "resultant_surface_force",
+        "vector": [
+          0.0,
+          -5000.0,
+          0.0
+        ]
+      }
+    ],
+    "materials": [
+      {
+        "E_MPa": 210000.0,
+        "density_tonne_per_mm3": null,
+        "model": "linear_elastic_isotropic",
+        "name": "steel",
+        "nu": 0.3
+      }
+    ],
+    "regions": [
+      {
+        "confidence": 1.0,
+        "entity_ids": [
+          11,
+          12
+        ],
+        "entity_type": "cad_face",
+        "id": "region_1",
+        "selection_method": "semantic_geometry_query",
+        "source_instruction": "Fix both bolt holes and apply a total downward force of 5 kN to the top flange.",
+        "status": "proposed"
+      },
+      {
+        "confidence": 1.0,
+        "entity_ids": [
+          4
+        ],
+        "entity_type": "cad_face",
+        "id": "region_2",
+        "selection_method": "semantic_geometry_query",
+        "source_instruction": "Fix both bolt holes and apply a total downward force of 5 kN to the top flange.",
+        "status": "proposed"
+      }
+    ],
+    "validation_status": "unvalidated"
+  },
+  "typed_interpreter_output": {
+    "intents": [
+      {
+        "bc": {
+          "components": [
+            "x",
+            "y",
+            "z"
+          ],
+          "type": "fixed_displacement"
+        },
+        "load": null,
+        "op_list": [
+          {
+            "max_size": 2,
+            "min_size": 2,
+            "op": "hole_groups"
+          }
+        ],
+        "target_description": "both bolt holes"
+      },
+      {
+        "bc": null,
+        "load": {
+          "direction": "downward",
+          "magnitude": "5 kN",
+          "type": "resultant_surface_force"
+        },
+        "op_list": [
+          {
+            "name": "top_face",
+            "op": "labeled"
+          }
+        ],
+        "target_description": "the top flange"
+      }
+    ]
+  },
+  "validation_status_before_review": "invalid"
+}

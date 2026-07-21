@@ -1,0 +1,22 @@
+{
+  "case_id": "bracket_gravity_neg_z",
+  "model_fixture": "bracket.step",
+  "instruction": "Apply gravity in the negative Z direction.",
+  "click_evidence": [],
+  "clarification_response": null,
+  "expected_conditions": [{
+    "intent_index": 0,
+    "entity_ids": [],
+    "region_entity_type": null,
+    "condition_type": "gravity",
+    "components": null,
+    "vector": [0.0, 0.0, -9810.0],
+    "magnitude": null,
+    "internal_unit": "mm/s^2",
+    "expected_ir_subset": {"type": "gravity", "region_ref": null, "vector": [0.0, 0.0, -9810.0]}
+  }],
+  "clarification_required": false,
+  "expected_structured_ir_subset": {"analysis": {"type": "static_structural"}},
+  "artifact_export_eligible": false,
+  "explanation": "Gravity is a whole-model load and standard gravity normalizes to 9810 mm/s^2 along explicit negative Z."
+}

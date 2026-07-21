@@ -145,9 +145,14 @@ def export_abaqus_py(intent: SimulationIntent, model: CadModelMetadata):
                 f"# Material: {_comment_string(material.name)} ({material.model})",
                 f"material = model.Material(name='{solver_name}')",
                 f"material.Elastic(table=(({format_float(material.E_MPa)}, {format_float(material.nu)}),))",
-                "",
             ]
         )
+        if material.density_tonne_per_mm3 is not None:
+            lines.append(
+                "material.Density(table=(("
+                f"{format_float(material.density_tonne_per_mm3)},),))"
+            )
+        lines.append("")
 
     sole_material = material_names[intent.materials[0].name]
     lines.extend(

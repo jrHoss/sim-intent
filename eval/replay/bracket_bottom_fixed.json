@@ -1,0 +1,1 @@
+{"intents":[{"op_list":[{"op":"labeled","name":"bottom_face"}],"bc":{"type":"fixed_displacement","components":["x","y","z"]},"load":null,"target_description":"the bottom face"}]}

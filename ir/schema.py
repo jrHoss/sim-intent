@@ -55,6 +55,9 @@ class Material(StrictModel):
     model: Literal["linear_elastic_isotropic"]
     E_MPa: float = Field(gt=0)
     nu: float = Field(gt=-1.0, lt=0.5)
+    # Optional for non-body-load analyses. The canonical mm-N-MPa mass unit
+    # is tonne, so density is stored in tonne/mm^3.
+    density_tonne_per_mm3: float | None = Field(default=None, gt=0)
 
 
 # --------------------------------------------------------------------------

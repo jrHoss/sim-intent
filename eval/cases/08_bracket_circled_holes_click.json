@@ -1,0 +1,22 @@
+{
+  "case_id": "bracket_circled_holes_click",
+  "model_fixture": "bracket.step",
+  "instruction": "Use the two holes I circled. Fix them.",
+  "click_evidence": [{"intent_index": 0, "entity_ids": [11, 12]}],
+  "clarification_response": null,
+  "expected_conditions": [{
+    "intent_index": 0,
+    "entity_ids": [11, 12],
+    "region_entity_type": "cad_face",
+    "condition_type": "fixed_displacement",
+    "components": ["x", "y", "z"],
+    "vector": null,
+    "magnitude": null,
+    "internal_unit": "none",
+    "expected_ir_subset": {"type": "fixed_displacement", "region_ref": "region_1", "components": ["x", "y", "z"]}
+  }],
+  "clarification_required": false,
+  "expected_structured_ir_subset": {"regions": [{"selection_method": "user_click", "entity_ids": [11, 12]}]},
+  "artifact_export_eligible": false,
+  "explanation": "The two circled selections are deterministic click evidence for bolt-hole faces 11 and 12."
+}

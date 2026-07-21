@@ -1,0 +1,1 @@
+{"intents":[{"op_list":[{"op":"hole_groups","min_size":2,"max_size":2}],"bc":{"type":"fixed_displacement","components":["x","y","z"]},"load":null,"target_description":"both bolt holes"}]}

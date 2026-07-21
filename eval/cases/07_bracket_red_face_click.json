@@ -1,0 +1,22 @@
+{
+  "case_id": "bracket_red_face_click",
+  "model_fixture": "bracket.step",
+  "instruction": "Use the face marked in red. Fix it.",
+  "click_evidence": [{"intent_index": 0, "entity_ids": [1]}],
+  "clarification_response": null,
+  "expected_conditions": [{
+    "intent_index": 0,
+    "entity_ids": [1],
+    "region_entity_type": "cad_face",
+    "condition_type": "fixed_displacement",
+    "components": ["x", "y", "z"],
+    "vector": null,
+    "magnitude": null,
+    "internal_unit": "none",
+    "expected_ir_subset": {"type": "fixed_displacement", "region_ref": "region_1", "components": ["x", "y", "z"]}
+  }],
+  "clarification_required": false,
+  "expected_structured_ir_subset": {"regions": [{"selection_method": "user_click", "entity_ids": [1]}]},
+  "artifact_export_eligible": false,
+  "explanation": "Task 15 represents the red annotation as explicit click evidence for face 1; no image-understanding pipeline is implied."
+}

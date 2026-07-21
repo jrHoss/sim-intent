@@ -255,6 +255,10 @@ def validate_intent(intent: SimulationIntent) -> ValidationReport:
                     )
 
     materials = getattr(intent, "materials", None)
+    loads = getattr(intent, "loads", None)
+    if not isinstance(loads, list):
+        loads = []
+    has_gravity = any(getattr(load, "type", None) == "gravity" for load in loads)
     if not isinstance(materials, list) or not materials:
         _issue(
             issues,
@@ -265,6 +269,16 @@ def validate_intent(intent: SimulationIntent) -> ValidationReport:
             object_type="material",
         )
         materials = []
+        if has_gravity:
+            _issue(
+                issues,
+                "material.density_required_for_gravity",
+                "error",
+                "Gravity requires an assigned material with positive finite density in tonne/mm^3.",
+                blocks_export=True,
+                object_type="material",
+                field="density_tonne_per_mm3",
+            )
     for index, material in enumerate(materials):
         material_id = getattr(material, "name", None) or f"material[{index}]"
         if getattr(material, "model", None) != "linear_elastic_isotropic":
@@ -305,6 +319,31 @@ def validate_intent(intent: SimulationIntent) -> ValidationReport:
                 object_type="material",
                 object_id=str(material_id),
                 field="nu",
+            )
+        density = getattr(material, "density_tonne_per_mm3", None)
+        if density is not None and (
+            not _finite(density) or float(density) <= 0.0
+        ):
+            _issue(
+                issues,
+                "material.density_invalid",
+                "error",
+                "Material density must be finite and greater than zero in tonne/mm^3.",
+                blocks_export=True,
+                object_type="material",
+                object_id=str(material_id),
+                field="density_tonne_per_mm3",
+            )
+        elif has_gravity and density is None:
+            _issue(
+                issues,
+                "material.density_required_for_gravity",
+                "error",
+                "Gravity requires assigned material density in tonne/mm^3.",
+                blocks_export=True,
+                object_type="material",
+                object_id=str(material_id),
+                field="density_tonne_per_mm3",
             )
 
     regions = getattr(intent, "regions", None)
@@ -450,9 +489,6 @@ def validate_intent(intent: SimulationIntent) -> ValidationReport:
                     field="components",
                 )
 
-    loads = getattr(intent, "loads", None)
-    if not isinstance(loads, list):
-        loads = []
     for index, load in enumerate(loads):
         object_id = f"load[{index}]"
         load_type = getattr(load, "type", None)
