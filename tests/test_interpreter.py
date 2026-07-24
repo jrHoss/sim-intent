@@ -381,8 +381,12 @@ def test_only_openai_provider_dependency_and_runtime_references_remain():
     repository = Path(__file__).resolve().parents[1]
     retired_provider = "".join(("anth", "ropic"))
     requirements = (repository / "requirements.txt").read_text(encoding="utf-8").splitlines()
-    assert "openai" in requirements
-    assert retired_provider not in requirements
+    # Task 18: requirements.txt is now the pinned, hashed export of uv.lock,
+    # so the provider dependency appears as an exact `openai==<version>` pin.
+    assert any(line.startswith("openai==") for line in requirements)
+    assert not any(
+        line.split("==")[0].strip() == retired_provider for line in requirements
+    )
     for relative_path in ("llm/interpreter.py", "scripts/smoke_llm.py"):
         assert retired_provider not in (repository / relative_path).read_text(encoding="utf-8").lower()
 

@@ -78,8 +78,10 @@ multi-user collaboration, and SaaS.
 
 ## Baseline environment facts
 
-- Python dependencies currently come from `requirements.txt` and are not locked; Task 18 owns locking and the supported Linux package/container contract.
-- `gmsh` on headless Linux requires the documented GLU system library.
+- Since Task 18, `uv.lock` (uv 0.11.32, CPython 3.13.14) is the authoritative Python dependency lock; `requirements.txt` is a generated compatibility export verified by `scripts/export_requirements.py --check`. The supported Linux environment is the digest-pinned Debian-trixie container in `Containerfile` with snapshot-pinned native packages; see `docs/environment.md`.
+- Runtime modes are startup-fixed via `SIM_INTENT_MODE` (`production` default, `live_evaluation`, `replay`, `test`); production never registers REPLAY fallback routes and the runtime image physically excludes `eval/`, `tests/`, and `fixtures/`.
+- `gmsh` on headless Linux requires the documented GLU system library; the full measured shared-library closure is recorded in `docs/environment.md` and pinned in `Containerfile`.
+- No compatible `calculix-ccx` package is available directly from Debian trixie, so Task 18 builds CalculiX `ccx 2.23` from official hash-verified CalculiX (dhondt.de) and SPOOLES (netlib) source archives in a dedicated builder stage on the unchanged frozen trixie environment; no cross-release Debian packages and no third-party prebuilt solver binary are used. The supported runtime and CI images carry the stripped `ccx` executable and its pinned runtime-library closure; the source-built binary embeds its build date, so byte-identical `ccx` binaries across rebuilds are not claimed, and each generated executable and image is identified by a recorded digest. See `docs/environment.md`.
 - Gmsh OCC face tags are stable only for identical source bytes, not regenerated geometry; current inventories are keyed by file hash.
 - Current viewer tessellation preserves one glTF node per CAD face named `face_{tag}`.
 - `meshio` reads Abaqus INP meshes and existing NSET/ELSET names remain first-class regions.
