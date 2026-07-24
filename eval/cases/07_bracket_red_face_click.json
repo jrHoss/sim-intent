@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "case_id": "bracket_red_face_click",
   "model_fixture": "bracket.step",
   "instruction": "Use the face marked in red. Fix it.",

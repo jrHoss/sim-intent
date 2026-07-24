@@ -1,0 +1,18 @@
+{
+  "name": "sim-intent-openapi-types",
+  "version": "0.19.0",
+  "private": true,
+  "description": "Task 19 generator tooling only: turns the authoritative backend OpenAPI document into checked-in TypeScript types. Contains no application dependency.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": "22.14.0"
+  },
+  "scripts": {
+    "generate": "openapi-typescript ../../schema/openapi.json --output ../../schema/generated/typescript/api-types.ts",
+    "check": "npm run generate && git diff --exit-code -- ../../schema/generated/typescript"
+  },
+  "devDependencies": {
+    "openapi-typescript": "7.13.0"
+  }
+}

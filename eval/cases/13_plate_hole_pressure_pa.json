@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "case_id": "plate_hole_pressure_pa",
   "model_fixture": "plate_hole.step",
   "instruction": "Apply 2000000 Pa pressure to the hole surface.",

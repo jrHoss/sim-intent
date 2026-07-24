@@ -178,7 +178,8 @@ container checks above.
 | backend-suite | environment gate + full suite on the runner | 30 min |
 | replay-eval | deterministic REPLAY evaluation (never LIVE) | 15 min |
 | container | runtime/ci builds, production exclusion + startup checks, in-container suite and REPLAY, digests, SBOM | 45 min |
-| frontend-smoke | `node --check` on the two legacy files, Node 22.14.0 | 10 min |
+| schema-drift | byte-exact OpenAPI / IR-schema export check, payload stamping check, schema-version and contract suites (Task 19) | 15 min |
+| frontend-smoke | `node --check` on the two legacy files, plus `npm ci` + TypeScript regeneration + `git diff --exit-code` drift gate, Node 22.14.0 | 10 min |
 | hygiene | whitespace check, sha256-verified gitleaks scan | 15 min |
 
 All actions are pinned by full commit SHA; downloaded tools are exact
@@ -196,11 +197,36 @@ is not checked into the repository.
 
 ## Frontend / Node policy
 
-No Node dependencies exist. When Task 24 introduces `frontend/`, npm with a
+No frontend application exists. When Task 24 introduces `frontend/`, npm with a
 committed `package-lock.json` and a pinned Node LTS version are the approved
 tooling (ADR-005). Task 18 intentionally created no `package.json`,
-`package-lock.json`, or frontend code; CI only syntax-checks the existing
-legacy JavaScript with a pinned Node version.
+`package-lock.json`, or frontend code.
+
+Task 19 added exactly one Node surface: **generator tooling only**, at
+`tools/openapi-types/`, with an exact `openapi-typescript` pin and a committed
+`package-lock.json`. It contains no React, Vite, `openapi-fetch`, Playwright, or
+other application dependency, and there is deliberately no manifest at the
+repository root. It exists solely to turn `schema/openapi.json` into the
+checked-in `schema/generated/typescript/api-types.ts`.
+
+```bash
+cd tools/openapi-types
+npm ci                                       # lockfile-exact install
+npm run generate
+cd ../..
+git diff --exit-code -- schema/generated     # drift gate
+```
+
+The generator must run from `tools/openapi-types`: its npm script resolves
+`../../schema/...` relative to that directory, and `npm --prefix` does not put
+the local `node_modules/.bin` on `PATH`. CI uses `working-directory:`.
+
+`tools/openapi-types/node_modules/` is git-ignored and excluded from the
+container build context. The supported container images carry **no** Node
+toolchain, so the TypeScript drift gate runs only in the `frontend-smoke` CI
+job; the Python schema drift checks (`scripts/export_schema.py --check`,
+`scripts/stamp_schema_versions.py --check`) run on the runner and inside the
+container. See `docs/schema-versioning.md`.
 
 ## Rollback
 

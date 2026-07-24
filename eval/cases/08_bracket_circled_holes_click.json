@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "case_id": "bracket_circled_holes_click",
   "model_fixture": "bracket.step",
   "instruction": "Use the two holes I circled. Fix them.",

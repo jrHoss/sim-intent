@@ -1,0 +1,20 @@
+{
+  "records": {
+    "bracket_bolt_holes_fixed.json": "415b205c3c4c552082ec390bb0e4c081e649df6365692b91941dc8b085653d19",
+    "bracket_bottom_fixed.json": "a5660728dc19484e1692158419a8b244e16c10c39c817a42f41f21bcb34c9eb4",
+    "bracket_circled_holes_click.json": "9c1ad0c5bffa9544b4ef2e203b558f13f58360f8bca654afdd9150cc38ba4911",
+    "bracket_combined_export.json": "a2cf4757e956129d61782369e54e07dae4f2f4110e6ce1126b866f53bb740180",
+    "bracket_gravity_neg_z.json": "89441fd86f8ea1ff7ec4c71d94f31fdedcbfd21fb6327da4100383232f422dd0",
+    "bracket_inner_pressure_clarify.json": "619a8e7248958d71452b0b9fc664dbcd15ec78969b2b8084a512d4cdbc467e97",
+    "bracket_left_side_clarify.json": "5a1f8be2bff7994b9bc58bf06a0879642bec5b48190094e1d2e91f054831d718",
+    "bracket_red_face_click.json": "5fe2e41868864c8aa86ba793d8de9a1a48790a57bad63047e424044a64d95460",
+    "bracket_top_force_5kn.json": "f9d2a7e03815ac615ff6a46cf0449584f0101e445aa09f3773af588934f8659e",
+    "bracket_vertical_click.json": "37f63e449299ea89677d1fa7cbd0dd206f682d7b385e7227aed51aacc3711ddf",
+    "plate_hole_pressure_kpa.json": "1fa3be8e23037eadaa58c5f4391e2d63b11a8ac382638eea29e9abec6e4b2f63",
+    "plate_hole_pressure_pa.json": "810ea096864a868ab2da62b2eab97bd83c468109eb674d4ce5b6ed461e288b78",
+    "plate_top_force_0_005mn.json": "4b7085e570c00c9ed9cff44a7ac0188495cc0af055f41c5b6d3ccfc02353071a",
+    "plate_top_force_5000n.json": "bf2dec9e4cf6eb1fa4b55327774975b16291f10f41e349a4a235af5afa33bd33",
+    "plate_top_force_5kn.json": "3e53947cff6946387f21bc5b7faa50b6403236cc513196d66e57ed09ae2a5895"
+  },
+  "schema_version": 1
+}

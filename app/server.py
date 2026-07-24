@@ -29,7 +29,12 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.record_versions import load_fallback_record
 from app.runtime_mode import RuntimeMode, resolve_runtime_mode
+from app.schema_compat import (
+    LEGACY_INTENT_ROUTE,
+    normalize_legacy_intent_payload,
+)
 from app.session import (
     InvalidAssumptionTransitionError,
     InvalidRegionTransitionError,
@@ -69,7 +74,9 @@ from ir.schema import (
     StrictModel,
     ValidationStatus,
 )
+from ir.schema_version import API_CONTRACT_VERSION
 from ir.validate import ValidationIssue, ValidationReport
+from ir.versioning import SchemaVersionError, load_simulation_intent
 from llm.interpreter import (
     DEFAULT_MODEL,
     Interpretation,
@@ -368,7 +375,14 @@ def create_app(
     # capability hints) reads; `app.state.runtime_mode` is a diagnostic copy
     # only, and mutating it after construction changes nothing.
     resolved_mode = resolve_runtime_mode() if mode is None else mode
-    app = FastAPI(title="sim-intent viewer backend")
+    # Task 19 (ADR-004, decision D-9): the backend OpenAPI document is the API
+    # contract authority and ``API_CONTRACT_VERSION`` is its single source of
+    # truth. No runtime endpoint publishes versions; the checked-in OpenAPI
+    # snapshot, the generated TypeScript output, and the drift tests do.
+    app = FastAPI(
+        title="sim-intent viewer backend",
+        version=str(API_CONTRACT_VERSION),
+    )
     app.state.runtime_mode = resolved_mode
     app.state.model_store = ModelStore(storage_dir)
     app.state.session_store = SelectionSessionStore()
@@ -620,13 +634,23 @@ def create_app(
             if not path.is_file():
                 raise HTTPException(status_code=404, detail="fallback case not found")
             try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
+                # Task 19: the authoritative versioned loader owns envelope
+                # migration and delegates the nested SimulationIntent to its
+                # own registry, so both must declare an explicit version.
+                payload, intent = load_fallback_record(
+                    path.read_text(encoding="utf-8"),
+                    source=f"eval/fallback/{case_id}.json",
+                )
                 if payload.get("mode") != "REPLAY" or payload.get("model_sha256") != inventory.file_sha256:
                     raise ValueError("fallback model hash or mode does not match")
                 Interpretation.model_validate(payload["typed_interpreter_output"], strict=True)
-                intent = SimulationIntent.model_validate(payload["proposed_ir"], strict=True)
                 if any(region.status != "proposed" for region in intent.regions):
                     raise ValueError("fallback regions must remain proposed")
+            except SchemaVersionError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"fallback data is invalid: {exc.safe_message}",
+                ) from exc
             except (KeyError, ValueError, json.JSONDecodeError) as exc:
                 raise HTTPException(status_code=422, detail=f"fallback data is invalid: {exc}") from exc
             return payload, intent
@@ -682,9 +706,27 @@ def create_app(
 
     @app.put("/session/{session_id}/intent", response_model=SessionSnapshot)
     async def put_session_intent(
-        session_id: str, intent: SimulationIntent
+        session_id: str, intent: SimulationIntent, request: Request
     ) -> SessionSnapshot:
         ensure_uploaded_model(session_id)
+        # Task 19 decision D-2: this frozen legacy route is the sole
+        # compatibility exception. The typed body parameter above keeps the
+        # published request contract and FastAPI's existing 422 envelope
+        # unchanged; the cached raw body below is read only to inspect the
+        # *presence* of a declared version, never to guess the payload shape.
+        # An absent version is normalised through a route-scoped constant; a
+        # declared malformed, obsolete, or future version still fails.
+        try:
+            normalized, _ = normalize_legacy_intent_payload(
+                await request.body(), source=LEGACY_INTENT_ROUTE
+            )
+            load_simulation_intent(normalized, source=LEGACY_INTENT_ROUTE)
+        except SchemaVersionError as exc:
+            # D-4: legacy routes keep their existing error envelope shape.
+            raise HTTPException(
+                status_code=422,
+                detail={"code": exc.code, "message": exc.safe_message},
+            ) from exc
         try:
             return app.state.session_store.save_intent(session_id, intent)
         except (InvalidRegionTransitionError, InvalidAssumptionTransitionError) as exc:

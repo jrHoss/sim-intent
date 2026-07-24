@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "case_id": "bracket_left_side_clarify",
   "model_fixture": "bracket.step",
   "instruction": "Fix the left side.",

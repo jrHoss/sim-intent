@@ -903,3 +903,501 @@ base (option 3; no cross-release package mixing; no third-party binary):
   attribution scan, and scope scan re-run clean after the corrections.
 - Nothing was staged, committed, or pushed; Task 19 and Task 24 remain
   unstarted.
+
+### Task 18 post-merge closure (append-only reconciliation, 2026-07-24)
+
+This entry is appended, not a rewrite. Every earlier Task 18 entry above is
+retained verbatim as historical evidence.
+
+- Task 18 implementation commit `6e93165` was merged through pull request #4.
+- `main` advanced to merge commit
+  `6f92b5349d72fd7ef563293cd883c8b61fa3bbb5`; `origin/main` matches.
+- The D4 decision is **ratified**: CalculiX `ccx 2.23` is built from the
+  official hash-verified source archives (dhondt.de `ccx_2.23.src.tar.bz2`,
+  netlib SPOOLES 2.2) in a dedicated builder stage on the unchanged
+  digest-pinned Debian-trixie base, with no cross-release package mixing and no
+  third-party prebuilt solver binary. The recorded trixie packaging blocker
+  stands as the evidence that motivated it.
+- The Task 18 status wording *"IMPLEMENTATION COMPLETE — UNCOMMITTED, AWAITING
+  INDEPENDENT READ-ONLY REVIEW"* and the accompanying statements that no
+  commit, push, or CI run existed are **historical** and are superseded by this
+  closure entry. Task 18 is COMPLETE and MERGED.
+- `demo-v1` remains peeled to
+  `154fe6ad0ac1336600d6ca5ec908d1b6c6e7401d` and was not touched.
+
+---
+
+## Task 19 — Version API, IR, fixtures, and migration contracts
+
+**Status:** IMPLEMENTATION COMPLETE — UNCOMMITTED, AWAITING INDEPENDENT
+READ-ONLY REVIEW. Nothing is staged, committed, or pushed.
+
+### Scope and takeover
+
+- Date: 2026-07-24, Europe/Berlin.
+- Branch: `task-19-schema-versioning`.
+- Starting `HEAD`: `6f92b5349d72fd7ef563293cd883c8b61fa3bbb5` (merge of pull
+  request #4). `main` and `origin/main` matched exactly.
+- Initial worktree and index: clean (`git status --porcelain=v1 -uall` empty,
+  `git diff --cached --stat` empty).
+- `demo-v1` verified peeled to `154fe6ad0ac1336600d6ca5ec908d1b6c6e7401d`;
+  not touched.
+- Authority read before editing: `CLAUDE.md`, `release-goal.md`,
+  `TECHNICAL_PREVIEW_PLAN.md` Task 19, this ledger, the Task 17 architecture
+  set, and the approved versioning ADR
+  [`ADR-004`](docs/architecture/technical-preview/adrs/ADR-004-api-schema-client-and-errors.md)
+  with [`migration-rules.md`](docs/architecture/technical-preview/migration-rules.md).
+- Task 20 was not started. No database, persistence, `Project`/`ModelVersion`/
+  `SetupRevision`, material or coordinate semantics, React/frontend
+  application, parser containment, geometry, meshing, solver, or result schema
+  was implemented.
+
+### Human decisions applied (2026-07-24)
+
+D-1 approved (replay bodies unchanged, versioned sidecar manifest);
+D-2 approved narrowly (single route-scoped legacy exception);
+D-3 approved (frozen manifest hash preserved, separate version-aware hash);
+D-4 approved (typed failures at the loader boundary; legacy envelopes
+unchanged); D-5 approved with location change (`tools/openapi-types/`, no root
+manifest); D-6 approved (caches unversioned); D-7 approved (geometry fixtures
+unstamped); **D-8 rejected** (`EvaluationReport` and the five frozen
+`eval/results*` records untouched); **D-9 rejected for Task 19** (no new runtime
+endpoint); D-10 approved as append-only governance reconciliation (entry above).
+
+All nine binding corrections were applied, including: no alias-route OpenAPI
+retyping, no `export/versioning.py`, no fake production `1 → 2` migration,
+synthetic test registries for mechanics, stamping restricted to setup-bearing
+payloads, loaders rejecting missing versions despite the model default, a full
+audit of direct `SimulationIntent.model_validate` call sites, and LF-normalised
+deterministic generated files with `.gitattributes` coverage.
+
+### Version taxonomy
+
+Single central table: `ir/schema_version.py` (constants and family metadata
+only; no models, registries, or I/O). It lives in `ir` because `ir` is the
+lowest-level package and has no internal dependencies.
+
+| Family | Current | Minimum | Registry | Declared in |
+|---|---|---|---|---|
+| `simulation_intent` | 1 | 1 | `ir.versioning.SIMULATION_INTENT_MIGRATIONS` | `SimulationIntent.schema_version` |
+| `evaluation_case` | 1 | 1 | `eval.versioning.EVALUATION_CASE_MIGRATIONS` | `EvaluationCase.schema_version` |
+| `fallback_record` | 1 | 1 | `app.record_versions.FALLBACK_RECORD_MIGRATIONS` | fallback envelope key |
+| `replay_record` | 1 | 1 | `eval.versioning.REPLAY_RECORD_MIGRATIONS` | `eval/replay/manifest.json` |
+| API contract | 1 | — | none (not a payload) | `schema/openapi.json` `info.version` |
+| Artifact metadata | 1 | — | **reserved only** | not yet emitted |
+
+All four payload registries are **legitimately empty**: the pre-Task-19 shape
+*is* version 1 and no earlier shape has existed. `validate()` runs at import for
+every production registry and proves the emptiness is intentional. Registry
+mechanics are proven with synthetic test-owned registries.
+
+### Migration behaviour
+
+- `register(from_version)` only; the target is always `from_version + 1`, so a
+  skipping edge is unrepresentable.
+- The registry owns the version field end to end: it strips `schema_version`
+  before calling a migration and sets it afterwards. A migration that sets the
+  field is a registry defect (`MigrationPathError`).
+- Loader order, never reordered: structural gate → explicit declaration →
+  bounds (future/obsolete, **no body parsing**) → sequential migration → strict
+  model validation → post-assertion of the current version.
+- Writes emit only the current version (`dump_simulation_intent` overwrites a
+  stale declared version).
+- Idempotent at the current version: zero migration functions run.
+- `SAFETY_CRITICAL_PATHS` (23 paths) may never be synthesised from absence;
+  `approval_upgrades()` detects any transition toward `confirmed`, `accepted`,
+  or `valid`. Both are asserted.
+
+### Typed failure model
+
+`payload_structure_invalid` (422), `schema_version_missing` (422),
+`schema_version_malformed` (422), `schema_version_unsupported_future` (422),
+`schema_version_obsolete` (422), `schema_migration_path_missing` (**500**,
+server registry defect), and import-time `MigrationRegistryError`.
+`problem_details()` emits RFC 9457 members at the loader boundary only;
+existing legacy route envelopes are unchanged (D-4). An absolute host path
+accidentally passed as `source` is reduced to a short relative label.
+
+### Legacy compatibility (D-2)
+
+`PUT /session/{session_id}/intent` is the sole exception. `app/schema_compat.py`
+normalises an **absent** `schema_version` to `1`. It never inspects payload
+shape, never rewrites a declared version, does not apply to files or any other
+family or route, and is documented as temporary until the legacy route is
+retired (Task 45 owns route cutover). The route keeps its typed
+`SimulationIntent` request body, so the published request contract and
+FastAPI's existing 422 envelope are unchanged; the cached raw body is read only
+to inspect version presence.
+
+### Stamped payloads (35 targets)
+
+| Path | Count | Declares |
+|---|---|---|
+| `examples/*.json` | 3 | `simulation_intent` |
+| `docs/task13-bracket-demo.json` | 1 | `simulation_intent` |
+| `eval/cases/*.json` | 15 | `evaluation_case` |
+| `eval/fallback/*.json` | 15 | `fallback_record` + nested `simulation_intent` |
+| `eval/replay/manifest.json` | 1 | `replay_record` (new sidecar) |
+
+Deliberately not stamped: `eval/replay/*.json` bodies (strict `Interpretation`
+wire contract), `eval/results*`, `fixtures/bracket_expected.json`,
+`tests/fixtures/*`, `tests/golden/bracket_abaqus.py`, `.sim_intent_cache/**`.
+
+`scripts/stamp_schema_versions.py` uses textual insertion for hand-formatted
+documents (one added line each) and canonical re-emission for the
+machine-generated fallback records (two added lines each), so the diff is
+minimal and formatting survives. Every write is refused unless the stamped
+document, with declared versions removed again, parses equal to the original.
+That equality is re-asserted against the `6f92b53` Git blobs by 34
+parametrised tests.
+
+### Files created (19)
+
+`ir/schema_version.py`, `ir/versioning.py`, `eval/versioning.py`,
+`app/record_versions.py`, `app/schema_compat.py`, `scripts/export_schema.py`,
+`scripts/stamp_schema_versions.py`, `schema/openapi.json`,
+`schema/simulation-intent.schema.json`,
+`schema/generated/typescript/api-types.ts`, `schema/README.md`,
+`eval/replay/manifest.json`, `tools/openapi-types/package.json`,
+`tools/openapi-types/package-lock.json`, `docs/schema-versioning.md`,
+`tests/test_schema_versioning.py`, `tests/test_schema_versioned_payloads.py`,
+`tests/test_schema_version_routes.py`, `tests/test_openapi_contract.py`.
+
+`app/record_versions.py` is named that way, rather than `fallback_records.py`,
+so the Task 18 production-exclusion check (zero `*fallback*`/`*replay*`
+filesystem entries in the runtime image) keeps working **unweakened**. The
+module carries no fixture or replay data.
+
+### Files modified (45)
+
+`ir/schema.py` (adds `schema_version`), `eval/schema.py` (record version,
+authoritative case loader, D-3 hash split), `eval/harness.py` (replay manifest
+verification, versioned fallback writer), `app/server.py` (fallback loader,
+legacy compatibility adapter, OpenAPI `info.version`),
+`.github/workflows/ci.yml`, `.gitattributes`, `.gitignore`, `.dockerignore`,
+`CLAUDE.md`, `docs/environment.md`, this ledger, plus the 34 stamped payload
+files. (The count was reported as 44 in the first pass; the correct figure is
+**45** — this ledger itself was appended after that count was taken. Corrected
+per the independent review. The B-1/B-2 correction round adds `conftest.py`,
+bringing the Task 19 total to 46 modified files; see the correction addendum.)
+
+`app/session.py` needed no change: `schema_version` survives every existing
+`model_copy` / `model_validate` round trip, and a regression test proves it.
+`pyproject.toml`, `uv.lock`, `requirements.txt`, and `.python-version` are
+**untouched** — Task 19 adds no Python dependency.
+
+### Generated contracts
+
+| Artifact | SHA-256 (LF-normalised) |
+|---|---|
+| `schema/openapi.json` | `80218e2448f61ff0fefbc9cacdd1f358aaa5ff3b40a557717af8e560fcf9c879` |
+| `schema/simulation-intent.schema.json` | `494b660ef7fdf99979b2b887504db4d91006270ab1e553f53ce9390f4061b1c9` |
+| `schema/generated/typescript/api-types.ts` | `cdda9e443163138ac230cacd0b03826840b228a55c459888ce606636bf3175e2` |
+| `schema/README.md` | `12081079badec8c940d7188370b0de0a766cbe90cc52e1ba5b8b698ff3a56996` |
+| `eval/replay/manifest.json` | `90ff12bffd5ae19b823b1af147916da0e86b1727595983e22d2ab04d3177560d` |
+| `tools/openapi-types/package.json` | `e5ad3dbe749df5408e30d28c0fe6a0a1715c2c1730fbf2eae0053c730940ba58` |
+| `tools/openapi-types/package-lock.json` | `8f048963226ab638866a28799e01372239d4f6687302d8baad01ceeb594cbce7` |
+| `ir/schema_version.py` | `3e321c464d442f82d7fc4bd7ef37e08e8f068c258140d06fe40262c52ab372b7` |
+| `ir/versioning.py` | `6cea8c7e0f814a1c1a880b01388650fb818bf231bac48f4af3775b98bf63dc51` |
+| `eval/versioning.py` | `94986f4e1df5e82f7a1591bbc5b612803554f7b18950d71425bc32f6b1b47185` |
+| `app/record_versions.py` | `5efdc01ec9fa6f0a1e9de34b1245121d5642e881483c9a7e3327fe3e35e371d3` |
+| `app/schema_compat.py` | `367ec4aff7a2baf5e50dc05d02bc7e7c1936b53737228602fee0955afe6cf335` |
+| `scripts/export_schema.py` | `a416c5d2ffc6f771bcdc2ece327a027b3d0dedabfd98ec30bac5c58169b9c077` |
+| `scripts/stamp_schema_versions.py` | `eab7d706514283b32925b90e8dff2de29c1d67376279ef841087c4d3eb027ea6` |
+| `docs/schema-versioning.md` | `a773aeeb89520776a9ee11bd3499001403b0a63c716f0dcb78e90185c9687a21` |
+
+Generator: `openapi-typescript` **7.13.0**, exact-pinned in
+`tools/openapi-types/package.json` with a committed `package-lock.json`
+(lockfileVersion 3, 33 packages). No React, Vite, `openapi-fetch`, or
+Playwright. No manifest at the repository root. `node_modules/` is git-ignored
+and excluded from the container build context.
+
+`schema/openapi.json` is always generated in `production` runtime mode; a test
+asserts mode independence so the replay-only fallback routes can never leak
+into the published contract. `info.version` is `"1"`, the string form of
+`API_CONTRACT_VERSION`.
+
+### Frozen-evidence results
+
+- **Frozen 15-case manifest hash unchanged:**
+  `47c0d7275b9a065a7f5e3316ed60b7ffff58913e0b1e5045c857f663e1f6775b`
+  (host and in-container REPLAY both reproduced it).
+- New version-aware corpus hash:
+  `adb5201a93f4d4619a84f6b56f3e68ec12f975a345cc78e47178b0d7a719ff53`.
+- **All ten `eval/results*` files byte-identical** — `git status` reports no
+  change after the REPLAY runs; the run-rewritten replay reports were restored
+  with `git checkout --`.
+- **Solver artifact bytes unchanged:** regenerated Abaqus artifact SHA-256
+  `7ed6c5dc5d9e19ed6c9c6e70065f162e08f1c4418afee362d14a9a825f56e3ed`,
+  byte-identical to `tests/golden/bracket_abaqus.py` and to the hash recorded
+  by Task 16. `schema_version` does not appear in any generated artifact text:
+  the export adapters build their output line by line and only dump individual
+  BC/Load sub-models as a sort tiebreaker, so the top-level aggregate field
+  never reaches artifact bytes.
+- `fixtures/bracket_expected.json`, `tests/fixtures/*`, and
+  `eval/replay/*.json` bodies are unmodified.
+
+### Validation commands and results
+
+Windows development environment (repository `.venv`, CPython 3.13):
+
+- Focused Task 19 suites (4 files) → **169 passed**.
+- Full suite → **524 passed, 1 skipped** (525 collected; baseline 356 collected
+  → +169). The single skip remains the optional `ccx` smoke.
+- `scripts/check_env.py` → `CCX UNAVAILABLE (optional)` then `ENV OK`.
+- `python eval/run.py --replay` → REPLAY 15/15 (13 PASS,
+  2 PASS_AFTER_CLARIFICATION, 0 FAIL), frozen manifest reproduced; tracked
+  reports restored byte-exact.
+- `python scripts/export_schema.py --check` → matches.
+- `python scripts/stamp_schema_versions.py --check` → all 35 stamped and
+  current; running the stamper twice produces no diff.
+- `npm --prefix tools/openapi-types ci` then `run generate`, then
+  `git diff --exit-code -- schema/generated` → **no drift**.
+- `node --check app/static/app.js` and `audit.js` → passed (Node 22.14.0).
+- `git diff --check` → clean (exit 0).
+
+Supported Linux container (Docker 29.1.3, linux/amd64):
+
+- `docker build --target ci` → image
+  `sha256:9cf06b6127ea4b4f8a012f466f7be0b18aff711991b12c125bb71921d08781c8`.
+- `docker build --target runtime` → image
+  `sha256:2a4903d7b67c62fa3a1b5da338341abe348dfa49059bc3113382c17c6aa0ee38`.
+- In-container full suite → **489 passed, 35 skipped, 1 deselected**. The 35
+  skips are exactly the Git-baseline stamping-evidence tests (34 parametrised
+  payloads plus the replay-body baseline check); the images intentionally
+  exclude `.git`, so they skip rather than requiring a new CI deselect flag.
+  The deselection is the pre-existing Task 16/18 git-metadata self-test.
+- In-container REPLAY → 15/15, frozen manifest reproduced.
+- In-container `scripts/export_schema.py --check` and
+  `scripts/stamp_schema_versions.py --check` → both clean.
+- In-container environment gate → `CCX AVAILABLE: This is Version 2.23`,
+  `ENV OK`.
+- Production image checks re-passed: `eval/`, `tests/`, `fixtures/`,
+  `examples/`, `docs/`, `.github/`, `schema/`, `tools/` all absent; **zero**
+  `*fallback*`/`*replay*` filesystem entries; import OK; startup OK; legacy `/`
+  serves HTML; `/healthz` returns `{"status": "ok", "mode": "production"}`;
+  both fallback endpoints return 404; served `/openapi.json` reports
+  `info.version == "1"` and contains no fallback path.
+
+### Checks that could not be executed here
+
+- `uv lock --check` and `python scripts/export_requirements.py --check` could
+  not be run: **`uv` is not installed in this environment** (Task 18 recorded
+  uv 0.11.32; it is absent now). Both checks are unaffected by Task 19 by
+  construction — `pyproject.toml`, `uv.lock`, `requirements.txt`, and
+  `.python-version` are byte-unchanged, confirmed by `git status`. CI's
+  `lock-and-drift` job still runs them.
+- No GitHub Actions run exists: nothing has been pushed. The new
+  `schema-drift` job and the extended `frontend-smoke` job were executed
+  locally command-for-command with the results above.
+
+### CI changes
+
+- New bounded `schema-drift` job (15 min): frozen install, byte-exact OpenAPI
+  and IR-schema export check, payload stamping check, and the four Task 19
+  suites.
+- `frontend-smoke` extended: `npm ci` from the committed lockfile,
+  regeneration, and `git diff --exit-code -- schema/generated`.
+- All external references remain pinned; LIVE evaluation is still never run.
+
+### Hygiene scans
+
+- Secret scan (private keys, API-key/secret assignments, `sk-` tokens, bearer
+  headers) over all 63 changed and new files → no findings.
+- Absolute host-path scan → no findings.
+- Attribution/tool-marker scan → no findings.
+- Scope scan: no database, SQLAlchemy, Alembic, migration table, `Project`,
+  `ModelVersion`, `SetupRevision`, React/Vite/frontend application, parser
+  worker, JobService, geometry, meshing, or solver-execution artifact was
+  created. No new runtime endpoint exists; `/api/` is absent from the published
+  contract (asserted by test).
+- The test-generated `.sim_intent_cache/` was verified inside the repository
+  and removed after evidence capture; no generated cache remains.
+
+### Risks and rollback
+
+- The four production migration registries are empty by design. The first real
+  `n → n+1` migration must be added with golden evidence and must pass the
+  safety-critical conformance test.
+- The D-2 legacy exception is a real, if narrow, compatibility surface. It is
+  route-scoped, tested, and must be removed when Task 45 retires the route.
+- The generated-TypeScript drift gate depends on npm registry reachability in
+  CI. It is a separate job, so a registry outage cannot block the backend
+  suite.
+- 34 checked-in payloads were rewritten. The evidence is the version-stripped
+  equality against the `6f92b53` blobs, re-asserted on every run where Git
+  metadata is available.
+- Rollback: revert the Task 19 commit(s). No database, persistent record, tag,
+  fixture, dependency, or lockfile changed, so no environment rebuild is
+  needed; `tools/openapi-types/node_modules/` is git-ignored and removable.
+
+### Completion state
+
+- Task 19 implementation is complete and validated on Windows and in the
+  supported Linux container.
+- Nothing is staged, committed, or pushed; the worktree diff is the reviewable
+  Task 19 change set.
+- Awaiting independent read-only review.
+- Task 20 was not started.
+
+### Correction addendum (2026-07-24, independent review B-1 and B-2)
+
+Two blocking findings from the independent read-only Task 19 review are fixed
+here. Where this addendum differs from figures above, the addendum is current.
+No frozen report, historical Task 18 evidence, stamped payload, replay body,
+fixture, solver artifact, OpenAPI/TypeScript contract, or dependency was
+changed.
+
+#### B-1 — baseline evidence is now a non-skippable CI gate
+
+**The defect.** The 35 baseline comparisons (34 parametrised stamped payloads
+plus one replay-body byte-identity check) resolve real blobs at
+`6f92b5349d72fd7ef563293cd883c8b61fa3bbb5`. `actions/checkout` defaults to
+`fetch-depth: 1`, so that commit was absent in **every** hosted CI job, the old
+helper skipped, and the stamping migration-evidence gate never actually ran in
+CI. The first-pass report recorded the container skips as intentional but did
+not notice the hosted jobs were skipping too.
+
+**The fix.**
+
+- New `tests/baseline_evidence.py` owns the policy and separates the decision
+  (`resolve_baseline_evidence`, side-effect free and directly testable) from
+  its effect (`require_baseline_object`).
+- `SIM_INTENT_REQUIRE_BASELINE_EVIDENCE=1` makes an unavailable baseline object
+  a **hard failure**. Without the variable it may still skip, so the container
+  images, which intentionally exclude `.git`, keep running every other test.
+- Both required hosted jobs — `backend-suite` and `schema-drift` — now check out
+  with `fetch-depth: 0`, set the variable, and run an explicit preflight
+  `git cat-file -e 6f92b5349d72fd7ef563293cd883c8b61fa3bbb5^{commit}` that
+  fails the job immediately when the baseline is unavailable.
+- Both jobs run pytest with `-rs`, and `conftest.py` adds a
+  `pytest_terminal_summary` hook printing
+  `Task 19 baseline evidence: executed=… skipped=… failed=… required=… available=…`,
+  so a silent skip is visible in any job log. Policy probes pass explicit
+  `env`/`root` arguments and are excluded from that accounting.
+- No baseline blob was copied into the repository as fixture data; the
+  comparison still uses real Git history.
+
+**Measured behaviour.**
+
+| Scenario | Result |
+|---|---|
+| Full history + `=1` (hosted simulation) | `executed=49 skipped=0 failed=0`; 86 passed |
+| Baseline absent + `=1` (shallow simulation) | **35 failed**, `executed=0 skipped=0 failed=35`; preflight `git cat-file` exits 128 |
+| Baseline absent, variable unset (container case) | 35 explicit skips, 50 passed, safety harness still 31 passed |
+
+The 49 executed comparisons are the 34 stamped payloads plus the 15 replay
+bodies iterated inside the single replay-body test.
+
+The shallow case was simulated by copying the worktree without `.git` into a
+scratch directory and running `git init` there, so `.git` exists but `6f92b53`
+does not.
+
+#### B-2 — complete all-registry migration safety conformance
+
+**The defect.** The previous conformance test inspected only
+`SIMULATION_INTENT_MIGRATIONS`, detected only synthesis from absence, never
+called `approval_upgrades()`, and was vacuous while the registries were empty.
+
+**The fix.** `tests/migration_safety.py` is a reusable family-aware harness
+covering all four production registries with a complete representative payload
+per family:
+
+| Family | Representative | Protected paths |
+|---|---|---|
+| `simulation_intent` | `examples/bracket_sprint_goal.json` | `SAFETY_CRITICAL_PATHS` |
+| `evaluation_case` | `eval/cases/01_bracket_bottom_fixed.json` | 18 ground-truth paths |
+| `fallback_record` | `eval/fallback/bracket_bottom_fixed.json` | 6 envelope provenance paths + nested `proposed_ir` intent paths |
+| `replay_record` | `eval/replay/manifest.json` | `records` |
+
+It classifies `synthesis`, `deletion`, `mutation`, and `approval_upgrade`.
+Approval detection calls the production `ir.versioning.approval_upgrades()` for
+`SimulationIntent`-shaped scopes, including the nested `proposed_ir`, and a
+family-specific map elsewhere (`artifact_export_eligible → true` and
+`clarification_required → false` are approval strengthening for an evaluation
+case). Evaluation cases and replay manifests are audited with their own
+protected paths, never as if they were `SimulationIntent` payloads.
+
+Every edge is discovered from `registry.registered_edges`, so a future
+migration is audited automatically; a test proves auto-pickup with a synthetic
+two-edge registry. A protected-path change is a violation unless that exact
+`scope:path` appears in `APPROVED_SAFETY_CHANGES`, the migration-evidence hook,
+which is empty while the registries are empty; a test proves the hook works in
+both directions.
+
+The gate is non-vacuous today: 31 tests in `tests/test_migration_safety.py`
+prove synthetic unsafe migrations are rejected for deletion of
+`regions[].entity_ids`, deletion and mutation of `bcs[].components`, mutation of
+canonical units, synthesis of `materials[].density_tonne_per_mm3`,
+`proposed → confirmed`, `pending → accepted`, `unvalidated → valid`, evaluation
+export-eligibility upgrade, dropping a required clarification, unsafe nested
+`proposed_ir` mutation and approval upgrade inside a fallback envelope, and
+replay-manifest record tampering or deletion — while a safe metadata-only
+migration is accepted for every family. Production registries remain empty; no
+fake `1 → 2` migration was created.
+
+The superseded single-registry test and its helpers were removed from
+`tests/test_schema_versioning.py`.
+
+#### Additional factual documentation correction found during this validation
+
+The regeneration command published in the first pass,
+`npm --prefix tools/openapi-types run generate`, **does not work**: `--prefix`
+does not put the local `node_modules/.bin` on `PATH`, and the npm script
+resolves `../../schema/...` relative to the tool directory. Because the failure
+was piped through `grep`, a follow-up `git diff --exit-code` passed trivially
+without regenerating anything. `schema/README.md` and `docs/environment.md` now
+document the working `cd tools/openapi-types && npm run generate` form, which is
+what `.github/workflows/ci.yml` already used via `working-directory:`. The
+TypeScript drift gate was then re-run for real after `npm ci` from the committed
+lockfile: `api-types.ts` regenerated byte-identically, SHA-256
+`cdda9e443163138ac230cacd0b03826840b228a55c459888ce606636bf3175e2`,
+`git diff --exit-code -- schema/generated` clean.
+
+An empty `tools/openapi-types/schema/` directory tree, created by a stray
+`mkdir` during the first pass and invisible to Git because it contained no
+files, was removed.
+
+#### Files changed in this correction round
+
+Created: `tests/baseline_evidence.py`, `tests/migration_safety.py`,
+`tests/test_migration_safety.py`.
+
+Modified: `.github/workflows/ci.yml`, `conftest.py`,
+`tests/test_schema_versioned_payloads.py`, `tests/test_schema_versioning.py`,
+`schema/README.md`, `docs/environment.md`, `docs/schema-versioning.md`, and
+this ledger.
+
+Task 19 totals after this round: **46 modified, 22 untracked**. `conftest.py` is
+the only newly modified tracked file; the other three created files are new
+untracked test modules.
+
+#### Revalidation after both corrections
+
+- Focused Task 19 suites (now five files) with the required flag →
+  **213 passed**, `executed=49 skipped=0 failed=0`.
+- Full host suite with the required flag → **568 passed, 1 skipped** (the skip
+  is the optional `ccx` smoke). Baseline accounting `executed=49 skipped=0`.
+- `scripts/export_schema.py --check` and `scripts/stamp_schema_versions.py
+  --check` → clean, host and in-container.
+- `npm ci` from the committed lockfile then `npm run generate` → no drift.
+- `python eval/run.py --replay` → 15/15, manifest
+  `47c0d7275b9a065a7f5e3316ed60b7ffff58913e0b1e5045c857f663e1f6775b`;
+  tracked reports restored byte-exact.
+- Frozen evidence re-verified unchanged: the ten `eval/results*` files, the 15
+  replay bodies, `fixtures/`, `tests/fixtures/`, and the Abaqus artifact
+  `7ed6c5dc5d9e19ed6c9c6e70065f162e08f1c4418afee362d14a9a825f56e3ed`.
+- Supported Linux container rebuilt: **531 passed, 37 skipped, 1 deselected**;
+  REPLAY, drift checks, and the production startup/exclusion checks all
+  re-passed. The 37 skips are the 35 Git-history comparisons plus the two
+  baseline-*policy* meta-tests that need Git metadata to assert against
+  (`test_available_baseline_with_required_flag_executes_every_comparison` and
+  `test_baseline_commit_availability_probe_matches_git`); the deselection is
+  the pre-existing Task 16/18 git-metadata self-test. Every runtime, migration,
+  and safety-conformance test executes there.
+- `git diff --check` clean; secret, host-path, and attribution scans clean.
+- `uv lock --check` and `scripts/export_requirements.py --check` still could not
+  be executed: `uv` remains absent from this environment. `pyproject.toml`,
+  `uv.lock`, `requirements.txt`, and `.python-version` are byte-unchanged, and
+  CI's `lock-and-drift` job runs both.
+- Nothing staged, committed, or pushed. Task 20 not started.

@@ -40,11 +40,69 @@ jobs:
       - name: requirements.txt drift (byte-exact)
         run: uv run python scripts/export_requirements.py --check
 
+  schema-drift:
+    # Task 19 (ADR-004): the backend OpenAPI document is the contract
+    # authority. These checks are pure Python so they also run unchanged
+    # inside the pinned container; the generated-TypeScript half runs in
+    # frontend-smoke, where Node is pinned.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      # Task 19 review correction B-1.
+      SIM_INTENT_REQUIRE_BASELINE_EVIDENCE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Baseline evidence preflight
+        run: |
+          git cat-file -e 6f92b5349d72fd7ef563293cd883c8b61fa3bbb5^{commit}
+          echo "baseline commit 6f92b53 is present"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.32"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Runner native libraries for gmsh (non-evidence convenience)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglu1-mesa libx11-6 libxcursor1 libxext6 libxfixes3 \
+            libxft2 libxinerama1 libxrender1 libfontconfig1 libgomp1
+      - name: Frozen install
+        run: uv sync --frozen
+      - name: OpenAPI and IR JSON Schema drift (byte-exact)
+        run: uv run python scripts/export_schema.py --check
+      - name: Checked-in payload schema-version stamping drift
+        run: uv run python scripts/stamp_schema_versions.py --check
+      - name: Schema-version, safety-conformance, and contract test suites
+        # -rs prints the skip reasons, so the baseline-evidence accounting line
+        # and any unexpected skip are visible in the job log.
+        run: |
+          uv run pytest \
+            tests/test_schema_versioning.py \
+            tests/test_schema_versioned_payloads.py \
+            tests/test_schema_version_routes.py \
+            tests/test_migration_safety.py \
+            tests/test_openapi_contract.py -q -rs
+
   backend-suite:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      # Task 19 review correction B-1: an unavailable baseline Git object must
+      # fail this required job, never skip the stamping migration evidence.
+      SIM_INTENT_REQUIRE_BASELINE_EVIDENCE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the 35 baseline comparisons resolve real blobs at
+          # 6f92b53. The default fetch-depth of 1 made every one of them skip.
+          fetch-depth: 0
+      - name: Baseline evidence preflight
+        run: |
+          git cat-file -e 6f92b5349d72fd7ef563293cd883c8b61fa3bbb5^{commit}
+          echo "baseline commit 6f92b53 is present"
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.11.32"
@@ -61,7 +119,7 @@ jobs:
       - name: Environment gate
         run: uv run python scripts/check_env.py
       - name: Full backend suite (per-test timeout 120 s)
-        run: uv run pytest tests -q
+        run: uv run pytest tests -q -rs
 
   replay-eval:
     runs-on: ubuntu-24.04
@@ -171,6 +229,17 @@ jobs:
         run: |
           node --check app/static/app.js
           node --check app/static/audit.js
+      # Task 19 (ADR-004): the checked-in generated client types must match the
+      # authoritative OpenAPI document exactly. Regenerating and diffing is the
+      # drift gate. `npm ci` installs from the committed lockfile only.
+      - name: Install pinned generator tooling from the lockfile
+        run: npm ci --no-audit --no-fund
+        working-directory: tools/openapi-types
+      - name: Regenerate TypeScript types from the checked-in OpenAPI document
+        run: npm run generate
+        working-directory: tools/openapi-types
+      - name: Generated TypeScript drift
+        run: git diff --exit-code -- schema/generated
 
   hygiene:
     runs-on: ubuntu-24.04

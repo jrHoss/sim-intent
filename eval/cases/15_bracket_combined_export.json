@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "case_id": "bracket_combined_export",
   "model_fixture": "bracket.step",
   "instruction": "Fix both bolt holes and apply a total downward force of 5 kN to the top flange.",

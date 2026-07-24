@@ -9,9 +9,15 @@ from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
+from eval.versioning import EVALUATION_CASE_MIGRATIONS
 from geom.cylinders import analyze_cylinders
 from geom.inventory import FaceInventory, get_inventory
 from ir.schema import EntityType, StrictModel
+from ir.schema_version import (
+    EVALUATION_CASE_SCHEMA_VERSION,
+    SCHEMA_VERSION_FIELD,
+)
+from ir.versioning import PayloadStructureError, decode_json_object
 
 
 FixtureName = Literal["bracket.step", "plate_hole.step"]
@@ -67,6 +73,11 @@ class ExpectedCondition(StrictModel):
 
 
 class EvaluationCase(StrictModel):
+    # Task 19: the evaluation-case *record* version.  The IR fragments this
+    # record carries (``expected_ir_subset``, ``expected_structured_ir_subset``)
+    # are deliberately partial and are never versioned or migrated as a
+    # SimulationIntent.
+    schema_version: int = Field(default=EVALUATION_CASE_SCHEMA_VERSION, ge=1)
     case_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     model_fixture: FixtureName
     instruction: str = Field(min_length=1)
@@ -94,10 +105,48 @@ class EvaluationCase(StrictModel):
 
 
 def canonical_case_bytes(case: EvaluationCase) -> bytes:
+    """Historical canonical bytes, excluding the record version declaration.
+
+    Task 19 decision D-3: the frozen 15-case manifest hash
+    ``47c0d7275b9a065a7f5e3316ed60b7ffff58913e0b1e5045c857f663e1f6775b`` is
+    immutable baseline evidence recorded by Tasks 16 and 18.  Stamping a record
+    version must not silently rebaseline it, so the version declaration is
+    excluded here and covered by :func:`versioned_manifest_hash` instead.
+    """
+
+    payload = case.model_dump(mode="json")
+    payload.pop(SCHEMA_VERSION_FIELD, None)
+    return (
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+
+
+def versioned_canonical_case_bytes(case: EvaluationCase) -> bytes:
+    """Canonical bytes including the record version declaration."""
+
     return (
         json.dumps(case.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
         + "\n"
     ).encode("utf-8")
+
+
+def load_evaluation_case(
+    raw: str | bytes | dict[str, Any], *, source: str | None = None
+) -> EvaluationCase:
+    """Authoritative external ingestion path for one evaluation case."""
+
+    family = EVALUATION_CASE_MIGRATIONS.family
+    payload = decode_json_object(raw, family=family, source=source)
+    migrated = EVALUATION_CASE_MIGRATIONS.migrate(payload, source=source)
+    try:
+        case = EvaluationCase.model_validate(migrated, strict=True)
+    except Exception as exc:
+        raise PayloadStructureError(
+            "Payload does not satisfy the EvaluationCase contract.",
+            family=family,
+            source=source,
+        ) from exc
+    return case
 
 
 def load_cases(
@@ -111,7 +160,12 @@ def load_cases(
     paths = sorted(case_path.glob("*.json"), key=lambda path: path.name)
     if len(paths) != 15:
         raise ValueError(f"expected exactly 15 evaluation cases, found {len(paths)}")
-    cases = [EvaluationCase.model_validate_json(path.read_text(encoding="utf-8"), strict=True) for path in paths]
+    cases = [
+        load_evaluation_case(
+            path.read_text(encoding="utf-8"), source=f"eval/cases/{path.name}"
+        )
+        for path in paths
+    ]
     identifiers = [case.case_id for case in cases]
     if len(identifiers) != len(set(identifiers)):
         raise ValueError("evaluation case IDs must be unique")
@@ -146,9 +200,22 @@ def load_cases(
 
 
 def manifest_hash(cases: list[EvaluationCase]) -> str:
+    """Frozen corpus manifest hash; version declarations are excluded (D-3)."""
+
     digest = hashlib.sha256()
     for case in cases:
         digest.update(case.case_id.encode("utf-8"))
         digest.update(b"\0")
         digest.update(canonical_case_bytes(case))
+    return digest.hexdigest()
+
+
+def versioned_manifest_hash(cases: list[EvaluationCase]) -> str:
+    """Version-aware corpus hash, computed alongside the frozen hash (D-3)."""
+
+    digest = hashlib.sha256()
+    for case in cases:
+        digest.update(case.case_id.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(versioned_canonical_case_bytes(case))
     return digest.hexdigest()
