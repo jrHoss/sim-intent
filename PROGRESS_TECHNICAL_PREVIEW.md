@@ -2,8 +2,7 @@
 
 ## Task 16 — Adopt technical-preview governance and freeze V1
 
-**Status:** IN PROGRESS — implementation and validation complete; pending
-independent review and the user-authorized final commit.
+**Status:** COMPLETE — MERGED through pull request #1 on 2026-07-24.
 
 ### Scope and authority
 
@@ -35,15 +34,26 @@ independent review and the user-authorized final commit.
   Task 16 replaces future-work governance while preserving those rules as the
   frozen V1 boundary.
 
+### Completion and merge evidence
+
+- Task 16 implementation commit:
+  `0bfd6921f69c1cb93c9a7ac91b46287250aff9ce`.
+- Task 16 merge commit:
+  `a8092dcfd688a47a882ab4246fa96331cd790475`.
+- Pull request: #1.
+- Independent review: APPROVE, no remaining findings.
+- Task 16 was merged with a clean worktree.
+- Task 17 was not started.
+
 ### Baseline tag
 
-- Local annotated tag: `demo-v1`.
+- Annotated tag: `demo-v1`.
 - Tag target:
   `154fe6ad0ac1336600d6ca5ec908d1b6c6e7401d`.
 - Tag type: annotated Git tag object.
 - Annotation: `V1 demo baseline: completed Tasks 1-15`.
-- The tag was created locally only. No remote tag or branch was created or
-  pushed.
+- The tag remains on the exact V1 baseline and was not moved by the Task 16
+  implementation or merge.
 
 ### Runtime versions
 
@@ -63,7 +73,8 @@ independent review and the user-authorized final commit.
 - pytest: 9.1.1.
 - httpx: 0.28.1.
 - CalculiX `ccx`: not installed; the existing optional solver smoke remains an
-  expected skip and no solver is executed by Task 16.
+  expected skip. Its absence is a future Task 18 environment dependency, not a
+  Task 16 failure, and no solver was executed by Task 16.
 
 ### Frozen hashes
 
@@ -168,6 +179,10 @@ All values are SHA-256 over exact file bytes.
   recorded.
 - Task 18 owns pinned environments and bounded CI timeouts. Task 16 does not
   install dependencies or implement CI/product behavior.
+- Task 17's accepted repository-audit dependency is
+  [`docs/audits/product-v2-repository-audit-2026-07-23.md`](docs/audits/product-v2-repository-audit-2026-07-23.md).
+  It consolidates the already accepted repository evidence and is not a new
+  audit.
 
 ### Known frozen-baseline limitations
 
@@ -190,9 +205,9 @@ All values are SHA-256 over exact file bytes.
   persistent project, reproducibility bundle, connected runner, or SaaS
   capability exists at the V1 baseline.
 
-### Review state
+### Completion state
 
-- No final Task 16 commit has been created.
-- Independent review and user inspection of the complete diff remain required.
-- A clean post-commit worktree cannot be claimed before that review/commit.
-- Task 17 has not started.
+- Task 16 is complete and merged.
+- The accepted implementation and merge commits are recorded above.
+- The V1 baseline remains fixed at the annotated `demo-v1` tag target.
+- Task 17 and Task 18 have not started.
