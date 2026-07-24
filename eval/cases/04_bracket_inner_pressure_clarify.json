@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "case_id": "bracket_inner_pressure_clarify",
   "model_fixture": "bracket.step",
   "instruction": "Apply 2 MPa pressure to the inner cylindrical surface.",

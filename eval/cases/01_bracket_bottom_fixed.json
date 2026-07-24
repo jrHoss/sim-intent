@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "case_id": "bracket_bottom_fixed",
   "model_fixture": "bracket.step",
   "instruction": "Fix the bottom face.",

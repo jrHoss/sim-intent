@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "case_id": "plate_top_force_0_005mn",
   "model_fixture": "plate_hole.step",
   "instruction": "Apply 0.005 MN downward across the top face.",

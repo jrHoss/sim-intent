@@ -9,4 +9,6 @@ __pycache__
 .pytest_cache
 .sim_intent_cache
 *.cache
+node_modules
+**/node_modules
 docs/task9-viewer.mp4

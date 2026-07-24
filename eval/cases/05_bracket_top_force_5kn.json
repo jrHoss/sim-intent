@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "case_id": "bracket_top_force_5kn",
   "model_fixture": "bracket.step",
   "instruction": "Apply 5 kN downward across the top flange.",

@@ -1,5 +1,13 @@
 tests/golden/* text eol=lf
 
+# Task 19: the checked-in authoritative schema artifacts and the generated
+# TypeScript output are compared byte-for-byte by the drift checks, so their
+# line endings must not vary by platform.
+schema/** text eol=lf
+tools/openapi-types/package.json text eol=lf
+tools/openapi-types/package-lock.json text eol=lf
+*.ts text eol=lf
+
 # Model files are identified and cache-bound by SHA-256 of their raw bytes.
 # Never let Git rewrite line endings in supported CAD/mesh inputs.
 *.step -text

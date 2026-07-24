@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "analysis": {
     "type": "static_structural",
     "units": { "length": "mm", "force": "N", "stress": "MPa" }

@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "case_id": "bracket_gravity_neg_z",
   "model_fixture": "bracket.step",
   "instruction": "Apply gravity in the negative Z direction.",

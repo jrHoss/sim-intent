@@ -14,8 +14,10 @@ from typing import Any, Literal
 from pydantic import Field
 
 from app.orchestration import interpret_and_propose, propose_from_interpretation
+from app.record_versions import build_fallback_envelope
 from app.session import SelectionSessionStore
 from eval.schema import EvaluationCase, ExpectedCondition, load_cases, manifest_hash
+from eval.versioning import verify_replay_directory
 from export.abaqus_py import export_abaqus_py
 from export.common import CadModelMetadata
 from geom.cylinders import analyze_cylinders
@@ -143,6 +145,10 @@ def _contains_forbidden_id_key(value: Any) -> bool:
 
 
 def load_replay(case: EvaluationCase, replay_dir: Path) -> dict[str, Any]:
+    # Task 19 decision D-1: replay bodies are the strict Interpretation LLM
+    # wire contract and stay byte-unchanged.  Their version is declared once by
+    # the sidecar manifest, which is verified before any body is trusted.
+    verify_replay_directory(replay_dir)
     path = replay_dir / f"{case.case_id}.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     if _contains_forbidden_id_key(payload):
@@ -356,18 +362,23 @@ def evaluate_case(
 
         if write_fallback:
             paths.fallback_dir.mkdir(parents=True, exist_ok=True)
-            fallback = {
-                "mode": "REPLAY",
-                "case_id": case.case_id,
-                "model_fixture": case.model_fixture,
-                "model_sha256": inventory.file_sha256,
-                "typed_interpreter_output": interpreter_output,
-                "initial_grounding": initial_grounding.model_dump(mode="json"),
-                "final_grounding": proposal.grounding.model_dump(mode="json"),
-                "proposed_ir": intent.model_dump(mode="json"),
-                "clarification_used": observed,
-                "validation_status_before_review": initial_validation.validation_status,
-            }
+            # Task 19: writes emit only current versions -- the envelope
+            # version from the fallback registry and the nested intent version
+            # from the SimulationIntent registry.
+            fallback = build_fallback_envelope(
+                {
+                    "mode": "REPLAY",
+                    "case_id": case.case_id,
+                    "model_fixture": case.model_fixture,
+                    "model_sha256": inventory.file_sha256,
+                    "typed_interpreter_output": interpreter_output,
+                    "initial_grounding": initial_grounding.model_dump(mode="json"),
+                    "final_grounding": proposal.grounding.model_dump(mode="json"),
+                    "clarification_used": observed,
+                    "validation_status_before_review": initial_validation.validation_status,
+                },
+                intent,
+            )
             (paths.fallback_dir / f"{case.case_id}.json").write_text(
                 json.dumps(fallback, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )

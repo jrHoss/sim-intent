@@ -165,8 +165,10 @@
       }
     ],
     "regions": [],
+    "schema_version": 1,
     "validation_status": "unvalidated"
   },
+  "schema_version": 1,
   "typed_interpreter_output": {
     "intents": [
       {

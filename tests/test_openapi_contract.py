@@ -1,0 +1,217 @@
+"""Task 19 drift tests for the authoritative schema artifacts (ADR-004).
+
+The backend OpenAPI document is the API contract authority.  These tests prove
+that the checked-in snapshot, the IR JSON Schema, and the generated TypeScript
+output all still match it, and that the generation itself is deterministic and
+independent of the runtime mode.
+
+The Node half of the generated-client drift check (regenerate, then
+``git diff --exit-code``) runs in CI, where Node is pinned.  The supported
+container image carries no Node toolchain, so this suite verifies the generated
+output by recorded content instead of by re-running the generator.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+import pytest
+
+from app.runtime_mode import RuntimeMode
+from app.server import create_app
+from ir.schema_version import (
+    API_CONTRACT_VERSION,
+    SCHEMA_VERSION_FIELD,
+    SIMULATION_INTENT_SCHEMA_VERSION,
+)
+from scripts.export_schema import (
+    IR_SCHEMA_PATH,
+    OPENAPI_PATH,
+    build_ir_schema,
+    build_openapi,
+    render,
+)
+from scripts.export_schema import main as export_main
+
+ROOT = Path(__file__).resolve().parents[1]
+TYPESCRIPT_PATH = ROOT / "schema" / "generated" / "typescript" / "api-types.ts"
+TOOLING_DIR = ROOT / "tools" / "openapi-types"
+
+
+def read(path: Path) -> str:
+    return path.read_text(encoding="utf-8").replace("\r\n", "\n")
+
+
+# --------------------------------------------------------------------------
+# Checked-in snapshots match the backend
+# --------------------------------------------------------------------------
+
+
+def test_schema_export_check_is_clean():
+    assert export_main(["--check"]) == 0
+
+
+def test_openapi_snapshot_matches_generated():
+    assert read(OPENAPI_PATH) == render(build_openapi())
+
+
+def test_ir_json_schema_snapshot_matches_generated():
+    assert read(IR_SCHEMA_PATH) == render(build_ir_schema())
+
+
+# --------------------------------------------------------------------------
+# Deterministic and mode-independent generation
+# --------------------------------------------------------------------------
+
+
+def test_openapi_generation_is_deterministic():
+    assert render(build_openapi()) == render(build_openapi())
+
+
+def test_openapi_snapshot_is_mode_independent(tmp_path):
+    """Replay-only routes must never leak into the published contract."""
+
+    published = json.loads(read(OPENAPI_PATH))
+    for mode in RuntimeMode:
+        app = create_app(tmp_path / mode.value, mode=mode)
+        paths = set(app.openapi()["paths"])
+        if mode.registers_fallback_routes:
+            # The application really does expose them in replay/test ...
+            assert any("fallback" in path for path in paths)
+        else:
+            assert not any("fallback" in path for path in paths)
+    # ... but the published contract is the production one and has none.
+    assert not any("fallback" in path for path in published["paths"])
+
+
+def test_published_artifacts_are_lf_normalised():
+    for path in (OPENAPI_PATH, IR_SCHEMA_PATH, TYPESCRIPT_PATH):
+        raw = path.read_bytes()
+        assert b"\r\n" not in raw, path
+        assert raw.endswith(b"\n"), path
+
+
+def test_published_json_is_sorted_and_indented():
+    for path in (OPENAPI_PATH, IR_SCHEMA_PATH):
+        text = read(path)
+        assert text == render(json.loads(text))
+
+
+# --------------------------------------------------------------------------
+# Version authority
+# --------------------------------------------------------------------------
+
+
+def test_openapi_info_version_comes_from_the_authoritative_constant():
+    document = json.loads(read(OPENAPI_PATH))
+    assert document["info"]["version"] == str(API_CONTRACT_VERSION)
+
+
+def test_ir_schema_declares_the_payload_version_field():
+    document = json.loads(read(IR_SCHEMA_PATH))
+    assert document["title"] == "SimulationIntent"
+    field = document["properties"][SCHEMA_VERSION_FIELD]
+    assert field["type"] == "integer"
+    assert field["minimum"] == 1
+    assert field["default"] == SIMULATION_INTENT_SCHEMA_VERSION
+
+
+def test_openapi_exposes_the_versioned_payload_contract():
+    document = json.loads(read(OPENAPI_PATH))
+    intent = document["components"]["schemas"]["SimulationIntent"]
+    assert SCHEMA_VERSION_FIELD in intent["properties"]
+    assert intent["properties"][SCHEMA_VERSION_FIELD]["minimum"] == 1
+
+
+def test_no_runtime_schema_version_endpoint_was_added(tmp_path):
+    """Decision D-9: Task 19 publishes versions statically, not over HTTP."""
+
+    app = create_app(tmp_path / "models", mode=RuntimeMode.PRODUCTION)
+    for path in app.openapi()["paths"]:
+        assert not path.startswith("/api/")
+
+
+# --------------------------------------------------------------------------
+# Generated TypeScript
+# --------------------------------------------------------------------------
+
+
+def test_generated_typescript_exists_and_declares_its_generator():
+    text = read(TYPESCRIPT_PATH)
+    assert "auto-generated by openapi-typescript" in text
+    assert "Do not make direct changes" in text
+
+
+def test_generated_typescript_covers_the_published_paths():
+    document = json.loads(read(OPENAPI_PATH))
+    text = read(TYPESCRIPT_PATH)
+    for path in document["paths"]:
+        assert f'"{path}"' in text, path
+    assert "SimulationIntent" in text
+    assert SCHEMA_VERSION_FIELD in text
+
+
+def test_generated_typescript_exposes_no_replay_route():
+    """No REPLAY-only *route* may reach the published client types.
+
+    The ``mode: "LIVE" | "REPLAY"`` discriminator and the ``fallback`` boolean
+    on ``InterpretResponse`` are production response fields: CLAUDE.md
+    invariant 10 requires the response to state its own provenance, so they are
+    expected here.  What must never appear is a fallback *endpoint*.
+    """
+
+    document = json.loads(read(OPENAPI_PATH))
+    text = read(TYPESCRIPT_PATH)
+    assert not any("fallback" in path for path in document["paths"])
+    for route in ("/session/{session_id}/fallback", "fallback-cases"):
+        assert route not in text
+
+
+def test_generated_typescript_has_no_fixture_or_corpus_leakage():
+    text = read(TYPESCRIPT_PATH).lower()
+    for forbidden in ("bracket.step", "plate_hole", "eval/", "tests/fixtures"):
+        assert forbidden not in text, forbidden
+
+
+# --------------------------------------------------------------------------
+# Generator tooling is pinned and application-free
+# --------------------------------------------------------------------------
+
+
+def test_generator_tooling_is_exactly_pinned():
+    manifest = json.loads(read(TOOLING_DIR / "package.json"))
+    assert manifest["private"] is True
+    dev = manifest["devDependencies"]
+    assert set(dev) == {"openapi-typescript"}
+    assert re.fullmatch(r"\d+\.\d+\.\d+", dev["openapi-typescript"]), (
+        "the generator version must be exact, not a range"
+    )
+    assert "dependencies" not in manifest
+
+
+def test_generator_tooling_has_a_lockfile_matching_the_manifest():
+    lock = json.loads(read(TOOLING_DIR / "package-lock.json"))
+    manifest = json.loads(read(TOOLING_DIR / "package.json"))
+    assert lock["lockfileVersion"] >= 3
+    root = lock["packages"][""]
+    assert root["devDependencies"] == manifest["devDependencies"]
+    pinned = lock["packages"]["node_modules/openapi-typescript"]["version"]
+    assert pinned == manifest["devDependencies"]["openapi-typescript"]
+
+
+@pytest.mark.parametrize(
+    "forbidden", ["react", "react-dom", "vite", "openapi-fetch", "playwright"]
+)
+def test_generator_tooling_contains_no_application_dependency(forbidden):
+    manifest = read(TOOLING_DIR / "package.json")
+    assert forbidden not in manifest
+
+
+def test_no_package_manifest_was_created_at_the_repository_root():
+    """Decision D-5: generator tooling lives under tools/openapi-types only."""
+
+    assert not (ROOT / "package.json").exists()
+    assert not (ROOT / "package-lock.json").exists()
+    assert not (ROOT / "frontend").exists()

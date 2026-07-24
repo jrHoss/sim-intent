@@ -20,6 +20,8 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ir.schema_version import SIMULATION_INTENT_SCHEMA_VERSION
+
 
 class ExportBlockedError(RuntimeError):
     """Raised when an IR with non-confirmed regions is asked to export."""
@@ -205,6 +207,14 @@ ValidationStatus = Literal["unvalidated", "valid", "invalid"]
 
 
 class SimulationIntent(StrictModel):
+    # Task 19 (ADR-004): explicit positive-integer payload version.  The
+    # default keeps in-process construction ergonomic; it must never be relied
+    # on for untrusted input.  ``ir.versioning.load_simulation_intent`` is the
+    # authoritative external ingestion path and requires an explicit
+    # declaration.
+    schema_version: int = Field(
+        default=SIMULATION_INTENT_SCHEMA_VERSION, ge=1
+    )
     analysis: Analysis
     materials: list[Material]
     regions: list[Region]

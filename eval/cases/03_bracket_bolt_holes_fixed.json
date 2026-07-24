@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "case_id": "bracket_bolt_holes_fixed",
   "model_fixture": "bracket.step",
   "instruction": "Fix both bolt holes.",

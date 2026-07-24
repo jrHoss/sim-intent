@@ -1,0 +1,2594 @@
+{
+  "components": {
+    "schemas": {
+      "Analysis": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "static_structural",
+            "title": "Type",
+            "type": "string"
+          },
+          "units": {
+            "$ref": "#/components/schemas/Units"
+          }
+        },
+        "required": [
+          "type",
+          "units"
+        ],
+        "title": "Analysis",
+        "type": "object"
+      },
+      "ArtifactExportRequest": {
+        "additionalProperties": false,
+        "description": "Select one Task 14 adapter; eligibility remains server-computed.",
+        "properties": {
+          "adapter": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Adapter",
+            "type": "string"
+          }
+        },
+        "required": [
+          "adapter"
+        ],
+        "title": "ArtifactExportRequest",
+        "type": "object"
+      },
+      "Assumption": {
+        "additionalProperties": false,
+        "description": "Auditable inference with a stable identity and explicit criticality.\n\nTask 1 assumptions predate explicit identifiers and criticality.  Defaults\nkeep those payloads valid, while the identifier is deterministically\nderived from immutable assumption content instead of an array index.",
+        "properties": {
+          "criticality": {
+            "default": "noncritical",
+            "enum": [
+              "unit_critical",
+              "noncritical"
+            ],
+            "title": "Criticality",
+            "type": "string"
+          },
+          "id": {
+            "default": "",
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "accepted",
+              "rejected"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "status"
+        ],
+        "title": "Assumption",
+        "type": "object"
+      },
+      "AuditRegion": {
+        "additionalProperties": false,
+        "description": "Region provenance plus all conditions that reference the region.",
+        "properties": {
+          "boundary_conditions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Boundary Conditions",
+            "type": "array"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "entity_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ],
+            "title": "Entity Ids"
+          },
+          "entity_type": {
+            "enum": [
+              "cad_face",
+              "cad_edge",
+              "mesh_face",
+              "node_set",
+              "element_set"
+            ],
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "loads": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Loads",
+            "type": "array"
+          },
+          "selection_method": {
+            "enum": [
+              "semantic_geometry_query",
+              "multimodal_reference",
+              "user_click",
+              "user_confirmed"
+            ],
+            "title": "Selection Method",
+            "type": "string"
+          },
+          "source_instruction": {
+            "title": "Source Instruction",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "proposed",
+              "confirmed",
+              "rejected"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "entity_type",
+          "entity_ids",
+          "selection_method",
+          "confidence",
+          "source_instruction",
+          "status",
+          "boundary_conditions",
+          "loads"
+        ],
+        "title": "AuditRegion",
+        "type": "object"
+      },
+      "AuditResponse": {
+        "additionalProperties": false,
+        "description": "Backend source of truth for the Task 13 audit panel.",
+        "properties": {
+          "assumptions": {
+            "items": {
+              "$ref": "#/components/schemas/Assumption"
+            },
+            "title": "Assumptions",
+            "type": "array"
+          },
+          "blocking_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Blocking Reasons",
+            "type": "array"
+          },
+          "export_eligible": {
+            "title": "Export Eligible",
+            "type": "boolean"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          },
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/AuditRegion"
+            },
+            "title": "Regions",
+            "type": "array"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "validation_report": {
+            "$ref": "#/components/schemas/ValidationReport"
+          },
+          "validation_status": {
+            "enum": [
+              "unvalidated",
+              "valid",
+              "invalid"
+            ],
+            "title": "Validation Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "model_id",
+          "validation_status",
+          "export_eligible",
+          "blocking_reasons",
+          "regions",
+          "assumptions",
+          "validation_report"
+        ],
+        "title": "AuditResponse",
+        "type": "object"
+      },
+      "CandidateEntitySet": {
+        "additionalProperties": false,
+        "description": "One highlightable alternative presented to the engineer.",
+        "properties": {
+          "confidence": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "entity_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 1,
+            "title": "Entity Ids",
+            "type": "array"
+          },
+          "entity_type": {
+            "const": "cad_face",
+            "default": "cad_face",
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "inventory_sha256": {
+            "minLength": 1,
+            "title": "Inventory Sha256",
+            "type": "string"
+          },
+          "label": {
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "source": {
+            "enum": [
+              "query",
+              "user_click"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity_ids",
+          "inventory_sha256",
+          "label",
+          "source"
+        ],
+        "title": "CandidateEntitySet",
+        "type": "object"
+      },
+      "ClarificationChoice": {
+        "additionalProperties": false,
+        "properties": {
+          "entity_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 1,
+            "title": "Entity Ids",
+            "type": "array"
+          },
+          "intent_index": {
+            "minimum": 0.0,
+            "title": "Intent Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "intent_index",
+          "entity_ids"
+        ],
+        "title": "ClarificationChoice",
+        "type": "object"
+      },
+      "ClarificationRequest": {
+        "additionalProperties": false,
+        "description": "Typed, JSON-serializable ambiguity result for viewer highlighting.",
+        "properties": {
+          "candidate_sets": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateEntitySet"
+            },
+            "title": "Candidate Sets",
+            "type": "array"
+          },
+          "click_evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClickEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "const": "clarification_request",
+            "default": "clarification_request",
+            "title": "Kind",
+            "type": "string"
+          },
+          "query_evidence": {
+            "$ref": "#/components/schemas/QueryEvidence"
+          },
+          "question": {
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "low_score_margin",
+              "multiple_candidates",
+              "count_mismatch",
+              "no_usable_candidate",
+              "click_query_conflict",
+              "click_inventory_mismatch"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
+          "requested_count": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Count"
+          },
+          "source_instruction": {
+            "title": "Source Instruction",
+            "type": "string"
+          },
+          "target_description": {
+            "minLength": 1,
+            "title": "Target Description",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "question",
+          "candidate_sets",
+          "query_evidence",
+          "source_instruction",
+          "target_description"
+        ],
+        "title": "ClarificationRequest",
+        "type": "object"
+      },
+      "ClickEvidence": {
+        "additionalProperties": false,
+        "description": "Trusted viewer/backend IDs bound to the inventory that produced them.",
+        "properties": {
+          "entity_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 1,
+            "title": "Entity Ids",
+            "type": "array"
+          },
+          "inventory_sha256": {
+            "minLength": 1,
+            "title": "Inventory Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "inventory_sha256",
+          "entity_ids"
+        ],
+        "title": "ClickEvidence",
+        "type": "object"
+      },
+      "ConcentratedForceLoad": {
+        "additionalProperties": false,
+        "properties": {
+          "region_ref": {
+            "title": "Region Ref",
+            "type": "string"
+          },
+          "type": {
+            "const": "concentrated_force",
+            "title": "Type",
+            "type": "string"
+          },
+          "vector": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Vector",
+            "type": "array"
+          }
+        },
+        "required": [
+          "type",
+          "region_ref",
+          "vector"
+        ],
+        "title": "ConcentratedForceLoad",
+        "type": "object"
+      },
+      "ConcentratedForcePayload": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "minLength": 1,
+            "title": "Direction",
+            "type": "string"
+          },
+          "magnitude": {
+            "title": "Magnitude",
+            "type": "string"
+          },
+          "type": {
+            "const": "concentrated_force",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "magnitude",
+          "direction",
+          "type"
+        ],
+        "title": "ConcentratedForcePayload",
+        "type": "object"
+      },
+      "ExportGateResponse": {
+        "additionalProperties": false,
+        "description": "Readiness only; Task 13 never claims to have generated an artifact.",
+        "properties": {
+          "blocking_issues": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationIssue"
+            },
+            "title": "Blocking Issues",
+            "type": "array"
+          },
+          "export_eligible": {
+            "title": "Export Eligible",
+            "type": "boolean"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "blocked",
+              "ready"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "validation_status": {
+            "enum": [
+              "unvalidated",
+              "valid",
+              "invalid"
+            ],
+            "title": "Validation Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "model_id",
+          "status",
+          "validation_status",
+          "export_eligible",
+          "message",
+          "blocking_issues"
+        ],
+        "title": "ExportGateResponse",
+        "type": "object"
+      },
+      "FixedDisplacementBC": {
+        "additionalProperties": false,
+        "properties": {
+          "components": {
+            "items": {
+              "enum": [
+                "x",
+                "y",
+                "z"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Components",
+            "type": "array"
+          },
+          "region_ref": {
+            "title": "Region Ref",
+            "type": "string"
+          },
+          "type": {
+            "const": "fixed_displacement",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "region_ref",
+          "components"
+        ],
+        "title": "FixedDisplacementBC",
+        "type": "object"
+      },
+      "FixedDisplacementPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "components": {
+            "items": {
+              "enum": [
+                "x",
+                "y",
+                "z"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Components",
+            "type": "array"
+          },
+          "type": {
+            "const": "fixed_displacement",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "components"
+        ],
+        "title": "FixedDisplacementPayload",
+        "type": "object"
+      },
+      "GravityLoad": {
+        "additionalProperties": false,
+        "properties": {
+          "region_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region Ref"
+          },
+          "type": {
+            "const": "gravity",
+            "title": "Type",
+            "type": "string"
+          },
+          "vector": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Vector",
+            "type": "array"
+          }
+        },
+        "required": [
+          "type",
+          "vector"
+        ],
+        "title": "GravityLoad",
+        "type": "object"
+      },
+      "GravityPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "minLength": 1,
+            "title": "Direction",
+            "type": "string"
+          },
+          "type": {
+            "const": "gravity",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "direction"
+        ],
+        "title": "GravityPayload",
+        "type": "object"
+      },
+      "GroundedIntent": {
+        "additionalProperties": false,
+        "description": "Task-local wrapper retaining payload and grounding evidence together.",
+        "properties": {
+          "bc": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "fixed_displacement": "#/components/schemas/FixedDisplacementPayload",
+                    "prescribed_displacement": "#/components/schemas/PrescribedDisplacementPayload"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/FixedDisplacementPayload"
+                  },
+                  {
+                    "$ref": "#/components/schemas/PrescribedDisplacementPayload"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bc"
+          },
+          "clarification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClarificationRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "click_evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClickEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "intent_index": {
+            "minimum": 0.0,
+            "title": "Intent Index",
+            "type": "integer"
+          },
+          "load": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "concentrated_force": "#/components/schemas/ConcentratedForcePayload",
+                    "gravity": "#/components/schemas/GravityPayload",
+                    "pressure": "#/components/schemas/PressurePayload",
+                    "resultant_surface_force": "#/components/schemas/ResultantSurfaceForcePayload",
+                    "surface_traction": "#/components/schemas/SurfaceTractionPayload"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ResultantSurfaceForcePayload"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SurfaceTractionPayload"
+                  },
+                  {
+                    "$ref": "#/components/schemas/PressurePayload"
+                  },
+                  {
+                    "$ref": "#/components/schemas/GravityPayload"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ConcentratedForcePayload"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Load"
+          },
+          "query_evidence": {
+            "$ref": "#/components/schemas/QueryEvidence"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Region"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_instruction": {
+            "title": "Source Instruction",
+            "type": "string"
+          },
+          "target_description": {
+            "minLength": 1,
+            "title": "Target Description",
+            "type": "string"
+          }
+        },
+        "required": [
+          "intent_index",
+          "source_instruction",
+          "target_description",
+          "query_evidence"
+        ],
+        "title": "GroundedIntent",
+        "type": "object"
+      },
+      "GroundingBatch": {
+        "additionalProperties": false,
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/GroundedIntent"
+            },
+            "minItems": 1,
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "title": "GroundingBatch",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HighlightRequest": {
+        "additionalProperties": false,
+        "description": "Frozen highlight request plus an optional load-direction vector.",
+        "properties": {
+          "entity_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 1,
+            "title": "Entity Ids",
+            "type": "array"
+          },
+          "style": {
+            "title": "Style",
+            "type": "string"
+          },
+          "vector": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vector"
+          }
+        },
+        "required": [
+          "entity_ids",
+          "style"
+        ],
+        "title": "HighlightRequest",
+        "type": "object"
+      },
+      "InterpretRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "clicked_entity_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Clicked Entity Ids",
+            "type": "array"
+          },
+          "instruction": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Instruction",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instruction"
+        ],
+        "title": "InterpretRequest",
+        "type": "object"
+      },
+      "InterpretResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "clarification_count": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Clarification Count",
+            "type": "integer"
+          },
+          "fallback": {
+            "title": "Fallback",
+            "type": "boolean"
+          },
+          "grounding": {
+            "$ref": "#/components/schemas/GroundingBatch"
+          },
+          "instruction": {
+            "title": "Instruction",
+            "type": "string"
+          },
+          "intent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SimulationIntent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "interpretation": {
+            "additionalProperties": true,
+            "title": "Interpretation",
+            "type": "object"
+          },
+          "mode": {
+            "enum": [
+              "LIVE",
+              "REPLAY"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "model_name": {
+            "title": "Model Name",
+            "type": "string"
+          },
+          "notices": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "proposed",
+              "clarification"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "fallback",
+          "state",
+          "instruction",
+          "interpretation",
+          "grounding",
+          "intent",
+          "clarification_count",
+          "model_name"
+        ],
+        "title": "InterpretResponse",
+        "type": "object"
+      },
+      "Material": {
+        "additionalProperties": false,
+        "properties": {
+          "E_MPa": {
+            "exclusiveMinimum": 0.0,
+            "title": "E Mpa",
+            "type": "number"
+          },
+          "density_tonne_per_mm3": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Density Tonne Per Mm3"
+          },
+          "model": {
+            "const": "linear_elastic_isotropic",
+            "title": "Model",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "nu": {
+            "exclusiveMaximum": 0.5,
+            "exclusiveMinimum": -1.0,
+            "title": "Nu",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "model",
+          "E_MPa",
+          "nu"
+        ],
+        "title": "Material",
+        "type": "object"
+      },
+      "PrescribedDisplacementBC": {
+        "additionalProperties": false,
+        "properties": {
+          "components": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "minProperties": 1,
+            "propertyNames": {
+              "enum": [
+                "x",
+                "y",
+                "z"
+              ]
+            },
+            "title": "Components",
+            "type": "object"
+          },
+          "region_ref": {
+            "title": "Region Ref",
+            "type": "string"
+          },
+          "type": {
+            "const": "prescribed_displacement",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "region_ref",
+          "components"
+        ],
+        "title": "PrescribedDisplacementBC",
+        "type": "object"
+      },
+      "PrescribedDisplacementPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "components": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "minProperties": 1,
+            "propertyNames": {
+              "enum": [
+                "x",
+                "y",
+                "z"
+              ]
+            },
+            "title": "Components",
+            "type": "object"
+          },
+          "type": {
+            "const": "prescribed_displacement",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "components"
+        ],
+        "title": "PrescribedDisplacementPayload",
+        "type": "object"
+      },
+      "PressureLoad": {
+        "additionalProperties": false,
+        "properties": {
+          "magnitude": {
+            "title": "Magnitude",
+            "type": "number"
+          },
+          "region_ref": {
+            "title": "Region Ref",
+            "type": "string"
+          },
+          "type": {
+            "const": "pressure",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "region_ref",
+          "magnitude"
+        ],
+        "title": "PressureLoad",
+        "type": "object"
+      },
+      "PressurePayload": {
+        "additionalProperties": false,
+        "properties": {
+          "magnitude": {
+            "title": "Magnitude",
+            "type": "string"
+          },
+          "type": {
+            "const": "pressure",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "magnitude"
+        ],
+        "title": "PressurePayload",
+        "type": "object"
+      },
+      "QueryEvidence": {
+        "additionalProperties": false,
+        "description": "Exact deterministic query input and output retained for auditability.",
+        "properties": {
+          "candidate_set_margin": {
+            "minimum": 0.0,
+            "title": "Candidate Set Margin",
+            "type": "number"
+          },
+          "entity_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Entity Ids",
+            "type": "array"
+          },
+          "op_list": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "minItems": 1,
+            "title": "Op List",
+            "type": "array"
+          },
+          "per_candidate_scores": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Per Candidate Scores",
+            "type": "object"
+          },
+          "score_margin": {
+            "minimum": 0.0,
+            "title": "Score Margin",
+            "type": "number"
+          }
+        },
+        "required": [
+          "op_list",
+          "entity_ids",
+          "per_candidate_scores",
+          "score_margin",
+          "candidate_set_margin"
+        ],
+        "title": "QueryEvidence",
+        "type": "object"
+      },
+      "Region": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "entity_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ],
+            "minLength": 1,
+            "title": "Entity Ids"
+          },
+          "entity_type": {
+            "enum": [
+              "cad_face",
+              "cad_edge",
+              "mesh_face",
+              "node_set",
+              "element_set"
+            ],
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "selection_method": {
+            "enum": [
+              "semantic_geometry_query",
+              "multimodal_reference",
+              "user_click",
+              "user_confirmed"
+            ],
+            "title": "Selection Method",
+            "type": "string"
+          },
+          "source_instruction": {
+            "title": "Source Instruction",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "proposed",
+              "confirmed",
+              "rejected"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "entity_type",
+          "entity_ids",
+          "selection_method",
+          "confidence",
+          "source_instruction",
+          "status"
+        ],
+        "title": "Region",
+        "type": "object"
+      },
+      "RegionTransitionRequest": {
+        "additionalProperties": false,
+        "description": "Request body shared by the confirm and reject endpoints.",
+        "properties": {
+          "region_id": {
+            "minLength": 1,
+            "title": "Region Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "region_id"
+        ],
+        "title": "RegionTransitionRequest",
+        "type": "object"
+      },
+      "ResultantSurfaceForceLoad": {
+        "additionalProperties": false,
+        "properties": {
+          "region_ref": {
+            "title": "Region Ref",
+            "type": "string"
+          },
+          "type": {
+            "const": "resultant_surface_force",
+            "title": "Type",
+            "type": "string"
+          },
+          "vector": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Vector",
+            "type": "array"
+          }
+        },
+        "required": [
+          "type",
+          "region_ref",
+          "vector"
+        ],
+        "title": "ResultantSurfaceForceLoad",
+        "type": "object"
+      },
+      "ResultantSurfaceForcePayload": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "minLength": 1,
+            "title": "Direction",
+            "type": "string"
+          },
+          "magnitude": {
+            "title": "Magnitude",
+            "type": "string"
+          },
+          "type": {
+            "const": "resultant_surface_force",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "magnitude",
+          "direction",
+          "type"
+        ],
+        "title": "ResultantSurfaceForcePayload",
+        "type": "object"
+      },
+      "SelectRequest": {
+        "additionalProperties": false,
+        "description": "Frozen Task 8 click-selection request body.",
+        "properties": {
+          "entity_id": {
+            "exclusiveMinimum": 0.0,
+            "title": "Entity Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entity_id"
+        ],
+        "title": "SelectRequest",
+        "type": "object"
+      },
+      "SessionHighlight": {
+        "additionalProperties": false,
+        "description": "The active viewer highlight associated with one IR region.",
+        "properties": {
+          "entity_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ],
+            "minLength": 1,
+            "title": "Entity Ids"
+          },
+          "style": {
+            "enum": [
+              "proposed",
+              "confirmed"
+            ],
+            "title": "Style",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity_ids",
+          "style"
+        ],
+        "title": "SessionHighlight",
+        "type": "object"
+      },
+      "SessionSnapshot": {
+        "additionalProperties": false,
+        "description": "Serializable state returned by every Task 10 session endpoint.",
+        "properties": {
+          "export_eligible": {
+            "title": "Export Eligible",
+            "type": "boolean"
+          },
+          "highlight_state": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SessionHighlight"
+            },
+            "title": "Highlight State",
+            "type": "object"
+          },
+          "intent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SimulationIntent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          },
+          "selected_entities": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              ]
+            },
+            "title": "Selected Entities",
+            "type": "object"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "model_id",
+          "intent",
+          "selected_entities",
+          "highlight_state",
+          "export_eligible"
+        ],
+        "title": "SessionSnapshot",
+        "type": "object"
+      },
+      "SimulationIntent": {
+        "additionalProperties": false,
+        "properties": {
+          "analysis": {
+            "$ref": "#/components/schemas/Analysis"
+          },
+          "assumptions": {
+            "items": {
+              "$ref": "#/components/schemas/Assumption"
+            },
+            "title": "Assumptions",
+            "type": "array"
+          },
+          "bcs": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "fixed_displacement": "#/components/schemas/FixedDisplacementBC",
+                  "prescribed_displacement": "#/components/schemas/PrescribedDisplacementBC"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/FixedDisplacementBC"
+                },
+                {
+                  "$ref": "#/components/schemas/PrescribedDisplacementBC"
+                }
+              ]
+            },
+            "title": "Bcs",
+            "type": "array"
+          },
+          "loads": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "concentrated_force": "#/components/schemas/ConcentratedForceLoad",
+                  "gravity": "#/components/schemas/GravityLoad",
+                  "pressure": "#/components/schemas/PressureLoad",
+                  "resultant_surface_force": "#/components/schemas/ResultantSurfaceForceLoad",
+                  "surface_traction": "#/components/schemas/SurfaceTractionLoad"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ResultantSurfaceForceLoad"
+                },
+                {
+                  "$ref": "#/components/schemas/SurfaceTractionLoad"
+                },
+                {
+                  "$ref": "#/components/schemas/PressureLoad"
+                },
+                {
+                  "$ref": "#/components/schemas/GravityLoad"
+                },
+                {
+                  "$ref": "#/components/schemas/ConcentratedForceLoad"
+                }
+              ]
+            },
+            "title": "Loads",
+            "type": "array"
+          },
+          "materials": {
+            "items": {
+              "$ref": "#/components/schemas/Material"
+            },
+            "title": "Materials",
+            "type": "array"
+          },
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/Region"
+            },
+            "title": "Regions",
+            "type": "array"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "validation_status": {
+            "default": "unvalidated",
+            "enum": [
+              "unvalidated",
+              "valid",
+              "invalid"
+            ],
+            "title": "Validation Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "analysis",
+          "materials",
+          "regions",
+          "bcs",
+          "loads",
+          "assumptions"
+        ],
+        "title": "SimulationIntent",
+        "type": "object"
+      },
+      "SurfaceTractionLoad": {
+        "additionalProperties": false,
+        "properties": {
+          "region_ref": {
+            "title": "Region Ref",
+            "type": "string"
+          },
+          "type": {
+            "const": "surface_traction",
+            "title": "Type",
+            "type": "string"
+          },
+          "vector": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Vector",
+            "type": "array"
+          }
+        },
+        "required": [
+          "type",
+          "region_ref",
+          "vector"
+        ],
+        "title": "SurfaceTractionLoad",
+        "type": "object"
+      },
+      "SurfaceTractionPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "minLength": 1,
+            "title": "Direction",
+            "type": "string"
+          },
+          "magnitude": {
+            "title": "Magnitude",
+            "type": "string"
+          },
+          "type": {
+            "const": "surface_traction",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "magnitude",
+          "direction",
+          "type"
+        ],
+        "title": "SurfaceTractionPayload",
+        "type": "object"
+      },
+      "Units": {
+        "additionalProperties": false,
+        "description": "Internal convention is mm-N-MPa; the IR only ever stores these.",
+        "properties": {
+          "force": {
+            "const": "N",
+            "title": "Force",
+            "type": "string"
+          },
+          "length": {
+            "const": "mm",
+            "title": "Length",
+            "type": "string"
+          },
+          "stress": {
+            "const": "MPa",
+            "default": "MPa",
+            "title": "Stress",
+            "type": "string"
+          }
+        },
+        "required": [
+          "length",
+          "force"
+        ],
+        "title": "Units",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "ValidationIssue": {
+        "additionalProperties": false,
+        "description": "One stable, JSON-serializable validation or readiness finding.",
+        "properties": {
+          "blocks_export": {
+            "title": "Blocks Export",
+            "type": "boolean"
+          },
+          "code": {
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          },
+          "field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field"
+          },
+          "message": {
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "object_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Id"
+          },
+          "object_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Type"
+          },
+          "severity": {
+            "enum": [
+              "error",
+              "warning"
+            ],
+            "title": "Severity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "severity",
+          "message",
+          "blocks_export"
+        ],
+        "title": "ValidationIssue",
+        "type": "object"
+      },
+      "ValidationReport": {
+        "additionalProperties": false,
+        "description": "Computed validation state; client-supplied status is never consulted.",
+        "properties": {
+          "export_eligible": {
+            "title": "Export Eligible",
+            "type": "boolean"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationIssue"
+            },
+            "title": "Issues",
+            "type": "array"
+          },
+          "validation_status": {
+            "enum": [
+              "valid",
+              "invalid"
+            ],
+            "title": "Validation Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "validation_status",
+          "export_eligible",
+          "issues"
+        ],
+        "title": "ValidationReport",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "sim-intent viewer backend",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/healthz": {
+      "get": {
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Healthz Healthz Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Healthz"
+      }
+    },
+    "/highlight": {
+      "post": {
+        "operationId": "highlight_entities_highlight_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HighlightRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Highlight Entities Highlight Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Highlight Entities"
+      }
+    },
+    "/model/{model_id}/gltf": {
+      "get": {
+        "operationId": "gltf_response_model__model_id__gltf_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Gltf Response"
+      }
+    },
+    "/model/{model_id}/inventory": {
+      "get": {
+        "operationId": "inventory_response_model__model_id__inventory_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Inventory Response"
+      }
+    },
+    "/models": {
+      "post": {
+        "operationId": "upload_model_models_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "filename",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Filename"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Upload Model Models Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload Model"
+      }
+    },
+    "/models/{model_id}/gltf": {
+      "get": {
+        "operationId": "gltf_response_models__model_id__gltf_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Gltf Response"
+      }
+    },
+    "/models/{model_id}/inventory": {
+      "get": {
+        "operationId": "inventory_response_models__model_id__inventory_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Inventory Response"
+      }
+    },
+    "/select": {
+      "post": {
+        "operationId": "select_entity_select_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "title": "Response Select Entity Select Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Select Entity"
+      }
+    },
+    "/session/{session_id}/assumptions/{assumption_id}/accept": {
+      "post": {
+        "operationId": "accept_session_assumption_session__session_id__assumptions__assumption_id__accept_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "assumption_id",
+            "required": true,
+            "schema": {
+              "title": "Assumption Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Accept Session Assumption"
+      }
+    },
+    "/session/{session_id}/assumptions/{assumption_id}/reject": {
+      "post": {
+        "operationId": "reject_session_assumption_session__session_id__assumptions__assumption_id__reject_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "assumption_id",
+            "required": true,
+            "schema": {
+              "title": "Assumption Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reject Session Assumption"
+      }
+    },
+    "/session/{session_id}/audit": {
+      "get": {
+        "operationId": "get_session_audit_session__session_id__audit_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Session Audit"
+      }
+    },
+    "/session/{session_id}/clarify": {
+      "post": {
+        "operationId": "clarify_session_instruction_session__session_id__clarify_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClarificationChoice"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InterpretResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clarify Session Instruction"
+      }
+    },
+    "/session/{session_id}/confirm_region": {
+      "post": {
+        "operationId": "confirm_session_region_session__session_id__confirm_region_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegionTransitionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Session Region"
+      }
+    },
+    "/session/{session_id}/export": {
+      "post": {
+        "description": "Regenerate an artifact from stored confirmed IR and model metadata.",
+        "operationId": "export_session_artifact_session__session_id__export_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtifactExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Session Artifact"
+      }
+    },
+    "/session/{session_id}/export-gate": {
+      "post": {
+        "operationId": "check_session_export_gate_session__session_id__export_gate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportGateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Check Session Export Gate"
+      }
+    },
+    "/session/{session_id}/intent": {
+      "get": {
+        "operationId": "get_session_intent_session__session_id__intent_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Session Intent"
+      },
+      "put": {
+        "operationId": "put_session_intent_session__session_id__intent_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimulationIntent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Session Intent"
+      }
+    },
+    "/session/{session_id}/interpret": {
+      "post": {
+        "operationId": "interpret_session_instruction_session__session_id__interpret_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InterpretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InterpretResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Interpret Session Instruction"
+      }
+    },
+    "/session/{session_id}/reject_region": {
+      "post": {
+        "operationId": "reject_session_region_session__session_id__reject_region_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegionTransitionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reject Session Region"
+      }
+    }
+  }
+}

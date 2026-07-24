@@ -1,0 +1,545 @@
+{
+  "$defs": {
+    "Analysis": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "static_structural",
+          "title": "Type",
+          "type": "string"
+        },
+        "units": {
+          "$ref": "#/$defs/Units"
+        }
+      },
+      "required": [
+        "type",
+        "units"
+      ],
+      "title": "Analysis",
+      "type": "object"
+    },
+    "Assumption": {
+      "additionalProperties": false,
+      "description": "Auditable inference with a stable identity and explicit criticality.\n\nTask 1 assumptions predate explicit identifiers and criticality.  Defaults\nkeep those payloads valid, while the identifier is deterministically\nderived from immutable assumption content instead of an array index.",
+      "properties": {
+        "criticality": {
+          "default": "noncritical",
+          "enum": [
+            "unit_critical",
+            "noncritical"
+          ],
+          "title": "Criticality",
+          "type": "string"
+        },
+        "id": {
+          "default": "",
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "accepted",
+            "rejected"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "status"
+      ],
+      "title": "Assumption",
+      "type": "object"
+    },
+    "ConcentratedForceLoad": {
+      "additionalProperties": false,
+      "properties": {
+        "region_ref": {
+          "title": "Region Ref",
+          "type": "string"
+        },
+        "type": {
+          "const": "concentrated_force",
+          "title": "Type",
+          "type": "string"
+        },
+        "vector": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Vector",
+          "type": "array"
+        }
+      },
+      "required": [
+        "type",
+        "region_ref",
+        "vector"
+      ],
+      "title": "ConcentratedForceLoad",
+      "type": "object"
+    },
+    "FixedDisplacementBC": {
+      "additionalProperties": false,
+      "properties": {
+        "components": {
+          "items": {
+            "enum": [
+              "x",
+              "y",
+              "z"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Components",
+          "type": "array"
+        },
+        "region_ref": {
+          "title": "Region Ref",
+          "type": "string"
+        },
+        "type": {
+          "const": "fixed_displacement",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "region_ref",
+        "components"
+      ],
+      "title": "FixedDisplacementBC",
+      "type": "object"
+    },
+    "GravityLoad": {
+      "additionalProperties": false,
+      "properties": {
+        "region_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region Ref"
+        },
+        "type": {
+          "const": "gravity",
+          "title": "Type",
+          "type": "string"
+        },
+        "vector": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Vector",
+          "type": "array"
+        }
+      },
+      "required": [
+        "type",
+        "vector"
+      ],
+      "title": "GravityLoad",
+      "type": "object"
+    },
+    "Material": {
+      "additionalProperties": false,
+      "properties": {
+        "E_MPa": {
+          "exclusiveMinimum": 0,
+          "title": "E Mpa",
+          "type": "number"
+        },
+        "density_tonne_per_mm3": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Density Tonne Per Mm3"
+        },
+        "model": {
+          "const": "linear_elastic_isotropic",
+          "title": "Model",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "nu": {
+          "exclusiveMaximum": 0.5,
+          "exclusiveMinimum": -1.0,
+          "title": "Nu",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "model",
+        "E_MPa",
+        "nu"
+      ],
+      "title": "Material",
+      "type": "object"
+    },
+    "PrescribedDisplacementBC": {
+      "additionalProperties": false,
+      "properties": {
+        "components": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "minProperties": 1,
+          "propertyNames": {
+            "enum": [
+              "x",
+              "y",
+              "z"
+            ]
+          },
+          "title": "Components",
+          "type": "object"
+        },
+        "region_ref": {
+          "title": "Region Ref",
+          "type": "string"
+        },
+        "type": {
+          "const": "prescribed_displacement",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "region_ref",
+        "components"
+      ],
+      "title": "PrescribedDisplacementBC",
+      "type": "object"
+    },
+    "PressureLoad": {
+      "additionalProperties": false,
+      "properties": {
+        "magnitude": {
+          "title": "Magnitude",
+          "type": "number"
+        },
+        "region_ref": {
+          "title": "Region Ref",
+          "type": "string"
+        },
+        "type": {
+          "const": "pressure",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "region_ref",
+        "magnitude"
+      ],
+      "title": "PressureLoad",
+      "type": "object"
+    },
+    "Region": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "entity_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ],
+          "minLength": 1,
+          "title": "Entity Ids"
+        },
+        "entity_type": {
+          "enum": [
+            "cad_face",
+            "cad_edge",
+            "mesh_face",
+            "node_set",
+            "element_set"
+          ],
+          "title": "Entity Type",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "selection_method": {
+          "enum": [
+            "semantic_geometry_query",
+            "multimodal_reference",
+            "user_click",
+            "user_confirmed"
+          ],
+          "title": "Selection Method",
+          "type": "string"
+        },
+        "source_instruction": {
+          "title": "Source Instruction",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "confirmed",
+            "rejected"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "entity_type",
+        "entity_ids",
+        "selection_method",
+        "confidence",
+        "source_instruction",
+        "status"
+      ],
+      "title": "Region",
+      "type": "object"
+    },
+    "ResultantSurfaceForceLoad": {
+      "additionalProperties": false,
+      "properties": {
+        "region_ref": {
+          "title": "Region Ref",
+          "type": "string"
+        },
+        "type": {
+          "const": "resultant_surface_force",
+          "title": "Type",
+          "type": "string"
+        },
+        "vector": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Vector",
+          "type": "array"
+        }
+      },
+      "required": [
+        "type",
+        "region_ref",
+        "vector"
+      ],
+      "title": "ResultantSurfaceForceLoad",
+      "type": "object"
+    },
+    "SurfaceTractionLoad": {
+      "additionalProperties": false,
+      "properties": {
+        "region_ref": {
+          "title": "Region Ref",
+          "type": "string"
+        },
+        "type": {
+          "const": "surface_traction",
+          "title": "Type",
+          "type": "string"
+        },
+        "vector": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Vector",
+          "type": "array"
+        }
+      },
+      "required": [
+        "type",
+        "region_ref",
+        "vector"
+      ],
+      "title": "SurfaceTractionLoad",
+      "type": "object"
+    },
+    "Units": {
+      "additionalProperties": false,
+      "description": "Internal convention is mm-N-MPa; the IR only ever stores these.",
+      "properties": {
+        "force": {
+          "const": "N",
+          "title": "Force",
+          "type": "string"
+        },
+        "length": {
+          "const": "mm",
+          "title": "Length",
+          "type": "string"
+        },
+        "stress": {
+          "const": "MPa",
+          "default": "MPa",
+          "title": "Stress",
+          "type": "string"
+        }
+      },
+      "required": [
+        "length",
+        "force"
+      ],
+      "title": "Units",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "analysis": {
+      "$ref": "#/$defs/Analysis"
+    },
+    "assumptions": {
+      "items": {
+        "$ref": "#/$defs/Assumption"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    },
+    "bcs": {
+      "items": {
+        "discriminator": {
+          "mapping": {
+            "fixed_displacement": "#/$defs/FixedDisplacementBC",
+            "prescribed_displacement": "#/$defs/PrescribedDisplacementBC"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/FixedDisplacementBC"
+          },
+          {
+            "$ref": "#/$defs/PrescribedDisplacementBC"
+          }
+        ]
+      },
+      "title": "Bcs",
+      "type": "array"
+    },
+    "loads": {
+      "items": {
+        "discriminator": {
+          "mapping": {
+            "concentrated_force": "#/$defs/ConcentratedForceLoad",
+            "gravity": "#/$defs/GravityLoad",
+            "pressure": "#/$defs/PressureLoad",
+            "resultant_surface_force": "#/$defs/ResultantSurfaceForceLoad",
+            "surface_traction": "#/$defs/SurfaceTractionLoad"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/ResultantSurfaceForceLoad"
+          },
+          {
+            "$ref": "#/$defs/SurfaceTractionLoad"
+          },
+          {
+            "$ref": "#/$defs/PressureLoad"
+          },
+          {
+            "$ref": "#/$defs/GravityLoad"
+          },
+          {
+            "$ref": "#/$defs/ConcentratedForceLoad"
+          }
+        ]
+      },
+      "title": "Loads",
+      "type": "array"
+    },
+    "materials": {
+      "items": {
+        "$ref": "#/$defs/Material"
+      },
+      "title": "Materials",
+      "type": "array"
+    },
+    "regions": {
+      "items": {
+        "$ref": "#/$defs/Region"
+      },
+      "title": "Regions",
+      "type": "array"
+    },
+    "schema_version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "validation_status": {
+      "default": "unvalidated",
+      "enum": [
+        "unvalidated",
+        "valid",
+        "invalid"
+      ],
+      "title": "Validation Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "analysis",
+    "materials",
+    "regions",
+    "bcs",
+    "loads",
+    "assumptions"
+  ],
+  "title": "SimulationIntent",
+  "type": "object"
+}
