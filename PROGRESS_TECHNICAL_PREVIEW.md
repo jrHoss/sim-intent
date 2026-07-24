@@ -211,3 +211,221 @@ All values are SHA-256 over exact file bytes.
 - The accepted implementation and merge commits are recorded above.
 - The V1 baseline remains fixed at the annotated `demo-v1` tag target.
 - Task 17 and Task 18 have not started.
+
+---
+
+## Task 17 — Approve release architecture and decision-complete ADRs
+
+**Status:** COMPLETE — APPROVED FOR COMMIT.
+
+### Scope and takeover
+
+- Date: 2026-07-24, Europe/Berlin.
+- Branch: `task-17-architecture-adrs`.
+- Starting and current pre-review `HEAD`:
+  `61d659551da9da2629a33f88e8aa9e2a68d6a175`.
+- `HEAD` is merge pull request #2,
+  `Task 16: reconcile completion evidence`, with parents
+  `a8092dcfd688a47a882ab4246fa96331cd790475` and
+  `38ac82d142daf04318abb886d3233fd5812d4809`.
+- Initial worktree: clean.
+- Task 16 status was verified as `COMPLETE — MERGED`.
+- The accepted audit dependency exists at
+  [`docs/audits/product-v2-repository-audit-2026-07-23.md`](docs/audits/product-v2-repository-audit-2026-07-23.md)
+  and identifies itself as accepted evidence consolidation.
+- The annotated `demo-v1` tag remains peeled to
+  `154fe6ad0ac1336600d6ca5ec908d1b6c6e7401d`.
+- `CLAUDE.md`, `release-goal.md`, `TECHNICAL_PREVIEW_PLAN.md`, this progress
+  ledger, the preserved Product V2 roadmap, the accepted audit, and the
+  complete tracked repository structure were read before editing.
+- Task 17 changes architecture and evidence documents only. No frontend,
+  persistence, geometry, meshing, solver, product behavior, dependency,
+  lockfile, OCI, or CI implementation was started.
+
+### Human-approved decisions
+
+The human Task 17 decision on 2026-07-24 approved:
+
+- the active supported envelope unchanged, with formal change-control for any
+  expansion;
+- legacy `/` through Task 44, `/legacy` rollback, `/app-v2` preview, and
+  Task-45-only final cutover of `/` after all gates and human approval;
+- backend versioned aggregates as engineering truth and React limited to
+  drafts, layout, viewer lifecycle, and read-only server cache;
+- a local modular monolith with SQLite, local SHA-256 content-addressed
+  artifacts, and isolated parser/solver child processes;
+- SQLAlchemy 2 repositories, Alembic migrations, enabled SQLite foreign keys,
+  and explicit transaction ownership;
+- UUIDv4 domain IDs, immutable revisions/hashes, and content hashes kept
+  separate from domain identity;
+- `/api/v1`, integer schema versions, backend OpenAPI authority,
+  `openapi-typescript`/`openapi-fetch`, checked-in generation, and drift checks;
+- `uv`/`uv.lock`, npm/`package-lock.json`, and a versioned Debian-stable OCI
+  baseline, with actual versions and installation deferred to Task 18;
+- startup-fixed production, LIVE evaluation, REPLAY, and test modes, with
+  physical production exclusion of replay/fallback/fixture behavior;
+- fresh bounded no-network parser/Gmsh subprocesses, safe temporary
+  directories, deterministic cleanup, and one shared Gmsh slot initially;
+- one durable application-owned JobService and an isolated local no-network
+  CalculiX subprocess with immutable packages, argument vectors, limits,
+  cancellation, process-group cleanup, default concurrency one, and restart
+  reconciliation;
+- RFC 9457 `application/problem+json` with a stable application code,
+  correlation ID, retryability, and safe typed details;
+- capability states `supported`, `unsupported`, `unavailable`, `blocked`,
+  `insufficient_evidence`, and `stale`, with every non-`supported` state
+  failing closed and emitting no solver artifact or job;
+- per-aggregate single-writer migration, no dual writes, no volatile-session
+  migration, documented compatibility reads only, forward migrations with
+  pre-upgrade backup, and rollback by restoring the previous application and
+  database backup;
+- Release Owner Maein, subject to his acceptance; Technical Review Owner Ahmed
+  Yassin; a separate read-only reviewer before each task commit; and a named
+  Security Review Owner as a Task 18 approval entry gate.
+
+### Architecture evidence created
+
+The authoritative Task 17 index is
+[`docs/architecture/technical-preview/README.md`](docs/architecture/technical-preview/README.md).
+It links:
+
+- the release architecture;
+- state-writer and ownership matrix;
+- route matrix and deployment decision;
+- capability matrix;
+- migration and rollback rules;
+- Task 18–45 dependency traceability;
+- threat model;
+- risk register;
+- release requirement/evidence ownership;
+- nine accepted ADRs covering every Task 17 decision topic.
+
+The architecture set contains 19 Markdown files and 82,051 exact bytes. Its
+sorted manifest SHA-256 is
+`eaabc59d89f4f93dd732ea02854dbc99b9232b2ebae5dd05f0bfa599af3012ca`.
+The manifest algorithm sorts repository-relative paths, emits
+`<path><two spaces><lowercase file SHA-256>` with LF after every entry, and
+SHA-256 hashes the UTF-8 manifest without a byte-order mark.
+
+### Dependency and ownership validation
+
+- Tasks 18–45 were walked in order against their exact declared dependencies.
+- Every task consumes only earlier active tasks or approved pre-existing
+  evidence.
+- No active task depends on remote/customer runners, connected Abaqus
+  execution, HPC, classifiers, assemblies/contact, advanced physics,
+  multi-user collaboration, SaaS, or another post-preview capability.
+- The state matrix records 36 unique state rows. Every persistent state has one
+  authoritative persistence writer; transient React, viewer, and query-cache
+  state is explicitly non-authoritative.
+- The route matrix has one consistent timeline: Tasks 18–44 preserve legacy
+  `/`; Task 45 alone may approve V2 `/`; `/legacy` and `/app-v2` retain their
+  rollback/compatibility roles.
+- The migration walkthrough verifies relational, payload, generated-client,
+  aggregate-cutover, artifact-format, and route-cutover ownership with no dual
+  write or frontend migration.
+- The capability walkthrough verifies all six approved states, their recovery
+  boundary, and the rule that only `supported` may emit an artifact or job.
+- Release demonstration, supported-envelope, product-invariant, workstream,
+  and quantitative-gate matrices assign every active release requirement to
+  evidence-producing tasks and a final gate.
+
+### Manual review checklist
+
+- [x] Read all nine created ADRs completely after drafting.
+- [x] Read all ten created architecture, matrix, threat, risk, and index
+  documents completely after drafting.
+- [x] Confirmed every human decision records options, the selected
+  recommendation, consequences, and downstream blocking impact.
+- [x] Scanned the complete Task 17 architecture set for `TBD`, `TODO`, `FIXME`,
+  `XXX`, “to be decided,” “decision pending,” and “unresolved decision”; no
+  findings.
+- [x] Walked the development and final-gate route matrices end to end and
+  confirmed Task 44 cannot activate cutover.
+- [x] Walked all 36 state-owner rows and corrected artifact-output and
+  AuditEvent wording so temporary workers/aggregates do not appear to be
+  second persistence writers.
+- [x] Walked the migration sequence from legacy compatibility through
+  single-writer persistent ownership, payload migration, database backup,
+  route cutover, and rollback.
+- [x] Walked the capability matrix from input/import through setup, mapping,
+  artifact, local execution, results, Abaqus export-only validation, and all
+  explicit exclusions.
+- [x] Walked Tasks 18–45 end to end and confirmed no forward or post-preview
+  dependency.
+- [x] Verified every active release demonstration, envelope requirement,
+  product invariant, workstream, and quantitative gate has an owner.
+- [x] Validated every Markdown link and local file path in the architecture
+  set; no broken link.
+- [x] Verified all active task rows 18–45, all ADR-001–ADR-009 references, all
+  six capability-state references, route assertions, and risk/threat
+  cross-references.
+- [x] Reviewed the threat model against upload, parser/Gmsh, stale write,
+  mapping, artifact, solver, mode, egress, error, migration, and scope threats.
+- [x] Confirmed post-preview mentions are exclusions or risk controls, never
+  dependencies.
+- [x] Separate independent read-only review completed on 2026-07-24 with an
+  APPROVE verdict; see the independent-review record below.
+
+### Validation commands and results
+
+- `.\.venv\Scripts\python.exe scripts\check_env.py` → `ENV OK`.
+- `.\.venv\Scripts\python.exe -m pytest tests -x -q` → 317 passed, one optional
+  `ccx` test skipped, and the known pytest-cache permission warning, in 11.94
+  seconds.
+- `node --check app\static\app.js` and
+  `node --check app\static\audit.js` → passed.
+- Markdown-link validation over all 19 Task 17 files →
+  `MARKDOWN_LINKS_OK`.
+- Active dependency-row validation → `ACTIVE_TASK_ROWS_18_45_OK`.
+- Capability vocabulary validation → `CAPABILITY_STATES_OK`.
+- Route-gate validation → `ROUTE_GATE_ASSERTIONS_OK`.
+- State-row uniqueness validation → `STATE_ROWS_UNIQUE_OK count=36`.
+- Unresolved-marker scan → no findings.
+- Route and post-preview reference scans were manually reviewed; all matches
+  agree with the approved route timeline and exclusion boundary.
+- `git diff --check` → passed after Markdown hard-break and trailing-EOF
+  whitespace normalization.
+- Combined architecture/progress Markdown-link validation →
+  `ALL_DOCUMENT_LINKS_OK`.
+- Refined private-key/token, credential-assignment, and absolute-host-path scan
+  over all Task 17 documents → `SECRET_AND_HOST_PATH_SCAN_OK`.
+- Diff scope scan → `TASK17_SCOPE_SCAN_OK`; changed paths are only the Task 17
+  architecture directory and this progress ledger.
+- Task 18 artifact scan confirmed that `uv.lock`, `package.json`,
+  `package-lock.json`, `frontend/`, `Dockerfile`, and `.github/workflows/` were
+  not created.
+- The full regression created `.sim_intent_cache/`; its resolved path was
+  verified inside the repository and the test-generated directory was removed.
+  No generated cache remains.
+
+### Independent read-only review
+
+- Review date: 2026-07-24.
+- Reviewer: separate read-only Codex reviewer, independent of the Task 17
+  author.
+- Verdict: APPROVE.
+- Findings: no blocking, major, or minor findings.
+- All nine ADRs were confirmed decision-complete and mutually consistent.
+- All Tasks 18–45 were confirmed to have valid dependency coverage.
+- All 36 state rows were confirmed to have exactly one authoritative
+  persistence writer.
+- The six capability states were confirmed exact, non-overlapping, and
+  fail-closed.
+- The changed scope was confirmed limited to this progress ledger and the 19
+  architecture Markdown files.
+- Task 18 was confirmed not started.
+
+### Risks, blockers, and review state
+
+- `R-REV-01`: CLOSED. The required separate independent read-only Task 17
+  review completed on 2026-07-24 with an APPROVE verdict and no blocking,
+  major, or minor findings. It no longer blocks the Task 17 commit.
+- `R-SEC-01`: a named Security Review Owner is not yet assigned. This does not
+  block Task 17 drafting or independent technical review, but it blocks Task
+  18 approval.
+- Maein’s Release Owner assignment remains subject to his acceptance.
+- Architecture controls are decisions, not implementation evidence. Each
+  consuming task must prove its controls before claiming support.
+- No Task 17 commit or push has been created.
+- Task 18 has not started and is not authorized by these documents.
