@@ -1,14 +1,34 @@
-"""Environment gate (Task 1).
+"""Environment gate (Task 1; CalculiX reporting added by Task 18).
 
 Verifies the toolchain needed by the headless core: gmsh can mesh a solid
-into tetrahedra, and meshio / fastapi import cleanly.
+into tetrahedra, and meshio / fastapi import cleanly. Additionally reports
+whether the optional CalculiX ``ccx`` solver executable is present; its
+absence is an `unavailable` capability outside the supported container, never
+an environment-gate failure (ADR-007).
 
-Prints "ENV OK" on success, exits nonzero otherwise.
+Prints "ENV OK" as the final line on success, exits nonzero otherwise.
 """
 
+import shutil
+import subprocess
 import sys
 
 GMSH_TET4 = 4  # gmsh element type id for 4-node tetrahedron
+
+
+def report_ccx() -> None:
+    executable = shutil.which("ccx")
+    if not executable:
+        print("CCX UNAVAILABLE (optional; solver capability reports unavailable)")
+        return
+    try:
+        completed = subprocess.run(
+            [executable, "-v"], capture_output=True, text=True, timeout=10
+        )
+        banner = " ".join((completed.stdout + completed.stderr).split()) or "unknown version"
+    except (OSError, subprocess.TimeoutExpired):
+        banner = "version query failed"
+    print(f"CCX AVAILABLE: {banner}")
 
 
 def main() -> int:
@@ -33,6 +53,7 @@ def main() -> int:
     finally:
         gmsh.finalize()
 
+    report_ccx()
     print("ENV OK")
     return 0
 

@@ -1,0 +1,196 @@
+# Task 18 — bounded Linux CI (ADR-005).
+#
+# Pinning policy (Task 18 correction 9):
+#   - every external action is referenced by full commit SHA;
+#   - uv, Node, gitleaks, and syft are exact versions (binaries verified by
+#     SHA-256 where downloaded);
+#   - the container base image is pinned by immutable digest inside
+#     Containerfile.
+# ubuntu-24.04 is only the hosted runner label. Release evidence comes from
+# the pinned container job; host jobs are bounded functional checks whose
+# runner-level apt packages are a convenience, not release evidence.
+#
+# LIVE evaluation is never run in CI (no provider credentials in CI).
+
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+env:
+  UV_VERSION: "0.11.32"
+
+jobs:
+  lock-and-drift:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.32"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Lock is current with pyproject.toml
+        run: uv lock --check
+      - name: Clean frozen install
+        run: uv sync --frozen
+      - name: requirements.txt drift (byte-exact)
+        run: uv run python scripts/export_requirements.py --check
+
+  backend-suite:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.32"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Runner native libraries for gmsh (non-evidence convenience)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglu1-mesa libx11-6 libxcursor1 libxext6 libxfixes3 \
+            libxft2 libxinerama1 libxrender1 libfontconfig1 libgomp1
+      - name: Frozen install
+        run: uv sync --frozen
+      - name: Environment gate
+        run: uv run python scripts/check_env.py
+      - name: Full backend suite (per-test timeout 120 s)
+        run: uv run pytest tests -q
+
+  replay-eval:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.32"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Runner native libraries for gmsh (non-evidence convenience)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglu1-mesa libx11-6 libxcursor1 libxext6 libxfixes3 \
+            libxft2 libxinerama1 libxrender1 libfontconfig1 libgomp1
+      - name: Frozen install
+        run: uv sync --frozen
+      - name: Deterministic REPLAY evaluation (labeled REPLAY, never LIVE)
+        run: uv run python eval/run.py --replay
+      - name: Restore frozen tracked replay reports
+        run: git checkout -- eval/results-replay.md eval/results-replay.json
+
+  container:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build runtime target
+        run: docker build --target runtime -t sim-intent:runtime -f Containerfile .
+      - name: Build ci target
+        run: docker build --target ci -t sim-intent:ci -f Containerfile .
+      - name: Production image excludes eval/tests/fixtures/examples
+        run: |
+          docker run --rm sim-intent:runtime bash -c '
+            set -e
+            for p in eval tests fixtures examples docs .github; do
+              if [ -e "/app/$p" ]; then echo "PRESENT(FAIL): $p"; exit 1; fi
+            done
+            found=$(find /app -name "*fallback*" -o -name "*replay*" | wc -l)
+            test "$found" = "0"
+            echo "production exclusion OK"'
+      - name: Production image imports, starts, and hides fallback routes
+        run: |
+          docker run --rm sim-intent:runtime python - <<'PY'
+          import threading, time, urllib.request, urllib.error, json
+          import uvicorn
+          import app.server as server_module
+          assert server_module.app.state.runtime_mode.value == "production"
+          server = uvicorn.Server(uvicorn.Config(server_module.app, host="127.0.0.1", port=8000, log_level="error"))
+          threading.Thread(target=server.run, daemon=True).start()
+          for _ in range(50):
+              time.sleep(0.2)
+              try:
+                  body = json.loads(urllib.request.urlopen("http://127.0.0.1:8000/healthz").read())
+                  break
+              except Exception:
+                  pass
+          assert body == {"status": "ok", "mode": "production"}, body
+          root = urllib.request.urlopen("http://127.0.0.1:8000/").read().decode().lower()
+          assert "<html" in root
+          for method, path in (("GET", "/session/x/fallback-cases"), ("POST", "/session/x/fallback/case")):
+              req = urllib.request.Request("http://127.0.0.1:8000" + path, method=method)
+              try:
+                  urllib.request.urlopen(req)
+                  raise AssertionError(path + " reachable")
+              except urllib.error.HTTPError as e:
+                  assert e.code == 404, (path, e.code)
+          server.should_exit = True
+          print("production startup checks OK")
+          PY
+      - name: Environment gate inside container
+        run: docker run --rm sim-intent:ci python scripts/check_env.py
+      - name: Full suite inside container (git-metadata self-test deselected)
+        run: |
+          docker run --rm sim-intent:ci python -m pytest tests -q \
+            --deselect tests/test_eval.py::test_raw_fixture_hashes_match_git_archive_and_reject_different_bytes
+      - name: Deterministic REPLAY evaluation inside container
+        run: docker run --rm sim-intent:ci python eval/run.py --replay
+      - name: Record image digests
+        run: docker image inspect sim-intent:runtime sim-intent:ci --format '{{.Id}}'
+      - name: SBOM from runtime image (pinned syft, checksum-verified)
+        run: |
+          curl -sSL -o syft.tar.gz \
+            https://github.com/anchore/syft/releases/download/v1.49.0/syft_1.49.0_linux_amd64.tar.gz
+          echo "7aa2f03ee92739cf643279ba3990548b9925d4e22cae13f46831ee62821147fe  syft.tar.gz" | sha256sum -c -
+          tar -xzf syft.tar.gz syft
+          # Full file metadata so the source-built /usr/local/bin/ccx appears
+          # in the SBOM with its SHA-256.
+          SYFT_FILE_METADATA_SELECTION=all ./syft -q sim-intent:runtime -o cyclonedx-json=sbom-runtime.cdx.json
+          sha256sum sbom-runtime.cdx.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-runtime
+          path: sbom-runtime.cdx.json
+
+  frontend-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.14.0"
+      - name: Legacy JavaScript syntax
+        run: |
+          node --check app/static/app.js
+          node --check app/static/audit.js
+
+  hygiene:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Whitespace check on branch changes
+        run: |
+          if [ -n "${{ github.base_ref }}" ]; then
+            git fetch -q origin "${{ github.base_ref }}"
+            git diff --check "origin/${{ github.base_ref }}...HEAD"
+          else
+            git diff --check HEAD~1..HEAD || true
+          fi
+      - name: Secret scan (pinned gitleaks, checksum-verified)
+        run: |
+          curl -sSL -o gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks detect --source . --no-banner --redact

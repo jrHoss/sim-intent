@@ -1,0 +1,39 @@
+# Task 18 — reproducible Python environment definition.
+#
+# `uv.lock` is the authoritative direct and transitive dependency lock
+# (ADR-005). `requirements.txt` is a generated compatibility export; see
+# docs/environment.md for the regeneration command and update procedure.
+# Direct versions below are pinned exactly to the technical-preview baseline
+# that produced the recorded test and evaluation evidence.
+
+[project]
+name = "sim-intent"
+version = "0.18.0"
+description = "Simulation Copilot technical preview backend (sim-intent)"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "fastapi==0.139.2",
+    "gmsh==4.15.2",
+    "meshio==5.3.5",
+    "numpy==2.5.1",
+    "openai==2.46.0",
+    "pydantic==2.13.4",
+    "uvicorn==0.51.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx==0.28.1",
+    "pytest==9.1.1",
+    "pytest-timeout==2.4.0",
+]
+
+[tool.uv]
+# Flat multi-package repository (app/, geom/, ir/, ground/, llm/, export/,
+# eval/); the application itself is not built or installed as a package.
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# D5: per-test hang protection. CI job timeout-minutes is the outer bound.
+timeout = 120

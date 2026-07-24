@@ -9,10 +9,17 @@ From the repository root in PowerShell:
 ```powershell
 python eval/run.py
 python eval/run.py --replay
+$env:SIM_INTENT_MODE = "replay"
 .\.venv\Scripts\python.exe -m uvicorn app.server:app --host 127.0.0.1 --port 8765
 ```
 
 The first command is the required live evaluation. It requires `OPENAI_API_KEY` in the server environment and fails clearly otherwise. Never paste or store the key in repository files. The second command is deterministic replay and is always labeled REPLAY.
+
+Since Task 18, runtime modes are startup-fixed (see `docs/environment.md`).
+This demonstration loads checked-in REPLAY fallback cases, so the server must
+be started with `SIM_INTENT_MODE=replay` as shown; without it the server
+defaults to `production`, where the fallback routes and fixtures do not
+exist. Live interpretation remains available and labeled LIVE in replay mode.
 
 Open `http://127.0.0.1:8765/`. Use:
 

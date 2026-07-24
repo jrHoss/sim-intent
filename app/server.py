@@ -29,6 +29,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.runtime_mode import RuntimeMode, resolve_runtime_mode
 from app.session import (
     InvalidAssumptionTransitionError,
     InvalidRegionTransitionError,
@@ -356,8 +357,19 @@ class ModelStore:
         raise ValueError(f"unsupported stored model kind: {record.kind}")
 
 
-def create_app(storage_dir: str | Path = DEFAULT_MODEL_DIR) -> FastAPI:
+def create_app(
+    storage_dir: str | Path = DEFAULT_MODEL_DIR,
+    *,
+    mode: RuntimeMode | None = None,
+) -> FastAPI:
+    # Task 18 (ADR-005): the runtime mode is resolved exactly once per
+    # constructed application. `resolved_mode` is the immutable closure value
+    # that every mode consumer (route registration, /healthz, provider-error
+    # capability hints) reads; `app.state.runtime_mode` is a diagnostic copy
+    # only, and mutating it after construction changes nothing.
+    resolved_mode = resolve_runtime_mode() if mode is None else mode
     app = FastAPI(title="sim-intent viewer backend")
+    app.state.runtime_mode = resolved_mode
     app.state.model_store = ModelStore(storage_dir)
     app.state.session_store = SelectionSessionStore()
     app.state.viewer_events = ViewerEventBroker()
@@ -368,6 +380,11 @@ def create_app(storage_dir: str | Path = DEFAULT_MODEL_DIR) -> FastAPI:
     @app.get("/", include_in_schema=False)
     async def viewer_frontend() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/healthz")
+    async def healthz() -> dict[str, str]:
+        # Safe infrastructure identity only: no secrets, paths, or env dumps.
+        return {"status": "ok", "mode": resolved_mode.value}
 
     @app.post("/models", status_code=201)
     async def upload_model(
@@ -505,7 +522,10 @@ def create_app(storage_dir: str | Path = DEFAULT_MODEL_DIR) -> FastAPI:
                     "code": exc.code,
                     "message": exc.safe_message,
                     "mode": "LIVE",
-                    "fallback_available": True,
+                    # Honest capability hint: fallback routes exist only in
+                    # replay/test modes (Task 18); provider failure never
+                    # substitutes REPLAY output in any mode.
+                    "fallback_available": resolved_mode.registers_fallback_routes,
                 },
             ) from exc
         except (OrchestrationError, ValueError) as exc:
@@ -585,63 +605,70 @@ def create_app(storage_dir: str | Path = DEFAULT_MODEL_DIR) -> FastAPI:
             notices=notices,
         )
 
-    def fallback_payload(session_id: str, case_id: str) -> tuple[dict[str, Any], SimulationIntent]:
-        if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", case_id) is None:
-            raise HTTPException(status_code=404, detail="fallback case not found")
-        _, inventory, _ = step_geometry(session_id)
-        path = Path(__file__).resolve().parents[1] / "eval" / "fallback" / f"{case_id}.json"
-        if not path.is_file():
-            raise HTTPException(status_code=404, detail="fallback case not found")
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if payload.get("mode") != "REPLAY" or payload.get("model_sha256") != inventory.file_sha256:
-                raise ValueError("fallback model hash or mode does not match")
-            Interpretation.model_validate(payload["typed_interpreter_output"], strict=True)
-            intent = SimulationIntent.model_validate(payload["proposed_ir"], strict=True)
-            if any(region.status != "proposed" for region in intent.regions):
-                raise ValueError("fallback regions must remain proposed")
-        except (KeyError, ValueError, json.JSONDecodeError) as exc:
-            raise HTTPException(status_code=422, detail=f"fallback data is invalid: {exc}") from exc
-        return payload, intent
+    if resolved_mode.registers_fallback_routes:
+        # Task 18 (ADR-005): REPLAY fallback routes exist only in the replay
+        # and test modes. In production and live_evaluation they are never
+        # registered, so these paths return 404 and the checked-in
+        # `eval/fallback/` fixtures are unreachable; the production image
+        # additionally omits the eval tree entirely.
 
-    @app.get("/session/{session_id}/fallback-cases")
-    async def list_session_fallback_cases(session_id: str) -> dict[str, Any]:
-        _, inventory, _ = step_geometry(session_id)
-        directory = Path(__file__).resolve().parents[1] / "eval" / "fallback"
-        case_ids = []
-        for path in sorted(directory.glob("*.json")):
+        def fallback_payload(session_id: str, case_id: str) -> tuple[dict[str, Any], SimulationIntent]:
+            if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", case_id) is None:
+                raise HTTPException(status_code=404, detail="fallback case not found")
+            _, inventory, _ = step_geometry(session_id)
+            path = Path(__file__).resolve().parents[1] / "eval" / "fallback" / f"{case_id}.json"
+            if not path.is_file():
+                raise HTTPException(status_code=404, detail="fallback case not found")
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                continue
-            if payload.get("mode") == "REPLAY" and payload.get("model_sha256") == inventory.file_sha256:
-                case_ids.append(payload.get("case_id"))
-        return {"mode": "REPLAY", "model_id": session_id, "case_ids": case_ids}
+                if payload.get("mode") != "REPLAY" or payload.get("model_sha256") != inventory.file_sha256:
+                    raise ValueError("fallback model hash or mode does not match")
+                Interpretation.model_validate(payload["typed_interpreter_output"], strict=True)
+                intent = SimulationIntent.model_validate(payload["proposed_ir"], strict=True)
+                if any(region.status != "proposed" for region in intent.regions):
+                    raise ValueError("fallback regions must remain proposed")
+            except (KeyError, ValueError, json.JSONDecodeError) as exc:
+                raise HTTPException(status_code=422, detail=f"fallback data is invalid: {exc}") from exc
+            return payload, intent
 
-    @app.post("/session/{session_id}/fallback/{case_id}", response_model=InterpretResponse)
-    async def load_session_fallback(session_id: str, case_id: str) -> InterpretResponse:
-        payload, intent = fallback_payload(session_id, case_id)
-        instruction = next(
-            (region.source_instruction for region in intent.regions),
-            "Apply whole-model gravity.",
-        )
-        saved, notices = save_proposal(
-            session_id,
-            intent,
-            source_instruction=instruction,
-        )
-        grounding = GroundingBatch.model_validate_json(
-            json.dumps(payload["final_grounding"]), strict=True
-        )
-        await publish_grounding(grounding)
-        return InterpretResponse(
-            mode="REPLAY", fallback=True, state="proposed",
-            instruction=instruction,
-            interpretation=payload["typed_interpreter_output"], grounding=grounding,
-            intent=saved, clarification_count=1 if payload.get("clarification_used") else 0,
-            model_name="checked-in typed responses",
-            notices=notices,
-        )
+        @app.get("/session/{session_id}/fallback-cases")
+        async def list_session_fallback_cases(session_id: str) -> dict[str, Any]:
+            _, inventory, _ = step_geometry(session_id)
+            directory = Path(__file__).resolve().parents[1] / "eval" / "fallback"
+            case_ids = []
+            for path in sorted(directory.glob("*.json")):
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    continue
+                if payload.get("mode") == "REPLAY" and payload.get("model_sha256") == inventory.file_sha256:
+                    case_ids.append(payload.get("case_id"))
+            return {"mode": "REPLAY", "model_id": session_id, "case_ids": case_ids}
+
+        @app.post("/session/{session_id}/fallback/{case_id}", response_model=InterpretResponse)
+        async def load_session_fallback(session_id: str, case_id: str) -> InterpretResponse:
+            payload, intent = fallback_payload(session_id, case_id)
+            instruction = next(
+                (region.source_instruction for region in intent.regions),
+                "Apply whole-model gravity.",
+            )
+            saved, notices = save_proposal(
+                session_id,
+                intent,
+                source_instruction=instruction,
+            )
+            grounding = GroundingBatch.model_validate_json(
+                json.dumps(payload["final_grounding"]), strict=True
+            )
+            await publish_grounding(grounding)
+            return InterpretResponse(
+                mode="REPLAY", fallback=True, state="proposed",
+                instruction=instruction,
+                interpretation=payload["typed_interpreter_output"], grounding=grounding,
+                intent=saved, clarification_count=1 if payload.get("clarification_used") else 0,
+                model_name="checked-in typed responses",
+                notices=notices,
+            )
 
     def ensure_uploaded_model(session_id: str) -> None:
         # Session ids are the deterministic uploaded-model ids.  Looking the

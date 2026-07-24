@@ -1,0 +1,12 @@
+# Keep the build context minimal and deterministic. The runtime target
+# additionally copies only explicit application paths; this file must NOT
+# exclude eval/, tests/, or fixtures/ because the ci target requires them.
+.git
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+.sim_intent_cache
+*.cache
+docs/task9-viewer.mp4
