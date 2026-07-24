@@ -1,29 +1,86 @@
-# CLAUDE.md — sim-intent (sprint prototype)
+# CLAUDE.md — sim-intent technical preview
 
-Prototype per sprint-goal.md (Maien's scope): a grounding layer that turns natural-language + click/image engineering intent into a solver-neutral IR with explicit entity IDs, reviewed by the engineer, exported to one solver format. NOT an FEA automation system.
+## Authority and release state
 
-Work through EXECUTION_PLAN.md tasks strictly in order. Do not start a task until the previous task's DoD command passes.
+Repository work follows this authority order:
 
-## Scope guards (from sprint-goal.md, enforce against yourself)
-IN: static structural intent only; linear elastic isotropic; STEP + INP/STL ingestion; face/edge/set selection; fixed/vector displacement BCs; concentrated force, surface traction, pressure, gravity; one export adapter; confirmation before export.
-OUT (do not build, even if it seems easy): mesh generation/repair, solver execution infrastructure, convergence diagnosis, result validation, contact, nonlinearity, thermal, dynamics, point-cloud reconstruction. If a task seems to need one of these, stop and re-read the task.
+1. `release-goal.md` is the authoritative technical-preview release definition.
+2. `TECHNICAL_PREVIEW_PLAN.md` is the active execution plan. Execute its tasks in order and do not begin a task until its dependencies and the preceding gate are complete.
+3. `PROGRESS_TECHNICAL_PREVIEW.md` is the evidence ledger for Tasks 16–45.
+4. `docs/roadmap/PRODUCT_V2_ROADMAP.md` is preserved as non-blocking future direction. It does not authorize work, expand the active release, or override the technical-preview plan.
+5. `sprint-goal.md`, `EXECUTION_PLAN.md`, and `PROGRESS.md` are the frozen historical V1 scope, plan, and evidence.
 
-## Standing rules
-1. The LLM NEVER emits entity IDs. It composes typed queries from the deterministic query library; the query engine returns IDs. Any code path where model output contains a face/node/element ID directly is a bug.
-2. Every Region in the IR carries: entity_ids, selection_method, confidence, source_instruction (verbatim), status(proposed|confirmed|rejected). Every IR carries: units block, assumptions[], validation_status. No exceptions, no optional-for-now.
-3. Nothing exports until every region status == confirmed. The confirmation gate is architectural, not UI polish.
-4. Ambiguity is a feature: when candidate score margin < threshold, return a clarification with candidate entity sets attached. Never auto-pick silently.
-5. Units: mm-N-MPa internally. LLM emits value+unit strings; Python converts. "5 kN across the face" = resultant force; "2 MPa on" = pressure; per-node values are always converted to totals in the IR. This disambiguation lives in ONE module (semantics.py), tested exhaustively.
-6. Deterministic layer gets 100% test pass, no flaky tolerance. LLM layer is tested with mocked responses in CI; live API only in smoke scripts.
-7. Never modify tests/fixtures/. bracket_expected.json defines ground truth.
-8. Frontend is served by FastAPI as static files; one interface contract with backend: GET /model/{id}/gltf, GET /model/{id}/inventory, POST /highlight {entity_ids, style}, click events POST /select {entity_id}. Freeze this contract at Task 8; additive changes only.
-9. Dependencies: gmsh, meshio, fastapi, uvicorn, pydantic v2, openai, numpy, scipy, typer, rich, pytest, httpx. Frontend: three.js via CDN, vanilla JS, no build step, no npm. Ask before adding anything.
-10. Every module created in a task gets its test file in the same task.
-11. Known fixture traps (deliberate): the bracket's fillet (face 3) is surface-type Cylinder; "find cylindrical faces" must not equal "find holes". A hole = cylindrical face subtending a full circle with free interior (adjacency check) and bounded length. The wall hole (face 10) differs from bolt holes (11,12) in both radius and axis; radius clustering + axis grouping must separate them.
+The completed V1 prototype is frozen at commit
+`154fe6ad0ac1336600d6ca5ec908d1b6c6e7401d` and local annotated tag
+`demo-v1`. Do not move or recreate that tag at another commit.
 
-## Environment quirks (verified in sandbox)
-- pip gmsh needs apt libglu1-mesa on headless Ubuntu.
-- gmsh OCC: importShapes -> per-face getType/getMass/getBoundingBox/getNormal all work; cylinder radius: derive from curvature or fit, bbox span is an approximation only.
-- Face tags are stable across reimports of the same STEP file; they are NOT stable across regeneration of the geometry. Cache inventories keyed by file hash.
-- Tessellation for the viewer: mesh each CAD face's surface triangulation separately (gmsh 2D mesh per face) and export one glTF node per face named face_{tag}; then three.js raycaster picking returns the face tag from the node name for free. Do not export one merged mesh.
-- meshio reads Abaqus INP meshes including ELSETs/NSETs; preserve set names as first-class regions for FE-mesh inputs.
+Only the currently approved task is in scope. Never begin the next task
+opportunistically.
+
+## Task execution protocol
+
+For every technical-preview task:
+
+1. Read this file, `release-goal.md`, `TECHNICAL_PREVIEW_PLAN.md`, the relevant approved decisions, and `PROGRESS_TECHNICAL_PREVIEW.md`.
+2. Verify the exact branch, worktree, baseline, declared dependencies, and previous-task evidence before editing.
+3. Work on a dedicated task branch and change only the task’s approved scope.
+4. Preserve one authoritative owner for every model, unit, geometry, setup, mapping, artifact, job, and result contract. Extend or wrap existing owners; do not create parallel truth.
+5. Add focused tests with implementation work, then run focused, affected-phase, full-regression, formatting, integrity, and security checks required by the task.
+6. Record commands, versions, hashes, results, risks, and limitations in `PROGRESS_TECHNICAL_PREVIEW.md`.
+7. Obtain independent read-only review before the final task commit.
+8. Stop and report a blocker instead of redefining a dependency, gate, supported capability, or Definition of Done.
+
+Do not commit, merge, tag, or push beyond the authority granted for the current
+task. Protected-branch changes require review. Never push a tag unless the user
+explicitly authorizes it.
+
+## Governance and CI expectations
+
+- Preserve `main` and the V1 baseline; technical-preview work merges through reviewed task changes.
+- Keep production, LIVE evaluation, REPLAY, test, and fixture behavior visibly and configurationally distinct.
+- Required task evidence includes focused tests, affected integration tests, the complete Python regression suite, applicable browser/JavaScript checks, `git diff --check`, fixture and artifact integrity, dependency review, secret scanning, and scope scans.
+- CI must use pinned environments and bounded per-test and suite timeouts once Task 18 establishes them. A hang, skipped required check, replay substituted for LIVE, or unreviewed baseline change blocks progress.
+- `tests/fixtures/` and the frozen 15-case evaluation corpus are immutable baseline evidence. Never rebaseline them to hide a failure.
+- No dependency, service, persistent record, API, or artifact may be consumed before its creating task is complete.
+- The final task commit requires a reviewable diff, recorded evidence, no unintended generated files, and a clean worktree.
+
+## Preserved V1 safety invariants
+
+1. The LLM never emits, guesses, or directly selects CAD, mesh, face, edge, node, element, NSET, or ELSET IDs. It composes typed requests; deterministic code or verified viewer interaction resolves IDs.
+2. Every region retains entity IDs, selection method, confidence, verbatim source instruction, and `proposed|confirmed|rejected` status.
+3. Proposed, rejected, stale, or otherwise unconfirmed regions cannot reach mesh-bound setup, export, or solve.
+4. Ambiguity returns candidates and a clarification. It is never silently auto-selected.
+5. `ground/semantics.py` remains the sole current mm-N-MPa conversion and load-semantics owner until an approved task evolves it.
+6. Backend validation and confirmation gates are authoritative; frontend state and chat text are not engineering truth.
+7. Deterministic code is fully tested. Model behavior is mocked in CI; LIVE provider calls remain separate and explicitly labeled.
+8. The frozen legacy viewer contracts remain additive-only compatibility contracts until an approved task changes the route policy.
+9. No fixture name, expected entity ID, frozen phrase, or replay result may enter production logic.
+10. Provider failure must preserve project/setup state, and REPLAY must never be represented as LIVE.
+
+## Active scope guards
+
+The technical preview is limited to the supported envelope in
+`release-goal.md` and `TECHNICAL_PREVIEW_PLAN.md`: single-solid STEP or
+supported first-order solid INP input, linear-elastic isotropic small-
+displacement static structural analysis, explicit engineer review, automatic
+STEP tetrahedral meshing, existing INP meshes without remeshing, isolated local
+CalculiX execution, deterministic checks/results, and export-only Abaqus
+validation.
+
+Meshing, persistence, solver execution, results, and packaging are now permitted
+only when their numbered technical-preview tasks become active. Their presence
+in the release goal is not permission to implement them early.
+
+Post-preview capabilities remain non-blocking and out of scope: customer-side
+or remote runners, connected Abaqus execution, HPC, classifiers, assemblies,
+contact, shells, beams, connectors, composites, nonlinear or advanced physics,
+multi-user collaboration, and SaaS.
+
+## Baseline environment facts
+
+- Python dependencies currently come from `requirements.txt` and are not locked; Task 18 owns locking and the supported Linux package/container contract.
+- `gmsh` on headless Linux requires the documented GLU system library.
+- Gmsh OCC face tags are stable only for identical source bytes, not regenerated geometry; current inventories are keyed by file hash.
+- Current viewer tessellation preserves one glTF node per CAD face named `face_{tag}`.
+- `meshio` reads Abaqus INP meshes and existing NSET/ELSET names remain first-class regions.
+- The current V1 CalculiX adapter emits an appendable fragment; no production solver worker or result pipeline exists at the frozen baseline.
