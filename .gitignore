@@ -4,3 +4,5 @@ node_modules/
 .pytest_cache/
 .venv/
 *.cache
+.sim_intent_data/
+.sim_intent_cache/

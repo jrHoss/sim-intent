@@ -122,6 +122,28 @@ secrets, paths, or environment contents.
 
 ## Clean installation
 
+### Local durable data
+
+Project metadata and source blobs use one local data root. Set
+`SIM_INTENT_DATA_ROOT` to an absolute path for an explicit deployment or test
+override. Without it, the stable default is `sim-intent` beneath
+`LOCALAPPDATA` on Windows or beneath `XDG_DATA_HOME` (falling back to
+`~/.local/share`) on other platforms. The default is independent of the
+process working directory. SQLite is stored as `sim-intent.sqlite3` and blobs
+under `blobs/` within that root. Persistence is opened and migrated during
+FastAPI lifespan startup and its SQLAlchemy engine is disposed at shutdown.
+Exactly one application process may own a data root at a time. Before creating
+or touching the target root, startup canonicalizes its absolute path, hashes
+that identity with SHA-256, and takes an exclusive cross-platform
+operating-system lock named `<hash>.lock` under the dedicated
+`sim-intent-data-root-locks` directory in the platform temporary directory.
+The lock is held for the complete application lifespan. A second process must
+use a different absolute `SIM_INTENT_DATA_ROOT` or wait for the owner to exit.
+The external lock file can remain after a crash; operating-system lock
+ownership, rather than file existence, determines availability. Thread-level
+blob publication and cleanup are additionally serialized by an in-process
+lock, but that lock is not the cross-process ownership mechanism.
+
 ### Supported Linux container (release environment)
 
 ```bash
