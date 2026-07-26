@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import mimetypes
+import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -12,6 +15,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Text,
     String,
     UniqueConstraint,
     create_engine,
@@ -31,6 +35,8 @@ from sqlalchemy.orm import (
 )
 
 from app.blob_store import BlobStore
+from ir.schema import SimulationIntent
+from ir.versioning import dump_simulation_intent, load_simulation_intent
 
 
 def uuid4_string() -> str:
@@ -48,6 +54,14 @@ class PersistenceNotFoundError(LookupError):
 
 
 class PersistenceConflictError(RuntimeError):
+    pass
+
+
+class SetupRevisionConflictError(PersistenceConflictError):
+    pass
+
+
+class SetupRequestConflictError(PersistenceConflictError):
     pass
 
 
@@ -90,9 +104,68 @@ class ModelVersion(Base):
     model: Mapped[Model] = relationship(back_populates="versions")
 
 
+class SimulationSetup(Base):
+    __table_args__ = (
+        UniqueConstraint("project_id", "create_request_id", name="uq_project_setup_request_id"),
+    )
+    __tablename__ = "simulation_setups"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4_string)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    model_id: Mapped[str] = mapped_column(ForeignKey("models.id", ondelete="CASCADE"), nullable=False)
+    model_version_id: Mapped[str] = mapped_column(ForeignKey("model_versions.id", ondelete="CASCADE"), nullable=False)
+    current_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    create_request_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    create_request_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SetupRevision(Base):
+    __tablename__ = "setup_revisions"
+    __table_args__ = (
+        UniqueConstraint("setup_id", "revision", name="uq_setup_revision_number"),
+        UniqueConstraint("setup_id", "request_id", name="uq_setup_request_id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4_string)
+    setup_id: Mapped[str] = mapped_column(ForeignKey("simulation_setups.id", ondelete="CASCADE"), nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_revision_id: Mapped[str | None] = mapped_column(ForeignKey("setup_revisions.id", ondelete="CASCADE"), nullable=True)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    intent_json: Mapped[str] = mapped_column(Text, nullable=False)
+    intent_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    mutation_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    mutation_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 @event.listens_for(ModelVersion, "before_update")
 def _immutable_model_version(*_args) -> None:
     raise ValueError("ModelVersion records are immutable")
+
+
+@event.listens_for(SetupRevision, "before_update")
+def _immutable_setup_revision(*_args) -> None:
+    raise ValueError("SetupRevision records are immutable")
+
+
+def canonical_intent(intent: SimulationIntent) -> tuple[str, str]:
+    canonical = json.dumps(
+        dump_simulation_intent(intent),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return canonical, hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def canonical_fingerprint(payload: dict) -> str:
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+_SETUP_LOCKS: dict[str, threading.RLock] = {}
+_SETUP_LOCKS_GUARD = threading.Lock()
 
 
 def create_sqlite_engine(database_url: str) -> Engine:
@@ -119,6 +192,8 @@ class Persistence:
         self.blobs = blobs
         self._after_blob_publish = after_blob_publish
         self.sessions = sessionmaker(engine, expire_on_commit=False)
+        with _SETUP_LOCKS_GUARD:
+            self._setup_lock = _SETUP_LOCKS.setdefault(str(engine.url), threading.RLock())
 
     @contextmanager
     def transaction(self) -> Iterator[Session]:
@@ -225,6 +300,200 @@ class Persistence:
     def get_version(self, version_id: str) -> ModelVersion | None:
         with self.sessions() as session:
             return session.get(ModelVersion, version_id)
+
+    def create_setup(
+        self, *, project_id: str, model_id: str, model_version_id: str,
+        intent: SimulationIntent, request_id: str,
+    ) -> tuple[SimulationSetup, SetupRevision]:
+        canonical, intent_digest = canonical_intent(intent)
+        create_digest = canonical_fingerprint({
+            "model_id": model_id,
+            "model_version_id": model_version_id,
+            "intent_sha256": intent_digest,
+        })
+        with self._setup_lock, self.transaction() as session:
+            replay = session.scalar(select(SimulationSetup).where(
+                SimulationSetup.project_id == project_id,
+                SimulationSetup.create_request_id == request_id,
+            ))
+            if replay is not None:
+                if replay.create_request_sha256 != create_digest:
+                    raise SetupRequestConflictError("request ID reused with different setup")
+                revision = session.scalar(select(SetupRevision).where(
+                    SetupRevision.setup_id == replay.id,
+                    SetupRevision.revision == 1,
+                ))
+                if revision is None:
+                    raise RuntimeError("setup creation revision is missing")
+                return replay, revision
+            project = session.get(Project, project_id)
+            model = session.get(Model, model_id)
+            version = session.get(ModelVersion, model_version_id)
+            if project is None:
+                raise PersistenceNotFoundError("project")
+            if model is None:
+                raise PersistenceNotFoundError("model")
+            if version is None:
+                raise PersistenceNotFoundError("model version")
+            if model.project_id != project_id or version.model_id != model_id:
+                raise PersistenceConflictError("invalid setup lineage")
+            now = datetime.now(timezone.utc)
+            setup = SimulationSetup(
+                project_id=project_id, model_id=model_id,
+                model_version_id=model_version_id, current_revision=None,
+                create_request_id=request_id,
+                create_request_sha256=create_digest,
+                created_at=now, updated_at=now,
+            )
+            session.add(setup)
+            session.flush()
+            revision = self._new_revision(
+                setup, None, intent, "create", request_id,
+                canonical=canonical, digest=intent_digest,
+                mutation_digest=create_digest,
+            )
+            session.add(revision)
+            session.flush()
+            setup.current_revision = 1
+            session.flush()
+            return setup, revision
+
+    def list_setups(self, project_id: str) -> list[SimulationSetup]:
+        with self.sessions() as session:
+            if session.get(Project, project_id) is None:
+                raise PersistenceNotFoundError("project")
+            return list(session.scalars(select(SimulationSetup).where(
+                SimulationSetup.project_id == project_id
+            ).order_by(SimulationSetup.created_at, SimulationSetup.id)))
+
+    def get_setup(self, setup_id: str) -> SimulationSetup | None:
+        with self.sessions() as session:
+            return session.get(SimulationSetup, setup_id)
+
+    def get_revision(self, setup_id: str, revision: int) -> SetupRevision | None:
+        with self.sessions() as session:
+            return session.scalar(select(SetupRevision).where(
+                SetupRevision.setup_id == setup_id,
+                SetupRevision.revision == revision,
+            ))
+
+    def get_revision_by_request(self, setup_id: str, request_id: str) -> SetupRevision | None:
+        with self.sessions() as session:
+            return session.scalar(select(SetupRevision).where(
+                SetupRevision.setup_id == setup_id,
+                SetupRevision.request_id == request_id,
+            ))
+
+    def current_setup_revision(self, setup_id: str) -> tuple[SimulationSetup, SetupRevision]:
+        with self.sessions() as session:
+            setup = session.get(SimulationSetup, setup_id)
+            if setup is None:
+                raise PersistenceNotFoundError("setup")
+            if setup.current_revision is None:
+                raise RuntimeError("setup creation is incomplete")
+            revision = session.scalar(select(SetupRevision).where(
+                SetupRevision.setup_id == setup_id,
+                SetupRevision.revision == setup.current_revision,
+            ))
+            if revision is None:
+                raise RuntimeError("setup current revision is invalid")
+            return setup, revision
+
+    def list_setup_revisions(self, setup_id: str) -> list[SetupRevision]:
+        with self.sessions() as session:
+            if session.get(SimulationSetup, setup_id) is None:
+                raise PersistenceNotFoundError("setup")
+            return list(session.scalars(select(SetupRevision).where(
+                SetupRevision.setup_id == setup_id
+            ).order_by(SetupRevision.revision)))
+
+    def mutate_setup(
+        self, *, setup_id: str, expected_revision: int, request_id: str,
+        mutation_type: str, intent: SimulationIntent,
+        mutation_payload: dict | None = None,
+    ) -> SetupRevision:
+        canonical, digest = canonical_intent(intent)
+        relevant_payload = mutation_payload or {"intent_sha256": digest}
+        mutation_digest = canonical_fingerprint({
+            "expected_revision": expected_revision,
+            "mutation_type": mutation_type,
+            "payload": relevant_payload,
+        })
+        with self._setup_lock, self.transaction() as session:
+            setup = session.get(SimulationSetup, setup_id)
+            if setup is None:
+                raise PersistenceNotFoundError("setup")
+            replay = session.scalar(select(SetupRevision).where(
+                SetupRevision.setup_id == setup_id,
+                SetupRevision.request_id == request_id,
+            ))
+            if replay is not None:
+                if replay.mutation_sha256 == mutation_digest:
+                    return replay
+                raise SetupRequestConflictError("request ID reused with different mutation")
+            if setup.current_revision != expected_revision:
+                raise SetupRevisionConflictError("stale setup revision")
+            parent = session.scalar(select(SetupRevision).where(
+                SetupRevision.setup_id == setup_id,
+                SetupRevision.revision == expected_revision,
+            ))
+            revision = self._new_revision(
+                setup, parent, intent, mutation_type, request_id,
+                canonical=canonical, digest=digest, mutation_digest=mutation_digest,
+            )
+            session.add(revision)
+            setup.current_revision = revision.revision
+            setup.updated_at = revision.created_at
+            return revision
+
+    def replay_setup_mutation(
+        self, *, setup_id: str, expected_revision: int, request_id: str,
+        mutation_type: str, mutation_payload: dict,
+    ) -> SetupRevision | None:
+        expected_digest = canonical_fingerprint({
+            "expected_revision": expected_revision,
+            "mutation_type": mutation_type,
+            "payload": mutation_payload,
+        })
+        with self.sessions() as session:
+            replay = session.scalar(select(SetupRevision).where(
+                SetupRevision.setup_id == setup_id,
+                SetupRevision.request_id == request_id,
+            ))
+            if replay is None:
+                return None
+            if replay.mutation_sha256 != expected_digest:
+                raise SetupRequestConflictError("request ID reused with different mutation")
+            return replay
+
+    @staticmethod
+    def _new_revision(
+        setup: SimulationSetup, parent: SetupRevision | None,
+        intent: SimulationIntent, mutation_type: str, request_id: str,
+        *, canonical: str | None = None, digest: str | None = None,
+        mutation_digest: str | None = None,
+    ) -> SetupRevision:
+        canonical, digest = canonical_intent(intent) if canonical is None else (canonical, digest)
+        revision = 1 if parent is None else parent.revision + 1
+        if mutation_digest is None:
+            material = json.dumps(
+                {"expected_revision": revision - 1, "intent_sha256": digest,
+                 "mutation_type": mutation_type},
+                sort_keys=True, separators=(",", ":"),
+            )
+            mutation_digest = hashlib.sha256(material.encode()).hexdigest()
+        return SetupRevision(
+            setup_id=setup.id, revision=revision,
+            parent_revision_id=None if parent is None else parent.id,
+            schema_version=intent.schema_version, intent_json=canonical,
+            intent_sha256=digest, mutation_type=mutation_type,
+            request_id=request_id, mutation_sha256=mutation_digest,
+            created_at=datetime.now(timezone.utc),
+        )
+
+    @staticmethod
+    def revision_intent(revision: SetupRevision) -> SimulationIntent:
+        return load_simulation_intent(revision.intent_json, source="setup revision")
 
     def read_version_bytes(self, version: ModelVersion) -> bytes:
         return self.blobs.read(version.blob_key, version.source_sha256, version.size_bytes)

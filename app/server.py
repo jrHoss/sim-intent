@@ -50,6 +50,10 @@ from app.persistence import (
     PersistenceConflictError,
     PersistenceNotFoundError,
     Project,
+    SetupRequestConflictError,
+    SetupRevision,
+    SetupRevisionConflictError,
+    SimulationSetup,
     create_sqlite_engine,
 )
 from app.problems import (
@@ -70,6 +74,7 @@ from app.session import (
     InvalidRegionTransitionError,
     RegionTransitionRequest,
     SelectionSessionStore,
+    SessionHighlight,
     SessionAssumptionMissingError,
     SessionIntentMissingError,
     SessionRegionMissingError,
@@ -105,7 +110,7 @@ from ir.schema import (
     ValidationStatus,
 )
 from ir.schema_version import API_CONTRACT_VERSION
-from ir.validate import ValidationIssue, ValidationReport
+from ir.validate import ValidationIssue, ValidationReport, validate_intent
 from ir.versioning import SchemaVersionError, load_simulation_intent
 from llm.interpreter import (
     DEFAULT_MODEL,
@@ -299,6 +304,58 @@ class ModelUploadResponse(StrictModel):
     schema_version: int = API_CONTRACT_VERSION
     model_id: str
     model_version: ModelVersionResponse
+
+
+class SetupCreate(StrictModel):
+    model_id: uuid.UUID
+    model_version_id: uuid.UUID
+    request_id: str = Field(min_length=1, max_length=200)
+    intent: SimulationIntent
+
+
+class SetupMutation(StrictModel):
+    expected_revision: int = Field(ge=1)
+    request_id: str = Field(min_length=1, max_length=200)
+    intent: SimulationIntent
+
+
+class SetupDecision(StrictModel):
+    expected_revision: int = Field(ge=1)
+    request_id: str = Field(min_length=1, max_length=200)
+
+
+class SetupSummary(StrictModel):
+    schema_version: int = API_CONTRACT_VERSION
+    id: str
+    project_id: str
+    model_id: str
+    model_version_id: str
+    current_revision: int
+    created_at: str
+    updated_at: str
+
+
+class SetupRevisionResponse(StrictModel):
+    schema_version: int = API_CONTRACT_VERSION
+    id: str
+    setup_id: str
+    revision: int
+    parent_revision_id: str | None
+    simulation_intent_schema_version: int
+    intent_sha256: str
+    mutation_type: str
+    request_id: str
+    created_at: str
+    intent: SimulationIntent
+    validation: ValidationReport
+    selected_entities: dict[str, list[int] | list[str]]
+    highlight_state: dict[str, SessionHighlight]
+    export_eligible: bool
+
+
+class SetupView(StrictModel):
+    setup: SetupSummary
+    current: SetupRevisionResponse
 
 
 @dataclass
@@ -683,6 +740,230 @@ def create_app(
         if version is None:
             raise _not_found_problem("model version")
         return _version_response(version)
+
+    def setup_summary(setup: SimulationSetup) -> SetupSummary:
+        if setup.current_revision is None:
+            raise RuntimeError("setup creation is incomplete")
+        return SetupSummary(
+            id=setup.id, project_id=setup.project_id, model_id=setup.model_id,
+            model_version_id=setup.model_version_id,
+            current_revision=setup.current_revision,
+            created_at=_utc_isoformat(setup.created_at), updated_at=_utc_isoformat(setup.updated_at),
+        )
+
+    def revision_response(revision: SetupRevision) -> SetupRevisionResponse:
+        intent = persistence().revision_intent(revision)
+        report = validate_intent(intent)
+        intent = intent.model_copy(update={"validation_status": report.validation_status}, deep=True)
+        selected = {
+            region.id: list(region.entity_ids) for region in intent.regions
+            if region.status != "rejected"
+        }
+        highlights = {
+            region.id: SessionHighlight(
+                entity_ids=list(region.entity_ids), style=region.status
+            )
+            for region in intent.regions if region.status in {"proposed", "confirmed"}
+        }
+        return SetupRevisionResponse(
+            id=revision.id, setup_id=revision.setup_id, revision=revision.revision,
+            parent_revision_id=revision.parent_revision_id,
+            simulation_intent_schema_version=revision.schema_version,
+            intent_sha256=revision.intent_sha256,
+            mutation_type=revision.mutation_type, request_id=revision.request_id,
+            created_at=_utc_isoformat(revision.created_at), intent=intent,
+            validation=report, selected_entities=selected,
+            highlight_state=highlights, export_eligible=report.export_eligible,
+        )
+
+    def setup_conflict(exc: PersistenceConflictError) -> ApiProblem:
+        if isinstance(exc, SetupRevisionConflictError):
+            code, detail = "setup_revision_conflict", "The expected revision is stale."
+        elif isinstance(exc, SetupRequestConflictError):
+            code, detail = "setup_request_id_conflict", "The request ID was already used for a different mutation."
+        else:
+            code, detail = "setup_lineage_conflict", "The model lineage does not belong to the requested project."
+        return ApiProblem(status=409, code=code, title="Setup conflict", detail=detail)
+
+    @app.post(
+        "/api/v1/projects/{project_id}/setups", status_code=201,
+        response_model=SetupView, responses=PROBLEM_RESPONSES,
+    )
+    async def create_setup(project_id: uuid.UUID, payload: SetupCreate) -> SetupView:
+        try:
+            SelectionSessionStore._validate_client_statuses(None, payload.intent)
+            report = validate_intent(payload.intent)
+            intent = payload.intent.model_copy(
+                update={"validation_status": report.validation_status}, deep=True
+            )
+            setup, revision = persistence().create_setup(
+                project_id=str(project_id), model_id=str(payload.model_id),
+                model_version_id=str(payload.model_version_id), intent=intent,
+                request_id=payload.request_id,
+            )
+        except PersistenceNotFoundError as exc:
+            raise _not_found_problem(exc.resource) from exc
+        except PersistenceConflictError as exc:
+            raise setup_conflict(exc) from exc
+        except (InvalidRegionTransitionError, InvalidAssumptionTransitionError) as exc:
+            raise ApiProblem(
+                status=409,
+                code="setup_transition_invalid",
+                title="Invalid setup transition",
+                detail=str(exc),
+            ) from exc
+        return SetupView(setup=setup_summary(setup), current=revision_response(revision))
+
+    @app.get(
+        "/api/v1/projects/{project_id}/setups",
+        response_model=list[SetupSummary], responses=PROBLEM_RESPONSES,
+    )
+    async def list_project_setups(project_id: uuid.UUID) -> list[SetupSummary]:
+        try:
+            return [setup_summary(item) for item in persistence().list_setups(str(project_id))]
+        except PersistenceNotFoundError as exc:
+            raise _not_found_problem(exc.resource) from exc
+
+    @app.get(
+        "/api/v1/setups/{setup_id}", response_model=SetupView,
+        responses=PROBLEM_RESPONSES,
+    )
+    async def read_setup(setup_id: uuid.UUID) -> SetupView:
+        try:
+            setup, revision = persistence().current_setup_revision(str(setup_id))
+        except PersistenceNotFoundError as exc:
+            raise _not_found_problem(exc.resource) from exc
+        return SetupView(setup=setup_summary(setup), current=revision_response(revision))
+
+    @app.get(
+        "/api/v1/setups/{setup_id}/revisions",
+        response_model=list[SetupRevisionResponse], responses=PROBLEM_RESPONSES,
+    )
+    async def list_revisions(setup_id: uuid.UUID) -> list[SetupRevisionResponse]:
+        try:
+            return [revision_response(item) for item in persistence().list_setup_revisions(str(setup_id))]
+        except PersistenceNotFoundError as exc:
+            raise _not_found_problem(exc.resource) from exc
+
+    @app.get(
+        "/api/v1/setups/{setup_id}/revisions/{revision_number}",
+        response_model=SetupRevisionResponse, responses=PROBLEM_RESPONSES,
+    )
+    async def read_revision(setup_id: uuid.UUID, revision_number: int) -> SetupRevisionResponse:
+        revision = persistence().get_revision(str(setup_id), revision_number)
+        if revision is None:
+            raise _not_found_problem("setup revision")
+        return revision_response(revision)
+
+    def mutate(setup_id: str, payload: SetupMutation, mutation_type: str) -> SetupRevisionResponse:
+        try:
+            current = persistence().get_revision(setup_id, payload.expected_revision)
+            if current is None:
+                # Preserve setup-not-found versus stale-revision problem codes.
+                persistence().current_setup_revision(setup_id)
+                raise SetupRevisionConflictError("stale setup revision")
+            existing = persistence().revision_intent(current)
+            SelectionSessionStore._validate_client_statuses(existing, payload.intent)
+            report = validate_intent(payload.intent)
+            intent = payload.intent.model_copy(update={"validation_status": report.validation_status}, deep=True)
+            revision = persistence().mutate_setup(
+                setup_id=setup_id, expected_revision=payload.expected_revision,
+                request_id=payload.request_id, mutation_type=mutation_type, intent=intent,
+            )
+            return revision_response(revision)
+        except PersistenceNotFoundError as exc:
+            raise _not_found_problem(exc.resource) from exc
+        except PersistenceConflictError as exc:
+            raise setup_conflict(exc) from exc
+        except (InvalidRegionTransitionError, InvalidAssumptionTransitionError) as exc:
+            raise ApiProblem(status=409, code="setup_transition_invalid",
+                             title="Invalid setup transition", detail=str(exc)) from exc
+
+    @app.post(
+        "/api/v1/setups/{setup_id}/revisions", status_code=201,
+        response_model=SetupRevisionResponse, responses=PROBLEM_RESPONSES,
+    )
+    async def update_setup(setup_id: uuid.UUID, payload: SetupMutation) -> SetupRevisionResponse:
+        return mutate(str(setup_id), payload, "intent_updated")
+
+    def decide(setup_id: str, payload: SetupDecision, object_id: str,
+               *, kind: Literal["region", "assumption"], target: str) -> SetupRevisionResponse:
+        try:
+            mutation_type = f"{kind}_{target}"
+            mutation_payload = {
+                "subject_type": kind,
+                "subject_id": object_id,
+                "action": target,
+            }
+            replay = persistence().replay_setup_mutation(
+                setup_id=setup_id,
+                expected_revision=payload.expected_revision,
+                request_id=payload.request_id,
+                mutation_type=mutation_type,
+                mutation_payload=mutation_payload,
+            )
+            if replay is not None:
+                return revision_response(replay)
+            setup, current = persistence().current_setup_revision(setup_id)
+            if setup.current_revision != payload.expected_revision:
+                raise SetupRevisionConflictError("stale setup revision")
+            intent = persistence().revision_intent(current)
+            if kind == "region":
+                items = intent.regions
+                expected = "proposed"
+            else:
+                items = intent.assumptions
+                expected = "pending"
+            item = next((value for value in items if value.id == object_id), None)
+            if item is None:
+                raise ApiProblem(status=404, code=f"setup_{kind}_not_found",
+                                 title=f"{kind.title()} not found",
+                                 detail=f"The requested {kind} does not exist.")
+            if item.status != expected:
+                raise ApiProblem(status=409, code="setup_transition_invalid",
+                                 title="Invalid setup transition",
+                                 detail=f"Only {expected} {kind}s may be changed.")
+            changed = [
+                value.model_copy(update={"status": target}) if value.id == object_id
+                else value.model_copy(deep=True) for value in items
+            ]
+            body = intent.model_dump(mode="python")
+            body["regions" if kind == "region" else "assumptions"] = [
+                value.model_dump(mode="python") for value in changed
+            ]
+            updated = SimulationIntent.model_validate(body)
+            report = validate_intent(updated)
+            updated = updated.model_copy(update={"validation_status": report.validation_status}, deep=True)
+            revision = persistence().mutate_setup(
+                setup_id=setup_id, expected_revision=payload.expected_revision,
+                request_id=payload.request_id, mutation_type=mutation_type,
+                intent=updated, mutation_payload=mutation_payload,
+            )
+            return revision_response(revision)
+        except PersistenceNotFoundError as exc:
+            raise _not_found_problem(exc.resource) from exc
+        except PersistenceConflictError as exc:
+            raise setup_conflict(exc) from exc
+
+    @app.post("/api/v1/setups/{setup_id}/regions/{region_id}/confirm", status_code=201,
+              response_model=SetupRevisionResponse, responses=PROBLEM_RESPONSES)
+    async def confirm_setup_region(setup_id: uuid.UUID, region_id: str, payload: SetupDecision) -> SetupRevisionResponse:
+        return decide(str(setup_id), payload, region_id, kind="region", target="confirmed")
+
+    @app.post("/api/v1/setups/{setup_id}/regions/{region_id}/reject", status_code=201,
+              response_model=SetupRevisionResponse, responses=PROBLEM_RESPONSES)
+    async def reject_setup_region(setup_id: uuid.UUID, region_id: str, payload: SetupDecision) -> SetupRevisionResponse:
+        return decide(str(setup_id), payload, region_id, kind="region", target="rejected")
+
+    @app.post("/api/v1/setups/{setup_id}/assumptions/{assumption_id}/accept", status_code=201,
+              response_model=SetupRevisionResponse, responses=PROBLEM_RESPONSES)
+    async def accept_setup_assumption(setup_id: uuid.UUID, assumption_id: str, payload: SetupDecision) -> SetupRevisionResponse:
+        return decide(str(setup_id), payload, assumption_id, kind="assumption", target="accepted")
+
+    @app.post("/api/v1/setups/{setup_id}/assumptions/{assumption_id}/reject", status_code=201,
+              response_model=SetupRevisionResponse, responses=PROBLEM_RESPONSES)
+    async def reject_setup_assumption(setup_id: uuid.UUID, assumption_id: str, payload: SetupDecision) -> SetupRevisionResponse:
+        return decide(str(setup_id), payload, assumption_id, kind="assumption", target="rejected")
 
     async def durable_record(version_id: uuid.UUID) -> tuple[ModelVersion, bytes]:
         version = persistence().get_version(str(version_id))

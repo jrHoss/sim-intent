@@ -27,6 +27,8 @@ def test_empty_database_upgrade_duplicate_upgrade_and_model_schema(tmp_path):
         "projects",
         "models",
         "model_versions",
+        "simulation_setups",
+        "setup_revisions",
     }
     for table in Base.metadata.sorted_tables:
         assert {column.name for column in table.columns} == {

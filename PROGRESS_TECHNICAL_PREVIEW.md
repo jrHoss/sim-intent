@@ -1401,3 +1401,23 @@ untracked test modules.
   `uv.lock`, `requirements.txt`, and `.python-version` are byte-unchanged, and
   CI's `lock-and-drift` job runs both.
 - Nothing staged, committed, or pushed. Task 20 not started.
+
+## R1.2 — Durable setup revisions (2026-07-26)
+
+- Added durable simulation setups tied to one project, model, and model-version
+  lineage, with immutable full-snapshot `SimulationIntent` revisions.
+- Region confirmation/rejection and assumption acceptance/rejection are stored
+  as new authoritative revisions and survive application restart/reopen.
+- Optimistic `expected_revision` checks provide controlled stale-write
+  conflicts; project-scoped request IDs and canonical fingerprints provide
+  sequential and concurrent idempotency for setup creation and mutations.
+- Lineage checks isolate setup decisions between model versions. Legacy
+  `/session/...` routes remain explicitly volatile and are not dual-written.
+- Alembic migration `0002_setup_revisions` enforces lineage, sequential parent
+  chains, immutable revisions, valid current pointers, safe cascades, and
+  populated downgrade/re-upgrade behavior.
+- Focused R1.2 and migration tests: **14 passed**.
+- Full regression suite: **606 passed, 1 skipped** (documented optional skip).
+- OpenAPI, generated TypeScript, migration, cascade, restart, concurrency,
+  idempotency, and `git diff --check` evidence passed.
+- Independent review verdict: **READY TO COMMIT**.
