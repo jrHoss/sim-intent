@@ -126,11 +126,12 @@ def test_openapi_exposes_the_versioned_payload_contract():
 
 
 def test_no_runtime_schema_version_endpoint_was_added(tmp_path):
-    """Decision D-9: Task 19 publishes versions statically, not over HTTP."""
+    """Decision D-9: contract versions stay static despite later /api/v1 APIs."""
 
     app = create_app(tmp_path / "models", mode=RuntimeMode.PRODUCTION)
     for path in app.openapi()["paths"]:
-        assert not path.startswith("/api/")
+        assert "schema-version" not in path
+        assert "schema_version" not in path
 
 
 # --------------------------------------------------------------------------

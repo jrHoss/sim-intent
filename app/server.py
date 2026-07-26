@@ -16,7 +16,12 @@ import logging
 import math
 import re
 import struct
+import tempfile
+import uuid
+from contextlib import asynccontextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import timezone
 from email.parser import BytesParser
 from email.policy import default as email_policy
 from pathlib import Path
@@ -25,11 +30,36 @@ from typing import Any, AsyncIterator, Literal
 import gmsh
 import meshio
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.record_versions import load_fallback_record
+from app.blob_store import BlobStore, BlobIntegrityError
+from app.config import LocalDataConfig
+from app.data_root_lock import DataRootLock
+from app.migrations import upgrade_database
+from app.persistence import (
+    ModelVersion,
+    Persistence,
+    PersistenceConflictError,
+    PersistenceNotFoundError,
+    Project,
+    create_sqlite_engine,
+)
+from app.problems import (
+    PROBLEM_RESPONSES,
+    ApiProblem,
+    ProblemDetails,
+    ProblemDetailsError,
+    problem_response,
+    validation_problem,
+)
 from app.runtime_mode import RuntimeMode, resolve_runtime_mode
 from app.schema_compat import (
     LEGACY_INTENT_ROUTE,
@@ -90,6 +120,7 @@ DEFAULT_MODEL_DIR = Path(".sim_intent_cache") / "models"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 SUPPORTED_SUFFIXES = {".step": "step", ".stp": "step", ".inp": "inp"}
 SELECTION_LOGGER = logging.getLogger("uvicorn.error")
+APPLICATION_LOGGER = logging.getLogger("uvicorn.error")
 
 
 class SelectRequest(BaseModel):
@@ -232,6 +263,44 @@ class InterpretResponse(StrictModel):
     notices: list[str] = Field(default_factory=list)
 
 
+class ProjectCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=200)
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("project name must not be blank")
+        return value
+
+
+class ProjectResponse(StrictModel):
+    schema_version: int = API_CONTRACT_VERSION
+    id: str
+    name: str
+    created_at: str
+
+
+class ModelVersionResponse(StrictModel):
+    schema_version: int = API_CONTRACT_VERSION
+    id: str
+    model_id: str
+    version: int
+    source_sha256: str
+    source_name: str
+    size_bytes: int
+    media_type: str
+    model_kind: str
+    created_at: str
+
+
+class ModelUploadResponse(StrictModel):
+    schema_version: int = API_CONTRACT_VERSION
+    model_id: str
+    model_version: ModelVersionResponse
+
+
 @dataclass
 class PendingInterpretation:
     instruction: str
@@ -368,6 +437,7 @@ def create_app(
     storage_dir: str | Path = DEFAULT_MODEL_DIR,
     *,
     mode: RuntimeMode | None = None,
+    data_config: LocalDataConfig | None = None,
 ) -> FastAPI:
     # Task 18 (ADR-005): the runtime mode is resolved exactly once per
     # constructed application. `resolved_mode` is the immutable closure value
@@ -379,17 +449,102 @@ def create_app(
     # contract authority and ``API_CONTRACT_VERSION`` is its single source of
     # truth. No runtime endpoint publishes versions; the checked-in OpenAPI
     # snapshot, the generated TypeScript output, and the drift tests do.
+    durable_config = data_config or (
+        LocalDataConfig.from_env()
+        if Path(storage_dir) == DEFAULT_MODEL_DIR
+        else LocalDataConfig(Path(storage_dir).resolve().parent / "durable-data")
+    )
+
+    @asynccontextmanager
+    async def durable_lifespan(application: FastAPI):
+        root_lock = DataRootLock(durable_config.root)
+        root_lock.acquire()
+        persistence: Persistence | None = None
+        try:
+            # The inter-process root lock is acquired before every operation
+            # that can inspect or mutate the database or blob tree. The
+            # BlobStore RLock remains the narrower in-process coordination
+            # boundary for publication/commit/cleanup across threads.
+            durable_config.root.mkdir(parents=True, exist_ok=True)
+            upgrade_database(durable_config.database_url)
+            persistence = Persistence(
+                create_sqlite_engine(durable_config.database_url),
+                BlobStore(durable_config.blob_root),
+            )
+            application.state.persistence = persistence
+            application.state.data_config = durable_config
+            persistence.blobs.cleanup_temporary()
+            yield
+        finally:
+            if persistence is not None:
+                persistence.dispose()
+            if hasattr(application.state, "persistence"):
+                del application.state.persistence
+            root_lock.release()
+
     app = FastAPI(
         title="sim-intent viewer backend",
         version=str(API_CONTRACT_VERSION),
+        lifespan=durable_lifespan,
     )
     app.state.runtime_mode = resolved_mode
     app.state.model_store = ModelStore(storage_dir)
+    app.state.data_config = durable_config
     app.state.session_store = SelectionSessionStore()
     app.state.viewer_events = ViewerEventBroker()
     app.state.interpreter = Interpreter()
     app.state.pending_interpretations: dict[str, PendingInterpretation] = {}
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    default_openapi = app.openapi
+
+    def product_openapi() -> dict[str, Any]:
+        schema = default_openapi()
+        schema.setdefault("components", {}).setdefault("schemas", {})[
+            "ProblemDetails"
+        ] = ProblemDetails.model_json_schema(
+            ref_template="#/components/schemas/{model}"
+        )
+        return schema
+
+    app.openapi = product_openapi
+
+    @app.exception_handler(ProblemDetailsError)
+    async def handle_problem(
+        request: Request, error: ProblemDetailsError
+    ) -> JSONResponse:
+        return problem_response(request, error)
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_validation(
+        request: Request, error: RequestValidationError
+    ) -> Response:
+        if request.url.path.startswith("/api/v1/"):
+            return validation_problem(request, error)
+        return await request_validation_exception_handler(request, error)
+
+    @app.exception_handler(HTTPException)
+    async def handle_http_exception(
+        request: Request, error: HTTPException
+    ) -> Response:
+        if request.url.path.startswith("/api/v1/"):
+            detail = (
+                error.detail
+                if isinstance(error.detail, str)
+                else "The request could not be completed."
+            )
+            return problem_response(
+                request,
+                ApiProblem(
+                    status=error.status_code,
+                    code="api_request_invalid",
+                    title="API request failed",
+                    detail=detail,
+                ),
+            )
+        return await http_exception_handler(request, error)
+
+    def persistence() -> Persistence:
+        return app.state.persistence
 
     @app.get("/", include_in_schema=False)
     async def viewer_frontend() -> FileResponse:
@@ -411,6 +566,159 @@ def create_app(
             "source_name": record.source_name,
             "kind": record.kind,
         }
+
+    @app.post(
+        "/api/v1/projects",
+        status_code=201,
+        response_model=ProjectResponse,
+        responses=PROBLEM_RESPONSES,
+    )
+    async def create_project(payload: ProjectCreate) -> ProjectResponse:
+        return _project_response(persistence().create_project(payload.name))
+
+    @app.get(
+        "/api/v1/projects",
+        response_model=list[ProjectResponse],
+        responses=PROBLEM_RESPONSES,
+    )
+    async def list_projects() -> list[ProjectResponse]:
+        return [_project_response(project) for project in persistence().list_projects()]
+
+    @app.get(
+        "/api/v1/projects/{project_id}",
+        response_model=ProjectResponse,
+        responses=PROBLEM_RESPONSES,
+    )
+    async def read_project(project_id: uuid.UUID) -> ProjectResponse:
+        project = persistence().get_project(str(project_id))
+        if project is None:
+            raise ApiProblem(
+                status=404,
+                code="project_not_found",
+                title="Project not found",
+                detail="The requested project does not exist.",
+            )
+        return _project_response(project)
+
+    @app.post(
+        "/api/v1/projects/{project_id}/models",
+        status_code=201,
+        response_model=ModelUploadResponse,
+        responses=PROBLEM_RESPONSES,
+    )
+    async def upload_project_model(
+        project_id: uuid.UUID,
+        request: Request,
+        filename: str | None = Query(default=None),
+    ) -> ModelUploadResponse:
+        source_name, content = await _uploaded_file(request, filename)
+        source_name, kind = _validate_source_upload(source_name, content)
+        _validate_model_bytes(request, source_name, kind, content)
+        try:
+            model, version = persistence().create_model_version(
+                project_id=str(project_id),
+                source_name=source_name,
+                content=content,
+                model_kind=kind,
+            )
+        except PersistenceNotFoundError as exc:
+            raise _not_found_problem(exc.resource) from exc
+        return ModelUploadResponse(
+            model_id=model.id,
+            model_version=_version_response(version),
+        )
+
+    @app.post(
+        "/api/v1/projects/{project_id}/models/{model_id}/versions",
+        status_code=201,
+        response_model=ModelUploadResponse,
+        responses=PROBLEM_RESPONSES,
+    )
+    async def upload_model_version(
+        project_id: uuid.UUID,
+        model_id: uuid.UUID,
+        request: Request,
+        filename: str | None = Query(default=None),
+    ) -> ModelUploadResponse:
+        source_name, content = await _uploaded_file(request, filename)
+        source_name, kind = _validate_source_upload(source_name, content)
+        _validate_model_bytes(request, source_name, kind, content)
+        try:
+            model, version = persistence().create_model_version(
+                project_id=str(project_id),
+                model_id=str(model_id),
+                source_name=source_name,
+                content=content,
+                model_kind=kind,
+            )
+        except PersistenceNotFoundError as exc:
+            raise _not_found_problem(exc.resource) from exc
+        except PersistenceConflictError as exc:
+            raise ApiProblem(
+                status=409,
+                code="model_project_conflict",
+                title="Model conflict",
+                detail="The model does not belong to the requested project.",
+            ) from exc
+        return ModelUploadResponse(model_id=model.id, model_version=_version_response(version))
+
+    @app.get(
+        "/api/v1/models/{model_id}/versions",
+        response_model=list[ModelVersionResponse],
+        responses=PROBLEM_RESPONSES,
+    )
+    async def list_model_versions(model_id: uuid.UUID) -> list[ModelVersionResponse]:
+        model_id_string = str(model_id)
+        if persistence().get_model(model_id_string) is None:
+            raise _not_found_problem("model")
+        return [_version_response(version) for version in persistence().list_versions(model_id_string)]
+
+    @app.get(
+        "/api/v1/model-versions/{version_id}",
+        response_model=ModelVersionResponse,
+        responses=PROBLEM_RESPONSES,
+    )
+    async def read_model_version(version_id: uuid.UUID) -> ModelVersionResponse:
+        version = persistence().get_version(str(version_id))
+        if version is None:
+            raise _not_found_problem("model version")
+        return _version_response(version)
+
+    async def durable_record(version_id: uuid.UUID) -> tuple[ModelVersion, bytes]:
+        version = persistence().get_version(str(version_id))
+        if version is None:
+            raise _not_found_problem("model version")
+        try:
+            return version, persistence().read_version_bytes(version)
+        except (BlobIntegrityError, OSError) as exc:
+            raise ApiProblem(
+                status=500,
+                code="source_blob_integrity_failed",
+                title="Stored model unavailable",
+                detail="The stored source model is missing or failed verification.",
+            ) from exc
+
+    @app.get(
+        "/api/v1/model-versions/{version_id}/inventory",
+        responses=PROBLEM_RESPONSES,
+    )
+    async def durable_inventory(version_id: uuid.UUID) -> JSONResponse:
+        version, content = await durable_record(version_id)
+        with _materialized_model(version.source_name, version.model_kind, content) as record:
+            return JSONResponse(app.state.model_store.inventory(record).to_dict())
+
+    @app.get(
+        "/api/v1/model-versions/{version_id}/gltf",
+        responses=PROBLEM_RESPONSES,
+    )
+    async def durable_gltf(version_id: uuid.UUID) -> JSONResponse:
+        version, content = await durable_record(version_id)
+        with _materialized_model(version.source_name, version.model_kind, content) as record:
+            inventory = app.state.model_store.inventory(record)
+            meshes = _tessellate_step(record.path) if record.kind == "step" else _tessellate_inp(record.path, inventory)
+            response = JSONResponse(_build_gltf(meshes), media_type="model/gltf+json")
+            response.headers["Content-Disposition"] = f'inline; filename="{Path(version.source_name).stem}.gltf"'
+            return response
 
     async def inventory_response(model_id: str) -> JSONResponse:
         record = app.state.model_store.get(model_id)
@@ -1265,3 +1573,86 @@ def _build_gltf(face_meshes: list[FaceMesh]) -> dict[str, Any]:
 
 
 app = create_app()
+
+
+def _project_response(project: Project) -> ProjectResponse:
+    return ProjectResponse(
+        id=project.id,
+        name=project.name,
+        created_at=_utc_isoformat(project.created_at),
+    )
+
+
+def _version_response(version: ModelVersion) -> ModelVersionResponse:
+    return ModelVersionResponse(
+        id=version.id,
+        model_id=version.model_id,
+        version=version.version,
+        source_sha256=version.source_sha256,
+        source_name=version.source_name,
+        size_bytes=version.size_bytes,
+        media_type=version.media_type,
+        model_kind=version.model_kind,
+        created_at=_utc_isoformat(version.created_at),
+    )
+
+
+def _utc_isoformat(value) -> str:
+    return (
+        value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+    ).astimezone(timezone.utc).isoformat()
+
+
+def _not_found_problem(resource: str) -> ApiProblem:
+    normalized = resource.replace(" ", "_")
+    return ApiProblem(
+        status=404,
+        code=f"{normalized}_not_found",
+        title=f"{resource.title()} not found",
+        detail=f"The requested {resource} does not exist.",
+    )
+
+
+def _validate_source_upload(source_name: str, content: bytes) -> tuple[str, str]:
+    source_name = _safe_source_name(source_name)
+    kind = SUPPORTED_SUFFIXES.get(Path(source_name).suffix.lower())
+    if kind is None:
+        raise HTTPException(
+            status_code=415,
+            detail="unsupported model format; expected STEP (.step/.stp) or Abaqus INP (.inp)",
+        )
+    if not content:
+        raise HTTPException(status_code=400, detail="uploaded model is empty")
+    return source_name, kind
+
+
+@contextmanager
+def _materialized_model(
+    source_name: str, kind: str, content: bytes
+) -> Iterator[ModelRecord]:
+    with tempfile.TemporaryDirectory(prefix="sim-intent-model-") as directory:
+        path = Path(directory) / source_name
+        path.write_bytes(content)
+        yield ModelRecord("", source_name, kind, path)
+
+
+def _validate_model_bytes(
+    request: Request, source_name: str, kind: str, content: bytes
+) -> None:
+    with _materialized_model(source_name, kind, content) as record:
+        try:
+            ModelStore(record.path.parent).inventory(record)
+        except Exception as exc:
+            trace_id = (
+                request.headers.get("x-correlation-id") or str(uuid.uuid4())
+            )
+            APPLICATION_LOGGER.exception(
+                "Source-model parser failed trace_id=%s", trace_id
+            )
+            raise ApiProblem(
+                status=422,
+                code="source_model_parse_failed",
+                title="Source model could not be parsed",
+                detail="The uploaded source model could not be parsed.",
+                trace_id=trace_id,
+            ) from exc

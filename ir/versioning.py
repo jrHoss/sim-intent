@@ -67,17 +67,37 @@ ABSENT: Final[_Absent] = _Absent()
 # --------------------------------------------------------------------------
 
 
-class SchemaVersionError(ValueError):
-    """Base class for every typed versioned-payload failure.
+class ProblemDetailsError(ValueError):
+    """Base for typed failures that expose the repository RFC 9457 shape."""
 
-    Carries a stable application ``code`` and safe typed details per ADR-004.
-    Details never contain credentials, prompt content, solver or source bytes,
-    or absolute host paths.
-    """
-
-    code: str = "schema_version_error"
+    code: str = "problem"
     http_status: int = 422
     retryable: bool = False
+
+    def __init__(
+        self,
+        message: str,
+        **details: Any,
+    ) -> None:
+        super().__init__(message)
+        self.safe_message = message
+        self.details = details
+
+    def problem_details(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "title": self.__class__.__name__,
+            "detail": self.safe_message,
+            "status": self.http_status,
+            "retryable": self.retryable,
+            **self.details,
+        }
+
+
+class SchemaVersionError(ProblemDetailsError):
+    """Base class for every typed versioned-payload failure."""
+
+    code: str = "schema_version_error"
 
     def __init__(
         self,
@@ -87,30 +107,14 @@ class SchemaVersionError(ValueError):
         source: str | None = None,
         **details: Any,
     ) -> None:
-        super().__init__(message)
-        self.safe_message = message
         self.family = family
         self.source = _safe_source(source)
-        self.details = details
+        super().__init__(message, family=family, **details)
 
     def problem_details(self) -> dict[str, Any]:
-        """RFC 9457 ``application/problem+json`` members (ADR-004).
-
-        Task 19 decision D-4: this shape applies at the versioned loader
-        boundary and to any future versioned API surface.  Existing legacy
-        route error envelopes are unchanged.
-        """
-        payload: dict[str, Any] = {
-            "code": self.code,
-            "title": self.__class__.__name__,
-            "detail": self.safe_message,
-            "status": self.http_status,
-            "retryable": self.retryable,
-            "family": self.family,
-        }
+        payload = super().problem_details()
         if self.source is not None:
             payload["source"] = self.source
-        payload.update(self.details)
         return payload
 
 
