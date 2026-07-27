@@ -977,6 +977,10 @@ export interface components {
             created_at: string;
             /** Id */
             id: string;
+            /** Is Current */
+            is_current: boolean;
+            /** Is Superseded */
+            is_superseded: boolean;
             /** Media Type */
             media_type: string;
             /** Model Id */
@@ -994,6 +998,10 @@ export interface components {
             source_name: string;
             /** Source Sha256 */
             source_sha256: string;
+            /** Superseded At */
+            superseded_at: string | null;
+            /** Superseded By Version Id */
+            superseded_by_version_id: string | null;
             /** Version */
             version: number;
         };
@@ -1283,10 +1291,14 @@ export interface components {
             current_revision: number;
             /** Id */
             id: string;
+            /** Is Stale */
+            is_stale: boolean;
             /** Model Id */
             model_id: string;
             /** Model Version Id */
             model_version_id: string;
+            /** Model Version Is Current */
+            model_version_is_current: boolean;
             /** Project Id */
             project_id: string;
             /**
@@ -1294,6 +1306,10 @@ export interface components {
              * @default 1
              */
             schema_version: number;
+            /** Stale At */
+            stale_at: string | null;
+            /** Stale Reason */
+            stale_reason: string | null;
             /** Updated At */
             updated_at: string;
         };
@@ -1516,6 +1532,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
+            /** @description Insufficient storage */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
         };
     };
     durable_gltf_api_v1_model_versions__version_id__gltf_get: {
@@ -1594,6 +1619,15 @@ export interface operations {
             };
             /** @description Stored data integrity failure */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Insufficient storage */
+            507: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1686,6 +1720,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
+            /** @description Insufficient storage */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
         };
     };
     list_model_versions_api_v1_models__model_id__versions_get: {
@@ -1771,6 +1814,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
+            /** @description Insufficient storage */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
         };
     };
     list_projects_api_v1_projects_get: {
@@ -1847,6 +1899,15 @@ export interface operations {
             };
             /** @description Stored data integrity failure */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Insufficient storage */
+            507: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1941,6 +2002,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
+            /** @description Insufficient storage */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
         };
     };
     read_project_api_v1_projects__project_id__get: {
@@ -2019,6 +2089,15 @@ export interface operations {
             };
             /** @description Stored data integrity failure */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Insufficient storage */
+            507: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2106,6 +2185,15 @@ export interface operations {
             };
             /** @description Stored data integrity failure */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Insufficient storage */
+            507: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2201,6 +2289,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
+            /** @description Insufficient storage */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
         };
     };
     list_project_setups_api_v1_projects__project_id__setups_get: {
@@ -2279,6 +2376,15 @@ export interface operations {
             };
             /** @description Stored data integrity failure */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Insufficient storage */
+            507: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2375,6 +2481,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
+            /** @description Insufficient storage */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
         };
     };
     read_setup_api_v1_setups__setup_id__get: {
@@ -2453,6 +2568,15 @@ export interface operations {
             };
             /** @description Stored data integrity failure */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Insufficient storage */
+            507: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2550,6 +2674,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
+            /** @description Insufficient storage */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
         };
     };
     reject_setup_assumption_api_v1_setups__setup_id__assumptions__assumption_id__reject_post: {
@@ -2633,6 +2766,15 @@ export interface operations {
             };
             /** @description Stored data integrity failure */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Insufficient storage */
+            507: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2730,6 +2872,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
+            /** @description Insufficient storage */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
         };
     };
     reject_setup_region_api_v1_setups__setup_id__regions__region_id__reject_post: {
@@ -2820,6 +2971,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
+            /** @description Insufficient storage */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
         };
     };
     list_revisions_api_v1_setups__setup_id__revisions_get: {
@@ -2898,6 +3058,15 @@ export interface operations {
             };
             /** @description Stored data integrity failure */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Insufficient storage */
+            507: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2994,6 +3163,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
+            /** @description Insufficient storage */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
         };
     };
     read_revision_api_v1_setups__setup_id__revisions__revision_number__get: {
@@ -3073,6 +3251,15 @@ export interface operations {
             };
             /** @description Stored data integrity failure */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Insufficient storage */
+            507: {
                 headers: {
                     [name: string]: unknown;
                 };

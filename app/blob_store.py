@@ -26,6 +26,10 @@ class BlobIntegrityError(RuntimeError):
     pass
 
 
+class SourceStorageLimitExceededError(RuntimeError):
+    pass
+
+
 class BlobStore:
     def __init__(self, root: str | Path):
         self.root = Path(root).resolve()
@@ -118,6 +122,33 @@ class BlobStore:
             return key
         finally:
             temporary.unlink(missing_ok=True)
+
+    def publish_file_with_limit(
+        self, source: str | Path, expected_digest: str, expected_size: int,
+        maximum_total_bytes: int,
+    ) -> str:
+        """Publish under the caller-held coordination lock without overcommit."""
+        final = self.path_for_key(self.key(expected_digest))
+        if final.exists():
+            self._verify_path(final, expected_digest)
+            return self.key(expected_digest)
+        if expected_size > maximum_total_bytes - self.source_bytes():
+            raise SourceStorageLimitExceededError("source storage capacity exceeded")
+        return self.publish_file(source, expected_digest, expected_size)
+
+    def source_bytes(self) -> int:
+        """Count only fixed-layout regular CAS leaves, never following symlinks."""
+        total = 0
+        for path in self.iter_final_blobs():
+            try:
+                size = path.stat(follow_symlinks=False).st_size
+                self._verify_path(path, path.name)
+            except OSError:
+                continue
+            except BlobIntegrityError:
+                continue
+            total += size
+        return total
 
     def read(self, key: str, expected_digest: str, expected_size: int) -> bytes:
         path = self.path_for_key(key)

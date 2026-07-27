@@ -1468,3 +1468,62 @@ untracked test modules.
   basenames case-insensitively.
 - Focused safe-ingestion suite: 46 passed; affected persistence/viewer suite:
   100 passed; full suite: 652 passed, 1 skipped.
+
+## R2.2 source invalidation and storage capacity (working tree, 2026-07-27)
+
+- Branch: `r2b-source-invalidation-storage-cap`; no commit created.
+- Added authoritative current-version pointers, explicit version supersession,
+  and mutable setup staleness without changing immutable setup revision
+  payloads. Stale reads remain available, export eligibility is forced false,
+  and setup mutations return `setup_source_superseded`.
+- Added a configurable 1 GiB default source-CAS capacity under the existing
+  publication coordination lock. Unique blobs are quota checked; deduplicated
+  blobs consume no additional capacity; malformed, unrelated, and symlink
+  entries are ignored; failures return RFC 9457 HTTP 507
+  `source_storage_limit_exceeded`.
+- Migration `0003_source_supersession` deterministically selects the greatest
+  existing version as current, backfills supersession/staleness, preserves
+  payload immutability and lineage triggers, and passes populated downgrade
+  and re-upgrade.
+- Focused R2.2 suite: **10 passed**. Migration plus R2.2 suite: **13 passed**.
+  Affected R1/R2.1 persistence, setup, ingestion, and migration regressions:
+  **90 passed**.
+- Full suite with required baseline evidence: **662 passed, 1 skipped**;
+  baseline comparisons executed=49, skipped=0, failed=0. The skip remains the
+  optional environment capability.
+- OpenAPI export/check, TypeScript regeneration, schema stamping, compileall,
+  and `git diff --check` passed.
+
+### R2.2 independent-review remediation (2026-07-27)
+
+- Added a database INSERT backstop for active setups plus shared source-lock
+  coordination, irreversible setup staleness, authoritative pointer
+  insert/update/delete protection, and pointer-derived API `is_current`.
+- Idempotent mutation replay now precedes stale-source rejection for intent,
+  region, and assumption operations.
+- The 0002 backfill now records complete supersession timestamps and successor
+  pointers. Its populated fixture covers multiple projects, three source
+  versions, old/current setups, multiple immutable revisions, confirmed
+  regions, accepted assumptions, downgrade/re-upgrade, and behavioral trigger
+  checks.
+- Unique-publication quota checks first perform bounded coordinated orphan
+  cleanup; referenced and malformed/unrelated entries remain protected.
+- Focused R2.2 suite: **14 passed**. Affected R1/R2.1 and migration set:
+  **96 passed**. Full suite: **666 passed, 1 skipped** with all 49 required
+  baseline comparisons executed.
+- OpenAPI/schema checks, TypeScript regeneration, schema stamping, compileall,
+  and `git diff --check` passed. No commit was created.
+
+### R2.2 final projection/documentation remediation (2026-07-27)
+
+- Setup `model_version_is_current` now compares the setup version directly
+  with `Model.current_version_id`, matching every other currentness field.
+  A trigger-preserving inconsistent-state regression proves that two
+  non-superseded flags cannot produce two current API projections and that the
+  non-pointed setup remains stale and export-blocked.
+- `docs/environment.md` now records the 100-candidate orphan-reclamation bound,
+  the need for later attempts or maintenance beyond that bound, and the
+  prohibition on automatic eviction of referenced historical sources.
+- Focused R2.2 plus setup projection tests: **26 passed**. Full suite:
+  **667 passed, 1 skipped**, with all 49 required baseline comparisons
+  executed. Contract drift, compile, and whitespace checks passed.

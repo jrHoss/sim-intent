@@ -150,11 +150,23 @@ root and published to `blobs/` only after isolated parsing succeeds.
 | Environment variable | Default |
 |---|---:|
 | `SIM_INTENT_MAX_SOURCE_UPLOAD_BYTES` | 67108864 (64 MiB) |
+| `SIM_INTENT_MAX_SOURCE_STORAGE_BYTES` | 1073741824 (1 GiB) |
 | `SIM_INTENT_QUARANTINE_DIR` | `<data-root>/quarantine` |
 | `SIM_INTENT_PARSER_TIMEOUT_SECONDS` | 30 |
 | `SIM_INTENT_PARSER_OUTPUT_BYTES` | 262144 per output stream |
 | `SIM_INTENT_STALE_QUARANTINE_AGE_SECONDS` | 3600 |
 | `SIM_INTENT_STALE_QUARANTINE_CLEANUP_LIMIT` | 100 |
+
+The source-storage limit counts unique regular blobs in the fixed-depth
+`blobs/sha256` CAS only. Deduplicated content is counted once; SQLite,
+quarantine, external locks, symlinks, and malformed/unrelated entries are
+excluded. Capacity failures do not evict historical sources.
+
+Before each unique publication attempt, coordinated orphan reclamation
+processes at most 100 valid unreferenced CAS candidates. If more than 100
+orphans exist, later publication attempts or explicit maintenance may be
+needed to reclaim the remainder. Historical referenced blobs are never
+evicted automatically.
 
 Integer limits must be positive and the stale age non-negative; invalid values
 must also be finite. Quarantine must be an absolute directory beneath the data

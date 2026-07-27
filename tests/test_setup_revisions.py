@@ -197,6 +197,15 @@ def test_model_version_setup_decisions_remain_isolated_after_restart(tmp_path):
         app = client.app
         project = create_project(app)
         first_upload = upload(app, project["id"], minimal_inp())
+        _, _, first_setup = create_setup(
+            app, project=project, uploaded=first_upload, request_id="create-v1"
+        )
+        first_id = first_setup["setup"]["id"]
+        decided = request(
+            app, "POST", f"/api/v1/setups/{first_id}/regions/fixed_region/confirm",
+            json={"expected_revision": 1, "request_id": "v1-confirm"},
+        )
+        assert decided.status_code == 201
         second_response = request(
             app, "POST",
             f"/api/v1/projects/{project['id']}/models/{first_upload['model_id']}/versions",
@@ -204,19 +213,10 @@ def test_model_version_setup_decisions_remain_isolated_after_restart(tmp_path):
         )
         assert second_response.status_code == 201
         second_upload = second_response.json()
-        _, _, first_setup = create_setup(
-            app, project=project, uploaded=first_upload, request_id="create-v1"
-        )
         _, _, second_setup = create_setup(
             app, project=project, uploaded=second_upload, request_id="create-v2"
         )
-        first_id = first_setup["setup"]["id"]
         second_id = second_setup["setup"]["id"]
-        decided = request(
-            app, "POST", f"/api/v1/setups/{first_id}/regions/fixed_region/confirm",
-            json={"expected_revision": 1, "request_id": "v1-confirm"},
-        )
-        assert decided.status_code == 201
         untouched = request(app, "GET", f"/api/v1/setups/{second_id}")
         assert untouched.json()["current"]["revision"] == 1
         assert untouched.json()["current"]["intent"]["regions"][0]["status"] == "proposed"
@@ -510,6 +510,9 @@ def test_populated_downgrade_reupgrade_and_triggers_with_three_revisions(tmp_pat
                 "id": version_id, "model": model_id, "digest": "b" * 64,
                 "blob": f"sha256/bb/bb/{'b' * 64}",
             })
+            connection.execute(text(
+                "UPDATE models SET current_version_id=:version WHERE id=:model"
+            ), {"version": version_id, "model": model_id})
             connection.execute(text(
                 "INSERT INTO simulation_setups "
                 "(id, project_id, model_id, model_version_id, current_revision, "

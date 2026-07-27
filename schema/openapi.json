@@ -1040,6 +1040,14 @@
             "title": "Id",
             "type": "string"
           },
+          "is_current": {
+            "title": "Is Current",
+            "type": "boolean"
+          },
+          "is_superseded": {
+            "title": "Is Superseded",
+            "type": "boolean"
+          },
           "media_type": {
             "title": "Media Type",
             "type": "string"
@@ -1069,6 +1077,28 @@
             "title": "Source Sha256",
             "type": "string"
           },
+          "superseded_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Superseded At"
+          },
+          "superseded_by_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Superseded By Version Id"
+          },
           "version": {
             "title": "Version",
             "type": "integer"
@@ -1083,7 +1113,11 @@
           "size_bytes",
           "media_type",
           "model_kind",
-          "created_at"
+          "created_at",
+          "is_current",
+          "is_superseded",
+          "superseded_at",
+          "superseded_by_version_id"
         ],
         "title": "ModelVersionResponse",
         "type": "object"
@@ -1809,6 +1843,10 @@
             "title": "Id",
             "type": "string"
           },
+          "is_stale": {
+            "title": "Is Stale",
+            "type": "boolean"
+          },
           "model_id": {
             "title": "Model Id",
             "type": "string"
@@ -1816,6 +1854,10 @@
           "model_version_id": {
             "title": "Model Version Id",
             "type": "string"
+          },
+          "model_version_is_current": {
+            "title": "Model Version Is Current",
+            "type": "boolean"
           },
           "project_id": {
             "title": "Project Id",
@@ -1825,6 +1867,28 @@
             "default": 1,
             "title": "Schema Version",
             "type": "integer"
+          },
+          "stale_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale At"
+          },
+          "stale_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale Reason"
           },
           "updated_at": {
             "title": "Updated At",
@@ -1838,7 +1902,11 @@
           "model_version_id",
           "current_revision",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "model_version_is_current",
+          "is_stale",
+          "stale_reason",
+          "stale_at"
         ],
         "title": "SetupSummary",
         "type": "object"
@@ -2297,6 +2365,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "Read Model Version"
@@ -2395,6 +2473,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "Durable Gltf"
@@ -2493,6 +2581,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "Durable Inventory"
@@ -2597,6 +2695,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "List Model Versions"
@@ -2689,6 +2797,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "List Projects"
@@ -2785,6 +2903,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "Create Project"
@@ -2885,6 +3013,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "Read Project"
@@ -3001,6 +3139,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "Upload Project Model"
@@ -3127,6 +3275,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "Upload Model Version"
@@ -3231,6 +3389,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "List Project Setups"
@@ -3339,6 +3507,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "Create Setup"
@@ -3439,6 +3617,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "Read Setup"
@@ -3558,6 +3746,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "Accept Setup Assumption"
@@ -3677,6 +3875,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "Reject Setup Assumption"
@@ -3796,6 +4004,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "Confirm Setup Region"
@@ -3915,6 +4133,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "Reject Setup Region"
@@ -4019,6 +4247,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "List Revisions"
@@ -4127,6 +4365,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "Update Setup"
@@ -4236,6 +4484,16 @@
               }
             },
             "description": "Stored data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
           }
         },
         "summary": "Read Revision"

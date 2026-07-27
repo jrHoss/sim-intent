@@ -41,7 +41,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.record_versions import load_fallback_record
-from app.blob_store import BlobStore, BlobIntegrityError
+from app.blob_store import (
+    BlobStore, BlobIntegrityError, SourceStorageLimitExceededError,
+)
 from app.config import LocalDataConfig
 from app.ingestion import IngestionService, QuarantinedUpload
 from app.data_root_lock import DataRootLock
@@ -55,6 +57,7 @@ from app.persistence import (
     SetupRequestConflictError,
     SetupRevision,
     SetupRevisionConflictError,
+    SetupSourceSupersededError,
     SimulationSetup,
     create_sqlite_engine,
 )
@@ -301,6 +304,10 @@ class ModelVersionResponse(StrictModel):
     media_type: str
     model_kind: str
     created_at: str
+    is_current: bool
+    is_superseded: bool
+    superseded_at: str | None
+    superseded_by_version_id: str | None
 
 
 class ModelUploadResponse(StrictModel):
@@ -336,6 +343,10 @@ class SetupSummary(StrictModel):
     current_revision: int
     created_at: str
     updated_at: str
+    model_version_is_current: bool
+    is_stale: bool
+    stale_reason: str | None
+    stale_at: str | None
 
 
 class SetupRevisionResponse(StrictModel):
@@ -530,6 +541,7 @@ def create_app(
             persistence = Persistence(
                 create_sqlite_engine(durable_config.database_url),
                 BlobStore(durable_config.blob_root),
+                max_source_storage_bytes=durable_config.max_source_storage_bytes,
             )
             application.state.persistence = persistence
             ingestion = IngestionService(durable_config)
@@ -700,11 +712,13 @@ def create_app(
             )
         except PersistenceNotFoundError as exc:
             raise _not_found_problem(exc.resource) from exc
+        except SourceStorageLimitExceededError as exc:
+            raise source_storage_problem() from exc
         finally:
             upload.path.unlink(missing_ok=True)
         return ModelUploadResponse(
             model_id=model.id,
-            model_version=_version_response(version),
+            model_version=_version_response(version, model.current_version_id),
         )
 
     @app.post(
@@ -735,6 +749,8 @@ def create_app(
             )
         except PersistenceNotFoundError as exc:
             raise _not_found_problem(exc.resource) from exc
+        except SourceStorageLimitExceededError as exc:
+            raise source_storage_problem() from exc
         except PersistenceConflictError as exc:
             raise ApiProblem(
                 status=409,
@@ -744,7 +760,10 @@ def create_app(
             ) from exc
         finally:
             upload.path.unlink(missing_ok=True)
-        return ModelUploadResponse(model_id=model.id, model_version=_version_response(version))
+        return ModelUploadResponse(
+            model_id=model.id,
+            model_version=_version_response(version, model.current_version_id),
+        )
 
     @app.get(
         "/api/v1/models/{model_id}/versions",
@@ -753,9 +772,13 @@ def create_app(
     )
     async def list_model_versions(model_id: uuid.UUID) -> list[ModelVersionResponse]:
         model_id_string = str(model_id)
-        if persistence().get_model(model_id_string) is None:
+        model = persistence().get_model(model_id_string)
+        if model is None:
             raise _not_found_problem("model")
-        return [_version_response(version) for version in persistence().list_versions(model_id_string)]
+        return [
+            _version_response(version, model.current_version_id)
+            for version in persistence().list_versions(model_id_string)
+        ]
 
     @app.get(
         "/api/v1/model-versions/{version_id}",
@@ -766,16 +789,30 @@ def create_app(
         version = persistence().get_version(str(version_id))
         if version is None:
             raise _not_found_problem("model version")
-        return _version_response(version)
+        model = persistence().get_model(version.model_id)
+        if model is None:
+            raise _not_found_problem("model")
+        return _version_response(version, model.current_version_id)
 
     def setup_summary(setup: SimulationSetup) -> SetupSummary:
         if setup.current_revision is None:
             raise RuntimeError("setup creation is incomplete")
+        version = persistence().get_version(setup.model_version_id)
+        if version is None:
+            raise RuntimeError("setup model version is missing")
+        model = persistence().get_model(setup.model_id)
+        if model is None:
+            raise RuntimeError("setup model is missing")
         return SetupSummary(
             id=setup.id, project_id=setup.project_id, model_id=setup.model_id,
             model_version_id=setup.model_version_id,
             current_revision=setup.current_revision,
             created_at=_utc_isoformat(setup.created_at), updated_at=_utc_isoformat(setup.updated_at),
+            model_version_is_current=(
+                setup.model_version_id == model.current_version_id
+            ),
+            is_stale=setup.is_stale, stale_reason=setup.stale_reason,
+            stale_at=None if setup.stale_at is None else _utc_isoformat(setup.stale_at),
         )
 
     def revision_response(revision: SetupRevision) -> SetupRevisionResponse:
@@ -792,6 +829,9 @@ def create_app(
             )
             for region in intent.regions if region.status in {"proposed", "confirmed"}
         }
+        setup = persistence().get_setup(revision.setup_id)
+        if setup is None:
+            raise RuntimeError("setup is missing")
         return SetupRevisionResponse(
             id=revision.id, setup_id=revision.setup_id, revision=revision.revision,
             parent_revision_id=revision.parent_revision_id,
@@ -800,11 +840,14 @@ def create_app(
             mutation_type=revision.mutation_type, request_id=revision.request_id,
             created_at=_utc_isoformat(revision.created_at), intent=intent,
             validation=report, selected_entities=selected,
-            highlight_state=highlights, export_eligible=report.export_eligible,
+            highlight_state=highlights,
+            export_eligible=report.export_eligible and not setup.is_stale,
         )
 
     def setup_conflict(exc: PersistenceConflictError) -> ApiProblem:
-        if isinstance(exc, SetupRevisionConflictError):
+        if isinstance(exc, SetupSourceSupersededError):
+            code, detail = "setup_source_superseded", "The setup source version has been superseded."
+        elif isinstance(exc, SetupRevisionConflictError):
             code, detail = "setup_revision_conflict", "The expected revision is stale."
         elif isinstance(exc, SetupRequestConflictError):
             code, detail = "setup_request_id_conflict", "The request ID was already used for a different mutation."
@@ -1916,7 +1959,9 @@ def _project_response(project: Project) -> ProjectResponse:
     )
 
 
-def _version_response(version: ModelVersion) -> ModelVersionResponse:
+def _version_response(
+    version: ModelVersion, current_version_id: str | None
+) -> ModelVersionResponse:
     return ModelVersionResponse(
         id=version.id,
         model_id=version.model_id,
@@ -1927,6 +1972,13 @@ def _version_response(version: ModelVersion) -> ModelVersionResponse:
         media_type=version.media_type,
         model_kind=version.model_kind,
         created_at=_utc_isoformat(version.created_at),
+        is_current=version.id == current_version_id,
+        is_superseded=version.is_superseded,
+        superseded_at=(
+            None if version.superseded_at is None
+            else _utc_isoformat(version.superseded_at)
+        ),
+        superseded_by_version_id=version.superseded_by_version_id,
     )
 
 
@@ -1948,6 +2000,15 @@ def _not_found_problem(resource: str) -> ApiProblem:
         code=f"{normalized}_not_found",
         title=f"{resource.title()} not found",
         detail=f"The requested {resource} does not exist.",
+    )
+
+
+def source_storage_problem() -> ApiProblem:
+    return ApiProblem(
+        status=507,
+        code="source_storage_limit_exceeded",
+        title="Insufficient source storage",
+        detail="The configured durable source-storage capacity would be exceeded.",
     )
 
 

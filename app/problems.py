@@ -101,5 +101,6 @@ PROBLEM_RESPONSES = {
         415: "Unsupported media type",
         422: "Invalid request",
         500: "Stored data integrity failure",
+        507: "Insufficient storage",
     }.items()
 }
