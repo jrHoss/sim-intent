@@ -17,6 +17,7 @@ class LocalDataConfig:
     root: Path
     quarantine_directory: Path | None = None
     max_source_upload_bytes: int = 64 * 1024 * 1024
+    max_source_storage_bytes: int = 1024 * 1024 * 1024
     parser_timeout_seconds: float = 30.0
     parser_output_bytes: int = 256 * 1024
     stale_quarantine_age_seconds: float = 3600.0
@@ -27,6 +28,12 @@ class LocalDataConfig:
             raise ValueError("data root must be absolute")
         if self.max_source_upload_bytes <= 0:
             raise ValueError("maximum source upload bytes must be positive")
+        if (
+            isinstance(self.max_source_storage_bytes, bool)
+            or not isinstance(self.max_source_storage_bytes, int)
+            or self.max_source_storage_bytes <= 0
+        ):
+            raise ValueError("maximum source storage bytes must be a positive integer")
         if not math.isfinite(self.parser_timeout_seconds) or self.parser_timeout_seconds <= 0 or self.parser_output_bytes <= 0:
             raise ValueError("parser limits must be positive")
         if not math.isfinite(self.stale_quarantine_age_seconds) or self.stale_quarantine_age_seconds < 0:
@@ -71,6 +78,7 @@ class LocalDataConfig:
             root,
             quarantine_directory=_quarantine_path(root),
             max_source_upload_bytes=_positive_int("SIM_INTENT_MAX_SOURCE_UPLOAD_BYTES", 64 * 1024 * 1024),
+            max_source_storage_bytes=_positive_int("SIM_INTENT_MAX_SOURCE_STORAGE_BYTES", 1024 * 1024 * 1024),
             parser_timeout_seconds=_positive_float("SIM_INTENT_PARSER_TIMEOUT_SECONDS", 30.0),
             parser_output_bytes=_positive_int("SIM_INTENT_PARSER_OUTPUT_BYTES", 256 * 1024),
             stale_quarantine_age_seconds=_nonnegative_float("SIM_INTENT_STALE_QUARANTINE_AGE_SECONDS", 3600.0),

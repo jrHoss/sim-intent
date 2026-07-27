@@ -13,6 +13,7 @@ from typing import Callable, Iterator
 from pathlib import Path
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -22,6 +23,7 @@ from sqlalchemy import (
     create_engine,
     event,
     func,
+    inspect as sa_inspect,
     select,
 )
 from sqlalchemy.engine import Engine
@@ -35,7 +37,7 @@ from sqlalchemy.orm import (
     sessionmaker,
 )
 
-from app.blob_store import BlobStore
+from app.blob_store import BlobStore, SourceStorageLimitExceededError
 from ir.schema import SimulationIntent
 from ir.versioning import dump_simulation_intent, load_simulation_intent
 
@@ -66,6 +68,10 @@ class SetupRequestConflictError(PersistenceConflictError):
     pass
 
 
+class SetupSourceSupersededError(PersistenceConflictError):
+    pass
+
+
 class Project(Base):
     __tablename__ = "projects"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4_string)
@@ -81,6 +87,7 @@ class Model(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4_string)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    current_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     project: Mapped[Project] = relationship(back_populates="models")
     versions: Mapped[list["ModelVersion"]] = relationship(
         back_populates="model",
@@ -102,6 +109,9 @@ class ModelVersion(Base):
     model_kind: Mapped[str] = mapped_column(String(20), nullable=False)
     blob_key: Mapped[str] = mapped_column(String(160), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    is_superseded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    superseded_by_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     model: Mapped[Model] = relationship(back_populates="versions")
 
 
@@ -119,6 +129,9 @@ class SimulationSetup(Base):
     create_request_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    is_stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    stale_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    stale_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class SetupRevision(Base):
@@ -141,8 +154,15 @@ class SetupRevision(Base):
 
 
 @event.listens_for(ModelVersion, "before_update")
-def _immutable_model_version(*_args) -> None:
-    raise ValueError("ModelVersion records are immutable")
+def _immutable_model_version_payload(_mapper, _connection, target) -> None:
+    state = sa_inspect(target)
+    mutable = {"is_superseded", "superseded_at", "superseded_by_version_id"}
+    if any(
+        attribute.history.has_changes()
+        for name, attribute in state.attrs.items()
+        if name not in mutable and name != "model"
+    ):
+        raise ValueError("ModelVersion records are immutable")
 
 
 @event.listens_for(SetupRevision, "before_update")
@@ -188,10 +208,12 @@ class Persistence:
         blobs: BlobStore,
         *,
         after_blob_publish: Callable[[], None] | None = None,
+        max_source_storage_bytes: int = 1024 * 1024 * 1024,
     ):
         self.engine = engine
         self.blobs = blobs
         self._after_blob_publish = after_blob_publish
+        self.max_source_storage_bytes = max_source_storage_bytes
         self.sessions = sessionmaker(engine, expire_on_commit=False)
         with _SETUP_LOCKS_GUARD:
             self._setup_lock = _SETUP_LOCKS.setdefault(str(engine.url), threading.RLock())
@@ -233,6 +255,11 @@ class Persistence:
         # orphan cleanup, including across separate application/engine instances.
         with self.blobs.coordination_lock:
             digest = self.blobs.digest(content)
+            final = self.blobs.path_for_key(self.blobs.key(digest))
+            if not final.exists():
+                self.cleanup_unreferenced_blobs(limit=100)
+                if len(content) > self.max_source_storage_bytes - self.blobs.source_bytes():
+                    raise SourceStorageLimitExceededError("source storage capacity exceeded")
             blob_key = self.blobs.publish(content, digest)
             if self._after_blob_publish is not None:
                 self._after_blob_publish()
@@ -273,8 +300,10 @@ class Persistence:
                     model_kind=model_kind,
                     blob_key=blob_key,
                     created_at=datetime.now(timezone.utc),
+                    is_superseded=False,
                 )
                 self._insert_model_version(session, version_record)
+                self._supersede_current(session, model, version_record)
             return model, version_record
 
     def create_model_version_from_file(
@@ -289,7 +318,13 @@ class Persistence:
         model_id: str | None = None,
     ) -> tuple[Model, ModelVersion]:
         with self.blobs.coordination_lock:
-            blob_key = self.blobs.publish_file(source_path, source_sha256, size_bytes)
+            final = self.blobs.path_for_key(self.blobs.key(source_sha256))
+            if not final.exists():
+                self.cleanup_unreferenced_blobs(limit=100)
+            blob_key = self.blobs.publish_file_with_limit(
+                source_path, source_sha256, size_bytes,
+                self.max_source_storage_bytes,
+            )
             if self._after_blob_publish is not None:
                 self._after_blob_publish()
             media_type = mimetypes.guess_type(source_name)[0] or "application/octet-stream"
@@ -316,10 +351,36 @@ class Persistence:
                     source_sha256=source_sha256, source_name=source_name,
                     size_bytes=size_bytes, media_type=media_type,
                     model_kind=model_kind, blob_key=blob_key,
-                    created_at=datetime.now(timezone.utc),
+                    created_at=datetime.now(timezone.utc), is_superseded=False,
                 )
                 self._insert_model_version(session, version_record)
+                self._supersede_current(session, model, version_record)
             return model, version_record
+
+    @staticmethod
+    def _supersede_current(
+        session: Session, model: Model, new_version: ModelVersion
+    ) -> None:
+        now = new_version.created_at
+        if model.current_version_id is not None:
+            previous = session.get(ModelVersion, model.current_version_id)
+            if previous is None or previous.model_id != model.id:
+                raise PersistenceConflictError("invalid current model version")
+            previous.is_superseded = True
+            previous.superseded_at = now
+            previous.superseded_by_version_id = new_version.id
+            session.query(SimulationSetup).filter(
+                SimulationSetup.model_version_id == previous.id,
+                SimulationSetup.is_stale.is_(False),
+            ).update(
+                {
+                    SimulationSetup.is_stale: True,
+                    SimulationSetup.stale_reason: "source_replaced",
+                    SimulationSetup.stale_at: now,
+                },
+                synchronize_session=False,
+            )
+        model.current_version_id = new_version.id
 
     @staticmethod
     def _insert_model_version(
@@ -330,6 +391,8 @@ class Persistence:
             column.name: getattr(version_record, column.name)
             for column in ModelVersion.__table__.columns
         }
+        if values["is_superseded"] is None:
+            values["is_superseded"] = False
         result = session.execute(
             sqlite_insert(ModelVersion)
             .values(**values)
@@ -356,7 +419,7 @@ class Persistence:
             "model_version_id": model_version_id,
             "intent_sha256": intent_digest,
         })
-        with self._setup_lock, self.transaction() as session:
+        with self.blobs.coordination_lock, self._setup_lock, self.transaction() as session:
             replay = session.scalar(select(SimulationSetup).where(
                 SimulationSetup.project_id == project_id,
                 SimulationSetup.create_request_id == request_id,
@@ -382,6 +445,8 @@ class Persistence:
                 raise PersistenceNotFoundError("model version")
             if model.project_id != project_id or version.model_id != model_id:
                 raise PersistenceConflictError("invalid setup lineage")
+            if model.current_version_id != version.id or version.is_superseded:
+                raise SetupSourceSupersededError("setup source is superseded")
             now = datetime.now(timezone.utc)
             setup = SimulationSetup(
                 project_id=project_id, model_id=model_id,
@@ -476,6 +541,8 @@ class Persistence:
                 if replay.mutation_sha256 == mutation_digest:
                     return replay
                 raise SetupRequestConflictError("request ID reused with different mutation")
+            if setup.is_stale:
+                raise SetupSourceSupersededError("setup source is superseded")
             if setup.current_revision != expected_revision:
                 raise SetupRevisionConflictError("stale setup revision")
             parent = session.scalar(select(SetupRevision).where(
@@ -501,11 +568,16 @@ class Persistence:
             "payload": mutation_payload,
         })
         with self.sessions() as session:
+            setup = session.get(SimulationSetup, setup_id)
+            if setup is None:
+                raise PersistenceNotFoundError("setup")
             replay = session.scalar(select(SetupRevision).where(
                 SetupRevision.setup_id == setup_id,
                 SetupRevision.request_id == request_id,
             ))
             if replay is None:
+                if setup.is_stale:
+                    raise SetupSourceSupersededError("setup source is superseded")
                 return None
             if replay.mutation_sha256 != expected_digest:
                 raise SetupRequestConflictError("request ID reused with different mutation")

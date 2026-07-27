@@ -540,6 +540,11 @@ def test_orphan_cleanup_tolerates_disappearing_entry(durable, monkeypatch):
                 model_kind="inp",
             )
     candidates = list(persistence.blobs.iter_final_blobs())
+    # R2.2 reclaims the first orphan before the second unique publication.
+    assert len(candidates) == 1
+    extra = minimal_inp(9)
+    persistence.blobs.publish(extra, persistence.blobs.digest(extra))
+    candidates = list(persistence.blobs.iter_final_blobs())
     assert len(candidates) == 2
     disappearing = candidates[0]
     original_unlink = Path.unlink
