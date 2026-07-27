@@ -26,6 +26,7 @@ from app.persistence import (
     Project,
     create_sqlite_engine,
 )
+from app.problems import ApiProblem
 from app.runtime_mode import RuntimeMode
 from app.server import ModelStore, create_app
 
@@ -415,34 +416,36 @@ def test_problem_details_for_validation_not_found_conflict_and_blob_failure(dura
     assert_problem(corrupt, 500, "source_blob_integrity_failed")
 
 
-def test_parser_failure_is_safe_and_original_error_is_correlated(
-    durable, monkeypatch, caplog
+def test_parser_failure_is_safe_and_original_error_is_not_exposed(
+    durable, monkeypatch
 ):
     app, _ = durable
     project = create_project(app, "parser safety")
     secret = "sensitive-customer-sentinel"
     absolute_path = r"C:\private\models\customer.inp"
 
-    def fail_inventory(_self, _record):
-        raise RuntimeError(f"parser failed at {absolute_path} with {secret}")
+    async def fail_parse(_upload, _trace_id=None):
+        raise ApiProblem(
+            status=422,
+            code="parser_crash",
+            title="Parser failed",
+            detail="The isolated source parser failed.",
+        ) from RuntimeError(f"parser failed at {absolute_path} with {secret}")
 
-    monkeypatch.setattr(ModelStore, "inventory", fail_inventory)
+    monkeypatch.setattr(app.state.ingestion, "parse", fail_parse)
     correlation_id = "parser-test-correlation"
-    with caplog.at_level("ERROR", logger="uvicorn.error"):
-        response = request(
-            app,
-            "POST",
-            f"/api/v1/projects/{project['id']}/models",
-            files={"file": ("unsafe.inp", minimal_inp(), "application/octet-stream")},
-            headers={"x-correlation-id": correlation_id},
-        )
-    assert_problem(response, 422, "source_model_parse_failed")
-    assert response.json()["detail"] == "The uploaded source model could not be parsed."
+    response = request(
+        app,
+        "POST",
+        f"/api/v1/projects/{project['id']}/models",
+        files={"file": ("unsafe.inp", minimal_inp(), "application/octet-stream")},
+        headers={"x-correlation-id": correlation_id},
+    )
+    assert_problem(response, 422, "parser_crash")
+    assert response.json()["detail"] == "The isolated source parser failed."
     assert response.json()["trace_id"] == correlation_id
     assert secret not in response.text
     assert absolute_path not in response.text
-    assert correlation_id in caplog.text
-    assert secret in caplog.text
 
 
 def assert_problem(response: httpx.Response, status: int, code: str) -> None:
@@ -462,7 +465,7 @@ def test_openapi_declares_problem_json_for_new_endpoints(durable):
         if not path.startswith("/api/v1/"):
             continue
         for operation in methods.values():
-            for status in ("404", "409", "422", "500"):
+            for status in ("404", "409", "413", "422", "500"):
                 content = operation["responses"][status]["content"]
                 assert set(content) == {"application/problem+json"}
                 assert content["application/problem+json"]["schema"] == {

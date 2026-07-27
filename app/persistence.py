@@ -10,6 +10,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Callable, Iterator
+from pathlib import Path
 
 from sqlalchemy import (
     DateTime,
@@ -271,6 +272,50 @@ class Persistence:
                     media_type=media_type,
                     model_kind=model_kind,
                     blob_key=blob_key,
+                    created_at=datetime.now(timezone.utc),
+                )
+                self._insert_model_version(session, version_record)
+            return model, version_record
+
+    def create_model_version_from_file(
+        self,
+        *,
+        project_id: str,
+        source_name: str,
+        source_path: Path,
+        source_sha256: str,
+        size_bytes: int,
+        model_kind: str,
+        model_id: str | None = None,
+    ) -> tuple[Model, ModelVersion]:
+        with self.blobs.coordination_lock:
+            blob_key = self.blobs.publish_file(source_path, source_sha256, size_bytes)
+            if self._after_blob_publish is not None:
+                self._after_blob_publish()
+            media_type = mimetypes.guess_type(source_name)[0] or "application/octet-stream"
+            model = Model(project_id=project_id) if model_id is None else None
+            with self.transaction() as session:
+                project = session.get(Project, project_id)
+                if project is None:
+                    raise PersistenceNotFoundError("project")
+                if model is None:
+                    model = session.get(Model, model_id)
+                    if model is None:
+                        raise PersistenceNotFoundError("model")
+                    if model.project_id != project_id:
+                        raise PersistenceConflictError("model does not belong to project")
+                else:
+                    session.add(model)
+                    session.flush()
+                next_version = session.scalar(
+                    select(func.coalesce(func.max(ModelVersion.version), 0) + 1)
+                    .where(ModelVersion.model_id == model.id)
+                )
+                version_record = ModelVersion(
+                    id=uuid4_string(), model_id=model.id, version=int(next_version),
+                    source_sha256=source_sha256, source_name=source_name,
+                    size_bytes=size_bytes, media_type=media_type,
+                    model_kind=model_kind, blob_key=blob_key,
                     created_at=datetime.now(timezone.utc),
                 )
                 self._insert_model_version(session, version_record)

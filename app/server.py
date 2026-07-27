@@ -26,6 +26,7 @@ from email.parser import BytesParser
 from email.policy import default as email_policy
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
+from urllib.parse import quote
 
 import gmsh
 import meshio
@@ -42,6 +43,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.record_versions import load_fallback_record
 from app.blob_store import BlobStore, BlobIntegrityError
 from app.config import LocalDataConfig
+from app.ingestion import IngestionService, QuarantinedUpload
 from app.data_root_lock import DataRootLock
 from app.migrations import upgrade_database
 from app.persistence import (
@@ -126,6 +128,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 SUPPORTED_SUFFIXES = {".step": "step", ".stp": "step", ".inp": "inp"}
 SELECTION_LOGGER = logging.getLogger("uvicorn.error")
 APPLICATION_LOGGER = logging.getLogger("uvicorn.error")
+CORRELATION_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
 class SelectRequest(BaseModel):
@@ -529,14 +532,19 @@ def create_app(
                 BlobStore(durable_config.blob_root),
             )
             application.state.persistence = persistence
+            ingestion = IngestionService(durable_config)
+            application.state.ingestion = ingestion
             application.state.data_config = durable_config
             persistence.blobs.cleanup_temporary()
+            ingestion.cleanup_stale()
             yield
         finally:
             if persistence is not None:
                 persistence.dispose()
             if hasattr(application.state, "persistence"):
                 del application.state.persistence
+            if hasattr(application.state, "ingestion"):
+                del application.state.ingestion
             root_lock.release()
 
     app = FastAPI(
@@ -551,6 +559,15 @@ def create_app(
     app.state.viewer_events = ViewerEventBroker()
     app.state.interpreter = Interpreter()
     app.state.pending_interpretations: dict[str, PendingInterpretation] = {}
+
+    @app.middleware("http")
+    async def request_correlation(request: Request, call_next):
+        supplied = request.headers.get("x-correlation-id", "")
+        request.state.correlation_id = (
+            supplied if CORRELATION_ID_RE.fullmatch(supplied) else str(uuid.uuid4())
+        )
+        return await call_next(request)
+
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     default_openapi = app.openapi
 
@@ -668,18 +685,23 @@ def create_app(
         request: Request,
         filename: str | None = Query(default=None),
     ) -> ModelUploadResponse:
-        source_name, content = await _uploaded_file(request, filename)
-        source_name, kind = _validate_source_upload(source_name, content)
-        _validate_model_bytes(request, source_name, kind, content)
+        upload = await app.state.ingestion.receive(request, filename)
         try:
-            model, version = persistence().create_model_version(
+            await app.state.ingestion.parse(
+                upload, request.state.correlation_id
+            )
+            model, version = persistence().create_model_version_from_file(
                 project_id=str(project_id),
-                source_name=source_name,
-                content=content,
-                model_kind=kind,
+                source_name=upload.source_name,
+                source_path=upload.path,
+                source_sha256=upload.sha256,
+                size_bytes=upload.size,
+                model_kind=upload.kind,
             )
         except PersistenceNotFoundError as exc:
             raise _not_found_problem(exc.resource) from exc
+        finally:
+            upload.path.unlink(missing_ok=True)
         return ModelUploadResponse(
             model_id=model.id,
             model_version=_version_response(version),
@@ -697,16 +719,19 @@ def create_app(
         request: Request,
         filename: str | None = Query(default=None),
     ) -> ModelUploadResponse:
-        source_name, content = await _uploaded_file(request, filename)
-        source_name, kind = _validate_source_upload(source_name, content)
-        _validate_model_bytes(request, source_name, kind, content)
+        upload = await app.state.ingestion.receive(request, filename)
         try:
-            model, version = persistence().create_model_version(
+            await app.state.ingestion.parse(
+                upload, request.state.correlation_id
+            )
+            model, version = persistence().create_model_version_from_file(
                 project_id=str(project_id),
                 model_id=str(model_id),
-                source_name=source_name,
-                content=content,
-                model_kind=kind,
+                source_name=upload.source_name,
+                source_path=upload.path,
+                source_sha256=upload.sha256,
+                size_bytes=upload.size,
+                model_kind=upload.kind,
             )
         except PersistenceNotFoundError as exc:
             raise _not_found_problem(exc.resource) from exc
@@ -717,6 +742,8 @@ def create_app(
                 title="Model conflict",
                 detail="The model does not belong to the requested project.",
             ) from exc
+        finally:
+            upload.path.unlink(missing_ok=True)
         return ModelUploadResponse(model_id=model.id, model_version=_version_response(version))
 
     @app.get(
@@ -983,22 +1010,47 @@ def create_app(
         "/api/v1/model-versions/{version_id}/inventory",
         responses=PROBLEM_RESPONSES,
     )
-    async def durable_inventory(version_id: uuid.UUID) -> JSONResponse:
+    async def durable_inventory(
+        version_id: uuid.UUID, request: Request
+    ) -> JSONResponse:
         version, content = await durable_record(version_id)
         with _materialized_model(version.source_name, version.model_kind, content) as record:
-            return JSONResponse(app.state.model_store.inventory(record).to_dict())
+            upload = QuarantinedUpload(
+                record.path, version.source_name, version.model_kind,
+                version.size_bytes, version.source_sha256,
+            )
+            return JSONResponse(
+                await app.state.ingestion.parse(
+                    upload, request.state.correlation_id
+                )
+            )
 
     @app.get(
         "/api/v1/model-versions/{version_id}/gltf",
         responses=PROBLEM_RESPONSES,
     )
-    async def durable_gltf(version_id: uuid.UUID) -> JSONResponse:
+    async def durable_gltf(
+        version_id: uuid.UUID, request: Request
+    ) -> JSONResponse:
         version, content = await durable_record(version_id)
         with _materialized_model(version.source_name, version.model_kind, content) as record:
-            inventory = app.state.model_store.inventory(record)
+            upload = QuarantinedUpload(
+                record.path, version.source_name, version.model_kind,
+                version.size_bytes, version.source_sha256,
+            )
+            inventory_data = await app.state.ingestion.parse(
+                upload, request.state.correlation_id
+            )
+            inventory = (
+                FaceInventory.from_dict(inventory_data)
+                if record.kind == "step"
+                else MeshInventory.from_dict(inventory_data)
+            )
             meshes = _tessellate_step(record.path) if record.kind == "step" else _tessellate_inp(record.path, inventory)
             response = JSONResponse(_build_gltf(meshes), media_type="model/gltf+json")
-            response.headers["Content-Disposition"] = f'inline; filename="{Path(version.source_name).stem}.gltf"'
+            response.headers["Content-Disposition"] = _content_disposition(
+                f"{Path(version.source_name).stem}.gltf"
+            )
             return response
 
     async def inventory_response(model_id: str) -> JSONResponse:
@@ -1014,8 +1066,8 @@ def create_app(
         else:
             face_meshes = _tessellate_inp(record.path, inventory)
         response = JSONResponse(_build_gltf(face_meshes), media_type="model/gltf+json")
-        response.headers["Content-Disposition"] = (
-            f'inline; filename="{Path(record.source_name).stem}.gltf"'
+        response.headers["Content-Disposition"] = _content_disposition(
+            f"{Path(record.source_name).stem}.gltf"
         )
         return response
 
@@ -1882,6 +1934,11 @@ def _utc_isoformat(value) -> str:
     return (
         value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
     ).astimezone(timezone.utc).isoformat()
+
+
+def _content_disposition(filename: str) -> str:
+    encoded = quote(filename, safe="")
+    return f"inline; filename=\"model.gltf\"; filename*=UTF-8''{encoded}"
 
 
 def _not_found_problem(resource: str) -> ApiProblem:

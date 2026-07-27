@@ -1421,3 +1421,50 @@ untracked test modules.
 - OpenAPI, generated TypeScript, migration, cascade, restart, concurrency,
   idempotency, and `git diff --check` evidence passed.
 - Independent review verdict: **READY TO COMMIT**.
+## R2.1 safe ingestion (working tree evidence, 2026-07-26)
+
+- Branch: `r2a-safe-ingestion`; no commit created.
+- Added bounded raw/multipart quarantine ingestion, incremental source SHA-256,
+  isolated version-1 parser worker responses, bounded output and timeout
+  termination, file-based CAS publication, and bounded startup cleanup.
+- Focused ingestion/persistence/upload/viewer/migration run: 98 passed.
+- Full suite: 615 passed, 1 skipped (optional environment capability).
+- OpenAPI/schema stamping, TypeScript generation drift, requirements/lock file
+  byte drift, compileall, and `git diff --check`: clean.
+- `uv lock --check` could not run because uv is not installed/on PATH in this
+  Windows environment; neither `uv.lock` nor dependency declarations changed.
+- Remaining boundary: the worker provides crash/timeout isolation, not OS CPU
+  or memory quotas; durable STEP viewer tessellation remains existing trusted
+  post-validation behavior pending the later meshing isolation slice.
+## R2.1 independent-review remediation (working tree, 2026-07-26)
+
+- Preserved validated `.step`/`.stp`/`.inp` suffixes on unique quarantine
+  files; real bracket STEP upload, inventory, glTF, shutdown, and fresh-app
+  reopen pass without parser mocking.
+- Replaced multipart envelope decoding with an incremental boundary parser
+  that writes and hashes only the selected file part, bounds source bytes and
+  envelope overhead, and cleans partial files on malformed/ambiguous input.
+- Windows parser processes now run in a kill-on-close Job Object; a real fake
+  descendant could not create its delayed side-effect after timeout. Unix
+  process-group termination remains in place.
+- Structured stdout remains strict and bounded; stderr is drained with a
+  bounded retained prefix and truncation marker without invalidating success.
+  Non-object JSON is rejected as `parser_crash`; internal worker diagnostics
+  are correlated in private logs and sanitized from problem responses.
+- Added portable filename allowlisting, encoded download disposition, long
+  comment-led INP coverage, finite configuration validation, reserved-root
+  protection, and generated HTTP 413 OpenAPI/TypeScript contracts.
+- Focused safe-ingestion set: 36 passed. Full suite: 642 passed, 1 skipped.
+## R2.1 final correlation/length remediation (working tree, 2026-07-26)
+
+- Every HTTP request now resolves one validated supplied or generated
+  correlation ID before route handling. Durable upload, inventory, and glTF
+  parser calls, private diagnostics, and RFC 9457 responses share that ID.
+- Narrow Content-Length parsing no longer catches the `ApiProblem` 413;
+  declared raw oversize is rejected without reading the request stream while
+  streamed limits remain authoritative for malformed, missing, or deceptive
+  lengths.
+- Portable filename validation additionally rejects Windows reserved device
+  basenames case-insensitively.
+- Focused safe-ingestion suite: 46 passed; affected persistence/viewer suite:
+  100 passed; full suite: 652 passed, 1 skipped.

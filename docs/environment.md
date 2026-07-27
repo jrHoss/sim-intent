@@ -144,6 +144,27 @@ ownership, rather than file existence, determines availability. Thread-level
 blob publication and cleanup are additionally serialized by an in-process
 lock, but that lock is not the cross-process ownership mechanism.
 
+Durable STEP/INP uploads are streamed to `quarantine/` under the same data
+root and published to `blobs/` only after isolated parsing succeeds.
+
+| Environment variable | Default |
+|---|---:|
+| `SIM_INTENT_MAX_SOURCE_UPLOAD_BYTES` | 67108864 (64 MiB) |
+| `SIM_INTENT_QUARANTINE_DIR` | `<data-root>/quarantine` |
+| `SIM_INTENT_PARSER_TIMEOUT_SECONDS` | 30 |
+| `SIM_INTENT_PARSER_OUTPUT_BYTES` | 262144 per output stream |
+| `SIM_INTENT_STALE_QUARANTINE_AGE_SECONDS` | 3600 |
+| `SIM_INTENT_STALE_QUARANTINE_CLEANUP_LIMIT` | 100 |
+
+Integer limits must be positive and the stale age non-negative; invalid values
+must also be finite. Quarantine must be an absolute directory beneath the data
+root, but outside the blob/CAS tree, SQLite path, and external lock tree;
+invalid settings fail startup configuration. The parser uses a controlled argument vector, a
+minimal environment, a deterministic working directory, and no shell. This
+fresh-process boundary contains parser crashes and global library state, but
+is not a hostile sandbox. OS-level CPU and memory quotas remain deferred
+reliability/security work.
+
 ### Supported Linux container (release environment)
 
 ```bash
