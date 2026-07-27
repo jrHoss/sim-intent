@@ -52,7 +52,7 @@ class ApiProblem(ProblemDetailsError):
 def problem_response(request: Request, error: ProblemDetailsError) -> JSONResponse:
     trace_id = (
         getattr(error, "trace_id", None)
-        or request.headers.get("x-correlation-id")
+        or getattr(request.state, "correlation_id", None)
         or str(uuid.uuid4())
     )
     payload = {
@@ -97,6 +97,7 @@ PROBLEM_RESPONSES = {
         400: "Invalid request",
         404: "Resource not found",
         409: "Conflict",
+        413: "Upload too large",
         415: "Unsupported media type",
         422: "Invalid request",
         500: "Stored data integrity failure",

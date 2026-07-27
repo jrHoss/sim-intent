@@ -85,6 +85,40 @@ class BlobStore:
         finally:
             temporary.unlink(missing_ok=True)
 
+    def publish_file(
+        self, source: str | Path, expected_digest: str, expected_size: int
+    ) -> str:
+        """Publish an already-quarantined file without loading it into memory."""
+        self._validate_digest(expected_digest)
+        source_path = Path(source)
+        if source_path.stat(follow_symlinks=False).st_size != expected_size:
+            raise BlobIntegrityError("source size changed before publication")
+        self._verify_path(source_path, expected_digest)
+        key = self.key(expected_digest)
+        final = self.path_for_key(key)
+        final.parent.mkdir(parents=True, exist_ok=True)
+        if final.exists():
+            self._verify_path(final, expected_digest)
+            return key
+        fd, temporary_name = tempfile.mkstemp(prefix=".upload-", dir=final.parent)
+        temporary = Path(temporary_name)
+        try:
+            with source_path.open("rb") as source_stream, os.fdopen(fd, "wb") as target:
+                for chunk in iter(lambda: source_stream.read(1024 * 1024), b""):
+                    target.write(chunk)
+                target.flush()
+                os.fsync(target.fileno())
+            self._verify_path(temporary, expected_digest)
+            try:
+                os.replace(temporary, final)
+            except OSError:
+                if not final.exists():
+                    raise
+            self._verify_path(final, expected_digest)
+            return key
+        finally:
+            temporary.unlink(missing_ok=True)
+
     def read(self, key: str, expected_digest: str, expected_size: int) -> bytes:
         path = self.path_for_key(key)
         content = path.read_bytes()
