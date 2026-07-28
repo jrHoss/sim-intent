@@ -628,6 +628,22 @@ export interface components {
             units: components["schemas"]["Units"];
         };
         /**
+         * ArtifactCapability
+         * @description Selected-target capability, separate from engineering readiness.
+         */
+        ArtifactCapability: {
+            /** Adapter */
+            adapter: "ccx_inp" | null;
+            /** Blocking Issue Codes */
+            blocking_issue_codes: string[];
+            /** Capable */
+            capable: boolean;
+            /** Supported */
+            supported: boolean;
+            /** Target */
+            target: "calculix" | null;
+        };
+        /**
          * ArtifactExportRequest
          * @description Select one Task 14 adapter; eligibility remains server-computed.
          */
@@ -655,6 +671,8 @@ export interface components {
              * @default
              */
             id: string;
+            /** Material Proposal Fingerprint Sha256 */
+            material_proposal_fingerprint_sha256?: string | null;
             /**
              * Status
              * @enum {string}
@@ -838,7 +856,7 @@ export interface components {
              * Unit
              * @enum {string}
              */
-            unit: "kg/m^3" | "kg/m3" | "t/mm^3" | "tonne/mm^3";
+            unit: "kg/m^3" | "kg/m3" | "kg/m³" | "t/mm^3" | "tonne/mm^3";
             /** Value */
             value: number;
         };
@@ -1018,6 +1036,40 @@ export interface components {
              */
             state: "proposed" | "clarification";
         };
+        /**
+         * LegacySimulationIntent
+         * @description Route-scoped compatibility model for the frozen legacy session PUT.
+         *
+         *     This is the sole place where an absent version can still normalize to the
+         *     current in-memory contract. Durable ``/api/v1`` writes always use the
+         *     required ``SimulationIntent`` field above.
+         */
+        LegacySimulationIntent: {
+            analysis: components["schemas"]["Analysis"];
+            /** Assumptions */
+            assumptions: components["schemas"]["Assumption"][];
+            /** Bcs */
+            bcs: (components["schemas"]["FixedDisplacementBC"] | components["schemas"]["PrescribedDisplacementBC"])[];
+            /** Loads */
+            loads: (components["schemas"]["ResultantSurfaceForceLoad"] | components["schemas"]["SurfaceTractionLoad"] | components["schemas"]["PressureLoad"] | components["schemas"]["GravityLoad"] | components["schemas"]["ConcentratedForceLoad"])[];
+            /** Materials */
+            materials: components["schemas"]["Material"][];
+            mesh_settings?: components["schemas"]["MeshSettings"] | null;
+            /** Regions */
+            regions: components["schemas"]["Region"][];
+            /**
+             * Schema Version
+             * @default 2
+             */
+            schema_version: number;
+            solver_settings?: components["schemas"]["SolverSettings"] | null;
+            /**
+             * Validation Status
+             * @default unvalidated
+             * @enum {string}
+             */
+            validation_status: "unvalidated" | "valid" | "invalid";
+        };
         /** LengthQuantity */
         LengthQuantity: {
             /**
@@ -1028,10 +1080,52 @@ export interface components {
             /** Value */
             value: number;
         };
+        /**
+         * LoadSummary
+         * @description Canonical load totals that require no geometry inference.
+         */
+        LoadSummary: {
+            /** Concentrated Force Count */
+            concentrated_force_count: number;
+            /** Concentrated Force Total N */
+            concentrated_force_total_N: number[];
+            /** Distributed Load Count */
+            distributed_load_count: number;
+            /** Distributed Load Types */
+            distributed_load_types: {
+                [key: string]: number;
+            };
+            /** Explicit Force Vector Sum N */
+            explicit_force_vector_sum_N: number[];
+            /** Gravity Accelerations Mm Per S2 */
+            gravity_accelerations_mm_per_s2: number[][];
+            /** Gravity Density Available */
+            gravity_density_available: boolean;
+            /** Gravity Density Required */
+            gravity_density_required: boolean;
+            /** Gravity Load Count */
+            gravity_load_count: number;
+            /** Pressure Load Count */
+            pressure_load_count: number;
+            /** Resultant Surface Force Count */
+            resultant_surface_force_count: number;
+            /** Resultant Surface Force Total N */
+            resultant_surface_force_total_N: number[];
+            /** Traction Load Count */
+            traction_load_count: number;
+            /** Unresolved Resultants */
+            unresolved_resultants: components["schemas"]["UnresolvedLoadResultant"][];
+        };
         /** Material */
         Material: {
             /** E Mpa */
             E_MPa: number;
+            /**
+             * Authority
+             * @default engineer_entered
+             * @enum {string}
+             */
+            authority: "engineer_entered" | "system_proposed";
             density_original?: components["schemas"]["DensityQuantity"] | null;
             /** Density Tonne Per Mm3 */
             density_tonne_per_mm3?: number | null;
@@ -1044,6 +1138,8 @@ export interface components {
             name: string;
             /** Nu */
             nu: number;
+            /** Proposal Assumption Ref */
+            proposal_assumption_ref?: string | null;
             youngs_modulus_original?: components["schemas"]["StressQuantity"] | null;
         };
         /**
@@ -1126,12 +1222,12 @@ export interface components {
         };
         /**
          * PrescribedDisplacementBC
-         * @description Zero-only prescribed displacement.
+         * @description Finite translational prescribed displacement in canonical millimetres.
          *
-         *     The R3.1 preview envelope has no verified nonzero prescribed-displacement
-         *     interpretation or export path, so every component must be an exact zero.
-         *     Signed zero is accepted because ``-0.0 == 0.0``; any other value is a
-         *     deterministic rejection rather than a silently exported approximation.
+         *     Only the global Cartesian X/Y/Z translational components are representable.
+         *     Rotations, local/cylindrical coordinates, time dependence, and nonlinear
+         *     behavior have no fields in this strict model and are rejected rather than
+         *     approximated.
          */
         PrescribedDisplacementBC: {
             /** Components */
@@ -1406,8 +1502,11 @@ export interface components {
         };
         /** SetupRevisionResponse */
         SetupRevisionResponse: {
+            artifact_capability: components["schemas"]["ArtifactCapability"];
             /** Created At */
             created_at: string;
+            /** Engineering Ready */
+            engineering_ready: boolean;
             /** Export Eligible */
             export_eligible: boolean;
             /** Highlight State */
@@ -1491,10 +1590,7 @@ export interface components {
             mesh_settings?: components["schemas"]["MeshSettings"] | null;
             /** Regions */
             regions: components["schemas"]["Region"][];
-            /**
-             * Schema Version
-             * @default 2
-             */
+            /** Schema Version */
             schema_version: number;
             solver_settings?: components["schemas"]["SolverSettings"] | null;
             /**
@@ -1596,6 +1692,23 @@ export interface components {
              */
             stress: "MPa";
         };
+        /** UnresolvedLoadResultant */
+        UnresolvedLoadResultant: {
+            /** Load Index */
+            load_index: number;
+            /**
+             * Load Type
+             * @enum {string}
+             */
+            load_type: "pressure" | "surface_traction";
+            /**
+             * Reason Code
+             * @constant
+             */
+            reason_code: "geometry.surface_area_required";
+            /** Region Ref */
+            region_ref: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -1637,10 +1750,13 @@ export interface components {
          * @description Computed validation state; client-supplied status is never consulted.
          */
         ValidationReport: {
+            /** Engineering Ready */
+            engineering_ready: boolean;
             /** Export Eligible */
             export_eligible: boolean;
             /** Issues */
             issues: components["schemas"]["ValidationIssue"][];
+            load_summary: components["schemas"]["LoadSummary"];
             /**
              * Readiness Status
              * @enum {string}
@@ -4003,7 +4119,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SimulationIntent"];
+                "application/json": components["schemas"]["LegacySimulationIntent"];
             };
         };
         responses: {

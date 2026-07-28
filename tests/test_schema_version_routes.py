@@ -222,25 +222,28 @@ def test_region_transition_preserves_the_schema_version(session_app, model_id):
 
 
 # --------------------------------------------------------------------------
-# The frozen request contract is unchanged
+# Durable writes are strict; only the frozen legacy route keeps compatibility
 # --------------------------------------------------------------------------
 
 
-def test_legacy_put_request_contract_is_still_the_typed_model(session_app):
+def test_legacy_put_request_contract_uses_a_typed_compatibility_model(session_app):
     schema = session_app.openapi()
     operation = schema["paths"]["/session/{session_id}/intent"]["put"]
     body_schema = operation["requestBody"]["content"]["application/json"]["schema"]
-    assert body_schema["$ref"].endswith("/SimulationIntent")
+    assert body_schema["$ref"].endswith("/LegacySimulationIntent")
     # Reading the raw body for the compatibility check must not turn the
     # request body into an untyped payload.
     assert "SimulationIntent" in schema["components"]["schemas"]
 
 
-def test_schema_version_is_optional_in_the_published_request_schema(session_app):
+def test_schema_version_is_required_in_the_current_published_schema(session_app):
     schema = session_app.openapi()
     intent_schema = schema["components"]["schemas"]["SimulationIntent"]
     assert SCHEMA_VERSION_FIELD in intent_schema["properties"]
-    assert SCHEMA_VERSION_FIELD not in intent_schema.get("required", [])
+    assert SCHEMA_VERSION_FIELD in intent_schema.get("required", [])
+    assert "default" not in intent_schema["properties"][SCHEMA_VERSION_FIELD]
+    legacy_schema = schema["components"]["schemas"]["LegacySimulationIntent"]
+    assert SCHEMA_VERSION_FIELD not in legacy_schema.get("required", [])
 
 
 # --------------------------------------------------------------------------

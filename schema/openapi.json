@@ -80,6 +80,60 @@
         "title": "Analysis",
         "type": "object"
       },
+      "ArtifactCapability": {
+        "additionalProperties": false,
+        "description": "Selected-target capability, separate from engineering readiness.",
+        "properties": {
+          "adapter": {
+            "anyOf": [
+              {
+                "const": "ccx_inp",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adapter"
+          },
+          "blocking_issue_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Blocking Issue Codes",
+            "type": "array"
+          },
+          "capable": {
+            "title": "Capable",
+            "type": "boolean"
+          },
+          "supported": {
+            "title": "Supported",
+            "type": "boolean"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "const": "calculix",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          }
+        },
+        "required": [
+          "target",
+          "adapter",
+          "supported",
+          "capable",
+          "blocking_issue_codes"
+        ],
+        "title": "ArtifactCapability",
+        "type": "object"
+      },
       "ArtifactExportRequest": {
         "additionalProperties": false,
         "description": "Select one Task 14 adapter; eligibility remains server-computed.",
@@ -115,6 +169,18 @@
             "minLength": 1,
             "title": "Id",
             "type": "string"
+          },
+          "material_proposal_fingerprint_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Material Proposal Fingerprint Sha256"
           },
           "status": {
             "enum": [
@@ -600,6 +666,7 @@
             "enum": [
               "kg/m^3",
               "kg/m3",
+              "kg/m³",
               "t/mm^3",
               "tonne/mm^3"
             ],
@@ -993,7 +1060,6 @@
             "items": {
               "$ref": "#/components/schemas/GroundedIntent"
             },
-            "minItems": 1,
             "title": "Results",
             "type": "array"
           }
@@ -1157,6 +1223,136 @@
         "title": "InterpretResponse",
         "type": "object"
       },
+      "LegacySimulationIntent": {
+        "additionalProperties": false,
+        "description": "Route-scoped compatibility model for the frozen legacy session PUT.\n\nThis is the sole place where an absent version can still normalize to the\ncurrent in-memory contract. Durable ``/api/v1`` writes always use the\nrequired ``SimulationIntent`` field above.",
+        "properties": {
+          "analysis": {
+            "$ref": "#/components/schemas/Analysis"
+          },
+          "assumptions": {
+            "items": {
+              "$ref": "#/components/schemas/Assumption"
+            },
+            "title": "Assumptions",
+            "type": "array"
+          },
+          "bcs": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "fixed_displacement": "#/components/schemas/FixedDisplacementBC",
+                  "prescribed_displacement": "#/components/schemas/PrescribedDisplacementBC"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/FixedDisplacementBC"
+                },
+                {
+                  "$ref": "#/components/schemas/PrescribedDisplacementBC"
+                }
+              ]
+            },
+            "title": "Bcs",
+            "type": "array"
+          },
+          "loads": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "concentrated_force": "#/components/schemas/ConcentratedForceLoad",
+                  "gravity": "#/components/schemas/GravityLoad",
+                  "pressure": "#/components/schemas/PressureLoad",
+                  "resultant_surface_force": "#/components/schemas/ResultantSurfaceForceLoad",
+                  "surface_traction": "#/components/schemas/SurfaceTractionLoad"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ResultantSurfaceForceLoad"
+                },
+                {
+                  "$ref": "#/components/schemas/SurfaceTractionLoad"
+                },
+                {
+                  "$ref": "#/components/schemas/PressureLoad"
+                },
+                {
+                  "$ref": "#/components/schemas/GravityLoad"
+                },
+                {
+                  "$ref": "#/components/schemas/ConcentratedForceLoad"
+                }
+              ]
+            },
+            "title": "Loads",
+            "type": "array"
+          },
+          "materials": {
+            "items": {
+              "$ref": "#/components/schemas/Material"
+            },
+            "title": "Materials",
+            "type": "array"
+          },
+          "mesh_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeshSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/Region"
+            },
+            "title": "Regions",
+            "type": "array"
+          },
+          "schema_version": {
+            "default": 2,
+            "minimum": 1.0,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "solver_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SolverSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "validation_status": {
+            "default": "unvalidated",
+            "enum": [
+              "unvalidated",
+              "valid",
+              "invalid"
+            ],
+            "title": "Validation Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "analysis",
+          "materials",
+          "regions",
+          "bcs",
+          "loads",
+          "assumptions"
+        ],
+        "title": "LegacySimulationIntent",
+        "type": "object"
+      },
       "LengthQuantity": {
         "additionalProperties": false,
         "properties": {
@@ -1180,6 +1376,119 @@
         "title": "LengthQuantity",
         "type": "object"
       },
+      "LoadSummary": {
+        "additionalProperties": false,
+        "description": "Canonical load totals that require no geometry inference.",
+        "properties": {
+          "concentrated_force_count": {
+            "minimum": 0.0,
+            "title": "Concentrated Force Count",
+            "type": "integer"
+          },
+          "concentrated_force_total_N": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Concentrated Force Total N",
+            "type": "array"
+          },
+          "distributed_load_count": {
+            "minimum": 0.0,
+            "title": "Distributed Load Count",
+            "type": "integer"
+          },
+          "distributed_load_types": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Distributed Load Types",
+            "type": "object"
+          },
+          "explicit_force_vector_sum_N": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Explicit Force Vector Sum N",
+            "type": "array"
+          },
+          "gravity_accelerations_mm_per_s2": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "title": "Gravity Accelerations Mm Per S2",
+            "type": "array"
+          },
+          "gravity_density_available": {
+            "title": "Gravity Density Available",
+            "type": "boolean"
+          },
+          "gravity_density_required": {
+            "title": "Gravity Density Required",
+            "type": "boolean"
+          },
+          "gravity_load_count": {
+            "minimum": 0.0,
+            "title": "Gravity Load Count",
+            "type": "integer"
+          },
+          "pressure_load_count": {
+            "minimum": 0.0,
+            "title": "Pressure Load Count",
+            "type": "integer"
+          },
+          "resultant_surface_force_count": {
+            "minimum": 0.0,
+            "title": "Resultant Surface Force Count",
+            "type": "integer"
+          },
+          "resultant_surface_force_total_N": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Resultant Surface Force Total N",
+            "type": "array"
+          },
+          "traction_load_count": {
+            "minimum": 0.0,
+            "title": "Traction Load Count",
+            "type": "integer"
+          },
+          "unresolved_resultants": {
+            "items": {
+              "$ref": "#/components/schemas/UnresolvedLoadResultant"
+            },
+            "title": "Unresolved Resultants",
+            "type": "array"
+          }
+        },
+        "required": [
+          "explicit_force_vector_sum_N",
+          "concentrated_force_total_N",
+          "resultant_surface_force_total_N",
+          "gravity_accelerations_mm_per_s2",
+          "gravity_density_required",
+          "gravity_density_available",
+          "concentrated_force_count",
+          "resultant_surface_force_count",
+          "pressure_load_count",
+          "traction_load_count",
+          "gravity_load_count",
+          "distributed_load_count",
+          "distributed_load_types",
+          "unresolved_resultants"
+        ],
+        "title": "LoadSummary",
+        "type": "object"
+      },
       "Material": {
         "additionalProperties": false,
         "properties": {
@@ -1187,6 +1496,15 @@
             "exclusiveMinimum": 0.0,
             "title": "E Mpa",
             "type": "number"
+          },
+          "authority": {
+            "default": "engineer_entered",
+            "enum": [
+              "engineer_entered",
+              "system_proposed"
+            ],
+            "title": "Authority",
+            "type": "string"
           },
           "density_original": {
             "anyOf": [
@@ -1224,6 +1542,17 @@
             "exclusiveMinimum": -1.0,
             "title": "Nu",
             "type": "number"
+          },
+          "proposal_assumption_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal Assumption Ref"
           },
           "youngs_modulus_original": {
             "anyOf": [
@@ -1413,7 +1742,7 @@
       },
       "PrescribedDisplacementBC": {
         "additionalProperties": false,
-        "description": "Zero-only prescribed displacement.\n\nThe R3.1 preview envelope has no verified nonzero prescribed-displacement\ninterpretation or export path, so every component must be an exact zero.\nSigned zero is accepted because ``-0.0 == 0.0``; any other value is a\ndeterministic rejection rather than a silently exported approximation.",
+        "description": "Finite translational prescribed displacement in canonical millimetres.\n\nOnly the global Cartesian X/Y/Z translational components are representable.\nRotations, local/cylindrical coordinates, time dependence, and nonlinear\nbehavior have no fields in this strict model and are rejected rather than\napproximated.",
         "properties": {
           "components": {
             "additionalProperties": {
@@ -2096,9 +2425,16 @@
       "SetupRevisionResponse": {
         "additionalProperties": false,
         "properties": {
+          "artifact_capability": {
+            "$ref": "#/components/schemas/ArtifactCapability"
+          },
           "created_at": {
             "title": "Created At",
             "type": "string"
+          },
+          "engineering_ready": {
+            "title": "Engineering Ready",
+            "type": "boolean"
           },
           "export_eligible": {
             "title": "Export Eligible",
@@ -2196,6 +2532,8 @@
           "validation",
           "selected_entities",
           "highlight_state",
+          "engineering_ready",
+          "artifact_capability",
           "export_eligible"
         ],
         "title": "SetupRevisionResponse",
@@ -2393,7 +2731,6 @@
             "type": "array"
           },
           "schema_version": {
-            "default": 2,
             "minimum": 1.0,
             "title": "Schema Version",
             "type": "integer"
@@ -2420,6 +2757,7 @@
           }
         },
         "required": [
+          "schema_version",
           "analysis",
           "materials",
           "regions",
@@ -2619,6 +2957,41 @@
         "title": "Units",
         "type": "object"
       },
+      "UnresolvedLoadResultant": {
+        "additionalProperties": false,
+        "properties": {
+          "load_index": {
+            "minimum": 0.0,
+            "title": "Load Index",
+            "type": "integer"
+          },
+          "load_type": {
+            "enum": [
+              "pressure",
+              "surface_traction"
+            ],
+            "title": "Load Type",
+            "type": "string"
+          },
+          "reason_code": {
+            "const": "geometry.surface_area_required",
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "region_ref": {
+            "title": "Region Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "load_index",
+          "load_type",
+          "region_ref",
+          "reason_code"
+        ],
+        "title": "UnresolvedLoadResultant",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -2732,6 +3105,10 @@
         "additionalProperties": false,
         "description": "Computed validation state; client-supplied status is never consulted.",
         "properties": {
+          "engineering_ready": {
+            "title": "Engineering Ready",
+            "type": "boolean"
+          },
           "export_eligible": {
             "title": "Export Eligible",
             "type": "boolean"
@@ -2742,6 +3119,9 @@
             },
             "title": "Issues",
             "type": "array"
+          },
+          "load_summary": {
+            "$ref": "#/components/schemas/LoadSummary"
           },
           "readiness_status": {
             "enum": [
@@ -2767,7 +3147,9 @@
         "required": [
           "validation_status",
           "readiness_status",
+          "engineering_ready",
           "export_eligible",
+          "load_summary",
           "issues"
         ],
         "title": "ValidationReport",
@@ -5694,7 +6076,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SimulationIntent"
+                "$ref": "#/components/schemas/LegacySimulationIntent"
               }
             }
           },

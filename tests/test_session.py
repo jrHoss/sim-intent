@@ -1,12 +1,17 @@
 """Task 10 selection-session state and API tests."""
 
 import asyncio
+from pathlib import Path
 
 import httpx
 import pytest
 
 from app.server import create_app
 from ir.schema import SimulationIntent
+from llm.interpreter import Interpreter
+
+
+BRACKET = Path(__file__).resolve().parent / "fixtures" / "bracket.step"
 
 
 async def _request(app, method: str, path: str, **kwargs) -> httpx.Response:
@@ -42,6 +47,15 @@ def upload(app, filename: str = "one.inp") -> str:
     )
     assert response.status_code == 201, response.text
     return response.json()["id"]
+
+
+class FailingTransport:
+    def __init__(self) -> None:
+        self.called = False
+
+    def complete(self, _request):
+        self.called = True
+        raise AssertionError("deterministic unsupported requests must not call a provider")
 
 
 def intent_payload(first_ids=None, second_ids=None) -> dict:
@@ -160,6 +174,52 @@ def test_uploaded_model_session_is_lazily_created_and_retrieved(session_app):
         "highlight_state": {},
         "export_eligible": False,
     }
+
+
+@pytest.mark.parametrize(
+    ("instruction", "code"),
+    [
+        ("Analyze this assembly.", "geometry.multiple_solids_unsupported"),
+        (
+            "Create contact across the assembly components.",
+            "interaction.contact_unsupported",
+        ),
+        (
+            "Define contact between the two parts.",
+            "interaction.contact_unsupported",
+        ),
+        (
+            "ADD FRICTIONAL CONTACT TO THE ASSEMBLY!",
+            "interaction.contact_unsupported",
+        ),
+    ],
+)
+def test_deterministic_unsupported_interpretation_creates_no_session_revision(
+    session_app, instruction, code
+):
+    uploaded = request(
+        session_app,
+        "POST",
+        "/models",
+        files={"file": ("bracket.step", BRACKET.read_bytes(), "application/step")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    model_id = uploaded.json()["id"]
+    transport = FailingTransport()
+    session_app.state.interpreter = Interpreter(transport=transport)
+
+    response = request(
+        session_app,
+        "POST",
+        f"/session/{model_id}/interpret",
+        json={"instruction": instruction},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == code
+    assert transport.called is False
+    assert session_app.state.session_store._sessions == {}
+    assert session_app.state.pending_interpretations == {}
 
 
 def test_ir_draft_round_trips_and_populates_selection_state(session_app):

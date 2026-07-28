@@ -35,7 +35,12 @@ from ground.queries import (
     POSITION_PREDICATES,
     query_vocabulary,
 )
-from ground.semantics import parse_quantity, semantics_vocabulary
+from ground.semantics import (
+    normalize_quantity,
+    parse_quantity,
+    semantics_vocabulary,
+    supported_units,
+)
 
 
 DEFAULT_MODEL = "gpt-5.6-sol"
@@ -61,18 +66,40 @@ class InterpreterProviderError(RuntimeError):
 
 
 class UnsupportedMaterialInputError(RuntimeError):
-    """Material definitions are outside the Task 11 typed-output contract."""
+    """A material request lacks the explicit properties needed for safety."""
 
-    code = "unsupported_material_input"
+    code = "material.properties_incomplete"
     safe_message = (
-        "Natural-language material definitions are not supported in Task 15. "
-        "Submit the geometry, boundary-condition, and load instructions without "
-        "material properties. For gravity, the server supplies reviewed default "
-        "steel density and requires explicit engineer acceptance before export."
+        "A material must state Young's modulus and Poisson's ratio numerically "
+        "with a supported Young's-modulus unit. Named materials are not looked "
+        "up automatically; density is optional unless gravity is used."
     )
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        code: str | None = None,
+        safe_message: str | None = None,
+    ) -> None:
+        self.code = code or type(self).code
+        self.safe_message = safe_message or type(self).safe_message
         super().__init__(self.safe_message)
+
+
+class CombinedMaterialInputError(UnsupportedMaterialInputError):
+    code = "material.combined_request_requires_separation"
+    safe_message = (
+        "Submit the numeric material proposal separately from boundary-condition "
+        "or load instructions so no engineering condition is omitted."
+    )
+
+
+class UnsupportedCapabilityError(RuntimeError):
+    """An explicit request outside the linear-static single-solid envelope."""
+
+    def __init__(self, code: str, safe_message: str) -> None:
+        super().__init__(safe_message)
+        self.code = code
+        self.safe_message = safe_message
 
 
 class StrictModel(BaseModel):
@@ -366,9 +393,39 @@ class InterpretedIntent(StrictModel):
         return self
 
 
+class MaterialProposalPayload(StrictModel):
+    """A numeric natural-language material proposal, never an approval."""
+
+    name: str = Field(default="proposed_material", min_length=1)
+    youngs_modulus: str = Field(min_length=1)
+    poisson_ratio: float = Field(gt=-1.0, lt=0.5)
+    density: str | None = Field(default=None, min_length=1)
+
+    @field_validator("youngs_modulus")
+    @classmethod
+    def _stress_quantity(cls, value: str) -> str:
+        parse_quantity(value, expected_kind="stress")
+        return value
+
+    @field_validator("density")
+    @classmethod
+    def _density_quantity(cls, value: str | None) -> str | None:
+        if value is not None:
+            numeric, unit = value.rsplit(maxsplit=1)
+            normalize_quantity(float(numeric), unit, kind="density")
+        return value
+
+
 class Interpretation(StrictModel):
-    intents: list[InterpretedIntent] = Field(min_length=1)
+    intents: list[InterpretedIntent] = Field(default_factory=list)
+    material_proposal: MaterialProposalPayload | None = None
     _attempts: int = PrivateAttr(default=1)
+
+    @model_validator(mode="after")
+    def _has_content(self) -> "Interpretation":
+        if not self.intents and self.material_proposal is None:
+            raise ValueError("an interpretation requires an engineering request")
+        return self
 
     @property
     def attempts(self) -> int:
@@ -680,15 +737,219 @@ Hard rules:
 """
 
 
-_MATERIAL_INPUT_PATTERN = re.compile(
-    r"\b(?:young(?:'s|s)?\s+modulus|poisson(?:'s|s)?\s+ratio|density|material\s+propert(?:y|ies)|assign\s+(?:a\s+|the\s+)?material)\b",
+_MATERIAL_PROPERTY_PATTERN = re.compile(
+    r"(?:\byoung(?:'s|s)?\s+modulus\b|(?<!\w)[Ee]\s*(?:=|:)|"
+    r"\bpoisson(?:'s|s)?\s+ratio\b|\bnu\s*(?:=|:)|ν\s*(?:=|:)|"
+    r"\bdensity\b)",
+    re.IGNORECASE,
+)
+_MATERIAL_REQUEST_PATTERN = re.compile(
+    r"(?:\b(?:assign|define|specify|set|use)\s+(?:a\s+|the\s+)?"
+    r"(?:[A-Za-z0-9_-]+\s+){0,3}material\b|"
+    r"\bmaterial\s+(?:named\s+)?[A-Za-z][A-Za-z0-9_-]*\b|"
+    r"\b(?:steel|alumin(?:um|ium)|titanium|copper)\s+material\b)",
     re.IGNORECASE,
 )
 
+_YOUNGS_MODULUS_PATTERN = re.compile(
+    r"(?:\byoung(?:'s|s)?\s+modulus\b|(?<!\w)[Ee])\s*(?:=|:|of)?\s*"
+    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)\s*"
+    r"([A-Za-z][A-Za-z0-9/^³_-]*)\b",
+    re.IGNORECASE,
+)
+_POISSON_RATIO_PATTERN = re.compile(
+    r"(?:\bpoisson(?:'s|s)?\s+ratio\b|\bnu\b|ν)\s*(?:=|:|of)?\s*"
+    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)\b",
+    re.IGNORECASE,
+)
+_DENSITY_PATTERN = re.compile(
+    r"\bdensity\s*(?:=|:|of)?\s*"
+    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)\s*"
+    r"([A-Za-z][A-Za-z0-9/^³_-]*)\b",
+    re.IGNORECASE,
+)
+_MATERIAL_NAME_PATTERN = re.compile(
+    r"\b(?:material\s+(?:named\s+)?|assign\s+)([A-Za-z][A-Za-z0-9_-]*)\b",
+    re.IGNORECASE,
+)
 
-def _reject_unsupported_material_input(instruction: str) -> None:
-    if _MATERIAL_INPUT_PATTERN.search(instruction):
-        raise UnsupportedMaterialInputError()
+_UNSUPPORTED_CAPABILITY_PATTERNS: tuple[tuple[re.Pattern[str], str, str], ...] = (
+    (re.compile(
+        r"(?:\bnon[- ]?linear\s+(?:analysis|simulation|solve|behavior|behaviour)\b|"
+        r"\b(?:run|perform|use)\s+(?:a\s+)?non[- ]?linear\b)",
+        re.I,
+    ), "analysis.nonlinear_unsupported",
+     "Nonlinear analysis is outside the supported linear-static envelope."),
+    (re.compile(
+        r"\b(?:thermal|heat[- ]transfer)\s+(?:analysis|simulation|solve)\b|"
+        r"\b(?:run|perform)\s+(?:a\s+)?thermal\b",
+        re.I,
+    ), "analysis.thermal_unsupported",
+     "Thermal analysis is not supported."),
+    (re.compile(
+        r"(?:\b(?:add|create|define|include|model|use)\s+(?:an?\s+)?"
+        r"(?:(?:frictional|frictionless|bonded|surface[- ]to[- ]surface)\s+)?"
+        r"contact\b|"
+        r"\bcontact\s+(?:definition|interaction|pair|between|across)\b)",
+        re.I,
+    ), "interaction.contact_unsupported",
+     "Contact is not supported for the single-solid preview."),
+    (re.compile(
+        r"(?:\b(?:dynamic|modal|transient|frequency[- ]response)\s+"
+        r"(?:analysis|simulation|solve|study)\b|"
+        r"\b(?:run|perform)\s+(?:a\s+)?(?:dynamic|modal|transient)\b)",
+        re.I,
+    ),
+     "analysis.dynamics_unsupported", "Dynamic analysis is not supported."),
+    (re.compile(
+        r"(?:\b(?:plastic|plasticity|orthoplastic)\s+"
+        r"(?:material|behavior|behaviour|model)\b|\byield stress\b)",
+        re.I,
+    ),
+     "material.plastic_unsupported", "Plastic material behavior is not supported."),
+    (re.compile(
+        r"\b(?:orthotropic|anisotropic)\s+(?:material|behavior|behaviour|model)\b",
+        re.I,
+    ),
+     "material.orthotropic_unsupported", "Orthotropic material behavior is not supported."),
+    (re.compile(
+        r"(?:"
+        r"\b(?:analy[sz]e|simulate|solve|model)\s+"
+        r"(?:(?:this|the)\s+)?(?:as\s+)?(?:an?\s+)?assembl(?:y|ies)\b"
+        r"(?=\s*(?:[.!?,;:]|$|with\b|under\b|using\b|together\b))|"
+        r"\bassembl(?:y|ies)[- ]+(?:analysis|simulation|study|model)\b|"
+        r"\b(?:analy[sz]e|simulate|solve|model)\b[^.!?]{0,64}\b"
+        r"(?:"
+        r"(?:multiple|two|three|four|\d+)\s+(?:solids?|bodies|parts|components)|"
+        r"multi[- ](?:solid|body|part)s?|"
+        r"assembly\s+(?:components?|parts?|bodies|solids)"
+        r")\b|"
+        r"\b(?:apply|distribute)\s+(?:a\s+)?loads?\b[^.!?]{0,64}\b"
+        r"(?:"
+        r"(?:multiple|two|three|four|\d+)\s+(?:solids?|bodies|parts|components)|"
+        r"multi[- ](?:solid|body|part)s?|"
+        r"assembly\s+(?:components?|parts?|bodies|solids)"
+        r")\b|"
+        r"\b(?:multiple|multi[- ](?:solid|body|part)s?)"
+        r"[- ]+(?:solid[- ]+)?(?:analysis|simulation|study|model)\b"
+        r")",
+        re.I,
+    ),
+     "geometry.multiple_solids_unsupported", "Assemblies and multiple solids are not supported."),
+    (re.compile(
+        r"(?:\b(?:shell|shells)\s+(?:analysis|model|elements?)\b|"
+        r"\b(?:analy[sz]e|model|treat)\b.{0,24}\bas\s+(?:a\s+)?shells?\b)",
+        re.I,
+    ), "analysis.shell_unsupported",
+     "Shell analysis is not supported."),
+    (re.compile(
+        r"(?:\b(?:beam|beams)\s+(?:analysis|model|elements?)\b|"
+        r"\b(?:analy[sz]e|model|treat)\b.{0,24}\bas\s+(?:a\s+)?beams?\b)",
+        re.I,
+    ), "analysis.beam_unsupported",
+     "Beam analysis is not supported."),
+    (re.compile(r"\brotation(?:al)?\s+(?:constraint|displacement|dof)\b|\br[xyz]\s*=", re.I),
+     "constraint.rotation_unsupported", "Rotational prescribed constraints are not supported."),
+    (re.compile(r"\blocal coordinate\b|\bcylindrical coordinate\b|\blocal axes?\b", re.I),
+     "coordinate_system.local_unsupported", "Local and cylindrical coordinate systems are not supported."),
+)
+
+
+def _reject_unsupported_capability(instruction: str) -> None:
+    for pattern, code, message in _UNSUPPORTED_CAPABILITY_PATTERNS:
+        if pattern.search(instruction):
+            raise UnsupportedCapabilityError(code, message)
+
+
+def _numeric_material_proposal(
+    instruction: str,
+) -> MaterialProposalPayload | None:
+    """Parse the deliberately narrow supported numeric material grammar."""
+
+    has_property = _MATERIAL_PROPERTY_PATTERN.search(instruction) is not None
+    has_material_request = _MATERIAL_REQUEST_PATTERN.search(instruction) is not None
+    if not has_property and not has_material_request:
+        return None
+    youngs = _YOUNGS_MODULUS_PATTERN.search(instruction)
+    poisson = _POISSON_RATIO_PATTERN.search(instruction)
+    if youngs is None or poisson is None:
+        explicitly_unparsed = (
+            (re.search(r"\byoung(?:'s|s)?\s+modulus\b|(?<!\w)[Ee]\s*(?:=|:)", instruction, re.I) and youngs is None)
+            or (re.search(r"\bpoisson(?:'s|s)?\s+ratio\b|\bnu\s*(?:=|:)|ν\s*(?:=|:)", instruction, re.I) and poisson is None)
+        )
+        raise UnsupportedMaterialInputError(
+            (
+                "material.property_parse_failed"
+                if explicitly_unparsed
+                else "material.properties_incomplete"
+            ),
+            (
+                "An explicitly supplied material property could not be parsed."
+                if explicitly_unparsed
+                else UnsupportedMaterialInputError.safe_message
+            ),
+        )
+    if re.search(
+        r"\b(?:fix(?:ed)?|force|load|gravity|pressure|traction|"
+        r"prescribed displacement|displace)\b",
+        instruction,
+        re.IGNORECASE,
+    ):
+        raise CombinedMaterialInputError()
+    density_mentioned = re.search(r"\bdensity\b", instruction, re.I) is not None
+    density = _DENSITY_PATTERN.search(instruction)
+    if density_mentioned and density is None:
+        raise UnsupportedMaterialInputError(
+            "material.property_parse_failed",
+            "The explicitly supplied density could not be parsed.",
+        )
+    name_match = _MATERIAL_NAME_PATTERN.search(instruction)
+    name = "proposed_material"
+    if name_match is not None:
+        candidate = name_match.group(1).lower()
+        if candidate not in {"is", "with", "properties", "property"}:
+            name = candidate
+    def canonical_unit(raw: str, kind: str) -> str:
+        for supported in supported_units(kind):  # type: ignore[arg-type]
+            if supported.casefold() == raw.casefold():
+                return supported
+        raise UnsupportedMaterialInputError(
+            "quantity.unsupported_unit",
+            f"The explicitly supplied {kind} unit is unsupported.",
+        )
+
+    stress_unit = canonical_unit(youngs.group(2), "stress")
+    youngs_value = float(youngs.group(1))
+    youngs_quantity = normalize_quantity(youngs_value, stress_unit, kind="stress")
+    if not math.isfinite(youngs_quantity.value) or youngs_quantity.value <= 0:
+        raise UnsupportedMaterialInputError(
+            "material.youngs_modulus_invalid",
+            "Young's modulus must be finite and greater than zero.",
+        )
+    poisson_value = float(poisson.group(1))
+    if not math.isfinite(poisson_value) or not (-1.0 < poisson_value < 0.5):
+        raise UnsupportedMaterialInputError(
+            "material.poissons_ratio_invalid",
+            "Poisson's ratio must be finite and satisfy -1 < nu < 0.5.",
+        )
+    density_text = None
+    if density is not None:
+        density_unit = canonical_unit(density.group(2), "density")
+        density_quantity = normalize_quantity(
+            float(density.group(1)), density_unit, kind="density"
+        )
+        if not math.isfinite(density_quantity.value) or density_quantity.value <= 0:
+            raise UnsupportedMaterialInputError(
+                "material.density_invalid",
+                "Density must be finite and greater than zero.",
+            )
+        density_text = f"{density.group(1)} {density_unit}"
+    return MaterialProposalPayload(
+        name=name,
+        youngs_modulus=f"{youngs.group(1)} {stress_unit}",
+        poisson_ratio=poisson_value,
+        density=density_text,
+    )
 
 
 _VAGUE_LATERAL_SIDE_PATTERN = re.compile(
@@ -800,7 +1061,15 @@ class Interpreter:
     ) -> Interpretation:
         if not instruction.strip():
             raise ValueError("instruction cannot be empty")
-        _reject_unsupported_material_input(instruction)
+        _reject_unsupported_capability(instruction)
+        material_proposal = _numeric_material_proposal(instruction)
+        if material_proposal is not None:
+            # The numeric material grammar is deterministic and has no geometry
+            # operand. It returns a pending proposal without calling a model or
+            # allowing a name-only database lookup.
+            return Interpretation(
+                intents=[], material_proposal=material_proposal
+            )
         summary_payload = (
             inventory_summary.model_dump(mode="json")
             if isinstance(inventory_summary, FaceInventorySummary)

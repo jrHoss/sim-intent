@@ -625,9 +625,9 @@ def load_simulation_intent(
        payloads without defaulting any field;
     6. post-assertion that the result carries exactly the current version.
 
-    The ``schema_version`` model field has a default so that in-process
-    construction stays ergonomic.  That default must never bypass this loader:
-    every untrusted file and every new API path goes through here.
+    The ``schema_version`` model field is required. Historical documents still
+    reach it only after this loader has validated and migrated their explicit
+    declaration.
     """
 
     family = SIMULATION_INTENT_MIGRATIONS.family

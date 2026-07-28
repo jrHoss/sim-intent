@@ -30,15 +30,15 @@ The configured OpenAI model may generate only:
 
 The structured schema and recursive guard reject entity-ID fields, face/node/element IDs in prose, and NSET/ELSET names. The browser never calls OpenAI directly.
 
-Material definitions were not included in the Task 11 wire contract or the
-Task 15 evaluation scope. An instruction containing explicit material
-properties is therefore rejected before any provider call with structured code
-`unsupported_material_input`; it is never retried as a generic schema failure
-and no session intent is created. The supported Task 15 path is deliberately
-narrow: a gravity proposal receives the reviewed demonstration-steel density
-7850 kg/m^3, stored as 7.85e-9 tonne/mm^3, plus a pending unit-critical
-assumption. The engineer must explicitly accept that assumption. A non-gravity
-proposal does not require or invent density.
+R3.2a adds one deterministic material-only grammar: Young's modulus with a
+supported stress unit, Poisson's ratio, and optional density. It creates a
+`system_proposed` isotropic material linked to a pending unit-critical
+assumption; acceptance or rejection creates the normal immutable successor
+revision. Named materials without explicit properties return
+`material.properties_required`; no property database is consulted. A combined
+material-and-condition request returns
+`material.combined_request_requires_separation` so no load or constraint is
+silently omitted. Gravity never causes a demo material to be assigned.
 
 ## Deterministic
 

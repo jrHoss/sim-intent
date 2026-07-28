@@ -45,7 +45,13 @@ from llm.interpreter import (
 
 Mode = Literal["LIVE", "REPLAY"]
 Status = Literal["PASS", "PASS_AFTER_CLARIFICATION", "FAIL"]
-FailureCategory = Literal["grounding", "unit", "ambiguity-unflagged", "llm-parse"]
+FailureCategory = Literal[
+    "grounding",
+    "unit",
+    "ambiguity-unflagged",
+    "llm-parse",
+    "material",
+]
 _GIT_EXECUTABLE = shutil.which("git")
 
 
@@ -276,6 +282,14 @@ EVALUATION_SOLVER_SETTINGS: dict[str, Any] = {
     "analysis_profile": "linear_static_v1",
     "requested_results": ["displacement", "stress", "reaction_force"],
 }
+EVALUATION_MATERIAL: dict[str, Any] = {
+    "name": "steel",
+    "model": "linear_elastic_isotropic",
+    "authority": "engineer_entered",
+    "E_MPa": 210_000.0,
+    "nu": 0.3,
+    "density_tonne_per_mm3": 7.85e-9,
+}
 
 
 @dataclass(frozen=True)
@@ -308,6 +322,8 @@ def evaluation_engineering_revision_payload(
     }
     payload["mesh_settings"] = dict(EVALUATION_MESH_SETTINGS)
     payload["solver_settings"] = dict(EVALUATION_SOLVER_SETTINGS)
+    if not payload["materials"]:
+        payload["materials"] = [dict(EVALUATION_MATERIAL)]
     return payload
 
 
@@ -647,7 +663,23 @@ def evaluate_case(
                 if not _subset(expected.expected_ir_subset, actual):
                     category, explanation = "unit", "The expected condition IR subset does not match."
                     break
-        if category is None and not _subset(case.expected_structured_ir_subset, intent.model_dump(mode="json")):
+        # Production interpretation must never inject a material.  The later
+        # durable engineer-authored revision may add its visible fixture
+        # material, but the proposal itself is required to stay empty.
+        if category is None and intent.materials != []:
+            category = "material"
+            explanation = (
+                "Production interpretation injected a material into the proposal."
+            )
+
+        # The immutable corpus predates this explicit no-injection assertion
+        # and contains the old demo steel in some historical subsets.  Keep
+        # those bytes untouched; the assertion above replaces that expectation.
+        expected_top_level = dict(case.expected_structured_ir_subset)
+        expected_top_level.pop("materials", None)
+        if category is None and not _subset(
+            expected_top_level, intent.model_dump(mode="json")
+        ):
             category, explanation = "grounding", "The expected top-level IR subset does not match."
         for region in intent.regions:
             if region.source_instruction != case.instruction or not region.entity_ids:

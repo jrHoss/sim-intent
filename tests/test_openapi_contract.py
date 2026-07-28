@@ -115,7 +115,8 @@ def test_ir_schema_declares_the_payload_version_field():
     field = document["properties"][SCHEMA_VERSION_FIELD]
     assert field["type"] == "integer"
     assert field["minimum"] == 1
-    assert field["default"] == SIMULATION_INTENT_SCHEMA_VERSION
+    assert "default" not in field
+    assert SCHEMA_VERSION_FIELD in document["required"]
 
 
 def test_openapi_exposes_the_versioned_payload_contract():
@@ -123,6 +124,7 @@ def test_openapi_exposes_the_versioned_payload_contract():
     intent = document["components"]["schemas"]["SimulationIntent"]
     assert SCHEMA_VERSION_FIELD in intent["properties"]
     assert intent["properties"][SCHEMA_VERSION_FIELD]["minimum"] == 1
+    assert SCHEMA_VERSION_FIELD in intent["required"]
 
 
 def test_no_runtime_schema_version_endpoint_was_added(tmp_path):

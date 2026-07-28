@@ -295,13 +295,12 @@ def test_abaqus_provenance_material_bc_static_step_and_resultant_mapping(cad_mod
 def test_abaqus_prescribed_traction_pressure_and_gravity_mappings(cad_model):
     payload = canonical_payload()
     payload["materials"][0]["density_tonne_per_mm3"] = 7.85e-9
-    # The supported envelope permits zero prescribed displacement only; signed
-    # zero is accepted and must still emit an explicit zero DOF value.
+    # Finite translational components, including signed zero, are emitted.
     payload["bcs"] = [
         {
             "type": "prescribed_displacement",
             "region_ref": "bolt_holes",
-            "components": {"x": 0.0, "z": -0.0},
+            "components": {"x": 1.25, "y": -2.0, "z": -0.0},
         }
     ]
     payload["loads"] = [
@@ -319,7 +318,7 @@ def test_abaqus_prescribed_traction_pressure_and_gravity_mappings(cad_model):
     ]
     text = export_abaqus_py(SimulationIntent.model_validate(payload), cad_model).artifact_text
     ast.parse(text)
-    assert "u1=0, u2=UNSET, u3=0" in text
+    assert "u1=1.25, u2=-2, u3=0" in text
     assert "magnitude=5" in text
     assert "directionVector=((0.0, 0.0, 0.0), (0.6, 0.8, 0))" in text
     assert "model.Pressure" in text
@@ -465,14 +464,14 @@ def test_ccx_prescribed_displacement_and_generated_nset_order(mesh_model):
             {
                 "type": "prescribed_displacement",
                 "region_ref": "moving nodes",
-                # Zero-only envelope; signed zero is accepted.
-                "components": {"z": -0.0, "x": 0.0},
+                "components": {"z": -0.0, "x": 0.0, "y": 1.5},
             }
         ],
     )
     text = export_ccx_inp(intent, mesh_model).artifact_text
     assert "10, 30, 40" in text
     assert ", 1, 1, 0" in text
+    assert ", 2, 2, 1.5" in text
     assert ", 3, 3, 0" in text
 
 
@@ -710,7 +709,7 @@ def test_successful_endpoint_returns_safe_attachment_and_media_type(tmp_path):
     assert "C:\\" not in response.text
 
 
-def test_ready_step_endpoint_returns_golden_abaqus_artifact(tmp_path):
+def test_ready_step_endpoint_blocks_selected_calculix_until_meshing(tmp_path):
     app = create_app(tmp_path / "models")
     model_id = upload_bytes(app, "bracket.step", BRACKET.read_bytes())
     make_ready_session(app, model_id, canonical_payload())
@@ -720,10 +719,14 @@ def test_ready_step_endpoint_returns_golden_abaqus_artifact(tmp_path):
         f"/session/{model_id}/export",
         json={"adapter": "abaqus_py"},
     )
-    assert response.status_code == 200, response.text
-    assert response.content == GOLDEN.read_bytes()
-    assert response.headers["content-type"].startswith("text/x-python")
-    assert response.headers["content-disposition"] == 'attachment; filename="bracket_abaqus.py"'
+    assert response.status_code == 409, response.text
+    assert response.json()["export_eligible"] is False
+    assert {
+        issue["code"] for issue in response.json()["blocking_issues"]
+    } >= {
+        "artifact.step_meshing_required",
+        "artifact.mapping_not_verified",
+    }
 
 
 def test_blocked_endpoint_returns_409_without_artifact_and_stale_status_fails(tmp_path):
@@ -883,18 +886,17 @@ def test_contradictory_quantities_cannot_export(cad_model):
     )
 
 
-def test_unsupported_nonzero_displacement_cannot_export(cad_model):
+def test_supported_nonzero_displacement_exports_component_value(cad_model):
     intent = canonical_intent()
     unsupported = PrescribedDisplacementBC.model_construct(
         type="prescribed_displacement",
         region_ref="bolt_holes",
-        components={"z": 2.5},
+        components={"x": 0.0, "y": 0.0, "z": 2.5},
         components_original=None,
     )
     candidate = intent.model_copy(update={"bcs": [unsupported]}, deep=True)
-    with pytest.raises(ExportNotReadyError) as caught:
-        export_abaqus_py(candidate, cad_model)
-    assert "bc.prescribed_displacement_nonzero" in blocking_codes(caught.value)
+    result = export_abaqus_py(candidate, cad_model)
+    assert "u1=0, u2=0, u3=2.5" in result.artifact_text
 
 
 def test_invalid_load_target_cannot_export(cad_model):

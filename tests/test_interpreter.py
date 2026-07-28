@@ -19,6 +19,7 @@ from llm.interpreter import (
     Interpretation,
     OpenAIStructuredOutputTransport,
     OpenAIWireInterpretation,
+    UnsupportedCapabilityError,
     UnsupportedMaterialInputError,
 )
 
@@ -227,7 +228,7 @@ def test_repeated_invalid_responses_stop_at_retry_limit():
     assert len(transport.requests) == 3
 
 
-def test_material_rich_instruction_is_rejected_before_any_retry():
+def test_combined_material_and_condition_request_is_safely_split_before_retry():
     transport = SequenceTransport(fixed_holes(), fixed_holes(), fixed_holes())
     instruction = (
         "Use steel with Young's modulus 210 GPa, Poisson's ratio 0.3, and density "
@@ -235,8 +236,81 @@ def test_material_rich_instruction_is_rejected_before_any_retry():
     )
     with pytest.raises(UnsupportedMaterialInputError) as caught:
         Interpreter(transport=transport, max_retries=2).interpret(instruction, SUMMARY)
-    assert caught.value.code == "unsupported_material_input"
-    assert "not supported in Task 15" in caught.value.safe_message
+    assert caught.value.code == "material.combined_request_requires_separation"
+    assert "separately" in caught.value.safe_message
+    assert transport.requests == []
+
+
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        "Fix the bottom face of the assembly bracket.",
+        "Apply force to the assembly mounting plate.",
+        "Select the face named assembly.",
+        "Fix the ASSEMBLY-lug region!",
+        "Select Assembly.",
+        "Analyze the assembly bracket's bottom face.",
+    ],
+)
+def test_assembly_in_part_or_region_prose_reaches_the_provider(instruction):
+    transport = SequenceTransport(fixed_holes())
+    Interpreter(transport=transport).interpret(instruction, SUMMARY)
+    assert len(transport.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        "Order two parts for the replacement kit.",
+        "Compare three bodies of text.",
+        "The bracket has two parts in its name.",
+        "Multiple components are listed in the catalog.",
+    ],
+)
+def test_numbered_plural_nouns_in_ordinary_prose_reach_the_provider(instruction):
+    transport = SequenceTransport(fixed_holes())
+    Interpreter(transport=transport).interpret(instruction, SUMMARY)
+    assert len(transport.requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("instruction", "code"),
+    [
+        ("Analyze this assembly.", "geometry.multiple_solids_unsupported"),
+        ("Analyze this as an assembly.", "geometry.multiple_solids_unsupported"),
+        ("ANALYSE THE ASSEMBLY!", "geometry.multiple_solids_unsupported"),
+        ("Create contact between the two parts.", "interaction.contact_unsupported"),
+        (
+            "Create contact across the assembly components.",
+            "interaction.contact_unsupported",
+        ),
+        ("DEFINE CONTACT BETWEEN THE TWO PARTS!", "interaction.contact_unsupported"),
+        (
+            "Add frictional contact to the assembly.",
+            "interaction.contact_unsupported",
+        ),
+        ("Analyze the two parts together.", "geometry.multiple_solids_unsupported"),
+        (
+            "Simulate three bodies as one assembly.",
+            "geometry.multiple_solids_unsupported",
+        ),
+        ("Solve the multiple-solid model.", "geometry.multiple_solids_unsupported"),
+        ("Simulate multiple solids together.", "geometry.multiple_solids_unsupported"),
+        (
+            "Apply loads across the assembly components.",
+            "geometry.multiple_solids_unsupported",
+        ),
+        ("Run an assembly-analysis.", "geometry.multiple_solids_unsupported"),
+        ("Model this multi-body system.", "geometry.multiple_solids_unsupported"),
+    ],
+)
+def test_clear_multiple_solid_requests_are_rejected_without_provider_calls(
+    instruction, code
+):
+    transport = SequenceTransport(fixed_holes())
+    with pytest.raises(UnsupportedCapabilityError) as caught:
+        Interpreter(transport=transport).interpret(instruction, SUMMARY)
+    assert caught.value.code == code
     assert transport.requests == []
 
 

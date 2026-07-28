@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from app.server import create_app
+from ground.semantics import normalize_density, normalize_youngs_modulus
 from ir.schema import (
     Analysis,
     Assumption,
@@ -69,8 +70,8 @@ def valid_payload(*, region_status: str = "confirmed", assumption_status: str = 
         "regions": [
             {
                 "id": "bolt_holes",
-                "entity_type": "cad_face",
-                "entity_ids": [11, 12],
+                "entity_type": "mesh_face",
+                "entity_ids": [1],
                 "selection_method": "semantic_geometry_query",
                 "confidence": 0.95,
                 "source_instruction": "Fix the two bolt holes.",
@@ -108,6 +109,40 @@ def intent(**kwargs) -> SimulationIntent:
 
 def codes(report) -> list[str]:
     return [issue.code for issue in report.issues]
+
+
+def material_from_engineering_units(
+    *,
+    name: str = "steel",
+    youngs: tuple[float, str] = (210.0, "GPa"),
+    nu: float = 0.3,
+    density: tuple[float, str] | None = None,
+) -> Material:
+    normalized_E, original_E = normalize_youngs_modulus(*youngs)
+    material = {
+        "name": name,
+        "model": "linear_elastic_isotropic",
+        "E_MPa": normalized_E,
+        "nu": nu,
+        "youngs_modulus_original": original_E.model_dump(mode="json"),
+    }
+    if density is not None:
+        normalized_density, original_density = normalize_density(*density)
+        material.update(
+            {
+                "density_tonne_per_mm3": normalized_density,
+                "density_original": original_density.model_dump(mode="json"),
+            }
+        )
+    return Material.model_validate(material)
+
+
+def report_with_materials(*materials: Material):
+    candidate = intent().model_copy(
+        update={"materials": list(materials)},
+        deep=True,
+    )
+    return validate_intent(candidate)
 
 
 def test_valid_confirmed_intent_passes_and_is_export_eligible():
@@ -254,7 +289,7 @@ def test_zero_prescribed_displacement_is_supported_but_zero_loads_are_blocking()
                 PrescribedDisplacementBC.model_construct(
                     type="prescribed_displacement",
                     region_ref="bolt_holes",
-                    components={"z": 0.0},
+                    components={"x": 0.0, "y": -0.0, "z": 0.0},
                 )
             ]
         },
@@ -304,6 +339,119 @@ def test_invalid_material_fields_are_reported(field, value, expected):
     report = validate_intent(candidate)
     assert expected in codes(report)
     assert report.export_eligible is False
+
+
+def test_equivalent_modulus_units_are_duplicate_material_assignments():
+    materials = [
+        material_from_engineering_units(youngs=(210_000_000_000.0, "Pa")),
+        material_from_engineering_units(youngs=(210_000.0, "MPa")),
+        material_from_engineering_units(youngs=(210.0, "GPa")),
+    ]
+    report = report_with_materials(*materials)
+    assert "material.assignment_duplicate" in codes(report)
+    assert "material.assignment_conflict" not in codes(report)
+
+
+def test_equivalent_density_units_are_duplicate_material_assignments():
+    materials = [
+        material_from_engineering_units(density=(7850.0, "kg/m^3")),
+        material_from_engineering_units(density=(7850.0, "kg/m3")),
+        material_from_engineering_units(density=(7.85e-9, "t/mm^3")),
+        material_from_engineering_units(density=(7.85e-9, "tonne/mm^3")),
+    ]
+    report = report_with_materials(*materials)
+    assert "material.assignment_duplicate" in codes(report)
+    assert "material.assignment_conflict" not in codes(report)
+
+
+def test_original_number_formatting_is_not_material_identity():
+    first = material_from_engineering_units(youngs=(210.000, "GPa"))
+    second = material_from_engineering_units(youngs=(2.1e5, "MPa"))
+    report = report_with_materials(first, second)
+    assert "material.assignment_duplicate" in codes(report)
+    assert "material.assignment_conflict" not in codes(report)
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "expected"),
+    [
+        (
+            material_from_engineering_units(name="steel"),
+            material_from_engineering_units(name="steel", youngs=(210_000.0, "MPa")),
+            "material.assignment_duplicate",
+        ),
+        (
+            material_from_engineering_units(name="steel"),
+            material_from_engineering_units(name="steel", youngs=(205.0, "GPa")),
+            "material.assignment_conflict",
+        ),
+        (
+            material_from_engineering_units(name="steel"),
+            material_from_engineering_units(name="alloy42"),
+            "material.assignment_conflict",
+        ),
+        (
+            material_from_engineering_units(name="steel"),
+            material_from_engineering_units(name="alloy42", youngs=(205.0, "GPa")),
+            "material.assignment_conflict",
+        ),
+    ],
+    ids=[
+        "same-name-same-properties",
+        "same-name-different-properties",
+        "different-names-same-properties",
+        "different-names-different-properties",
+    ],
+)
+def test_material_assignment_classification_is_complete_and_deterministic(
+    first, second, expected
+):
+    forward = report_with_materials(first, second)
+    reverse = report_with_materials(second, first)
+
+    assert forward.issues == reverse.issues
+    assert expected in codes(forward)
+    unexpected = {
+        "material.assignment_duplicate",
+        "material.assignment_conflict",
+    } - {expected}
+    assert unexpected.isdisjoint(codes(forward))
+    assert "material.count_unsupported" in codes(forward)
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        material_from_engineering_units(
+            youngs=(205.0, "GPa"), density=(7850.0, "kg/m^3")
+        ),
+        material_from_engineering_units(
+            nu=0.29, density=(7850.0, "kg/m^3")
+        ),
+        material_from_engineering_units(density=(2700.0, "kg/m^3")),
+    ],
+    ids=["different-E", "different-nu", "different-density"],
+)
+def test_different_material_engineering_semantics_are_conflicts(other):
+    reference = material_from_engineering_units(density=(7850.0, "kg/m^3"))
+    report = report_with_materials(reference, other)
+    assert "material.assignment_conflict" in codes(report)
+    assert "material.assignment_duplicate" not in codes(report)
+
+
+def test_material_conflict_issue_order_is_invariant_to_list_order():
+    materials = [
+        material_from_engineering_units(density=(7850.0, "kg/m^3")),
+        material_from_engineering_units(density=(7.85e-9, "tonne/mm^3")),
+        material_from_engineering_units(
+            youngs=(205.0, "GPa"),
+            density=(7850.0, "kg/m^3"),
+        ),
+    ]
+    forward = report_with_materials(*materials)
+    reverse = report_with_materials(*reversed(materials))
+    assert forward.issues == reverse.issues
+    assert "material.assignment_conflict" in codes(forward)
 
 
 @pytest.mark.parametrize(
@@ -454,7 +602,7 @@ def test_audit_and_direct_export_gate_block_proposed_region(api):
     audit = request(api, "GET", f"/session/{model_id}/audit")
     assert audit.status_code == 200
     body = audit.json()
-    assert body["regions"][0]["entity_ids"] == [11, 12]
+    assert body["regions"][0]["entity_ids"] == [1]
     assert body["regions"][0]["source_instruction"] == "Fix the two bolt holes."
     assert body["regions"][0]["selection_method"] == "semantic_geometry_query"
     assert body["regions"][0]["status"] == "proposed"

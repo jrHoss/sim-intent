@@ -14,7 +14,11 @@ from typing import Literal, Union
 
 from pydantic import Field
 
-from ir.schema import SimulationIntent, StrictModel
+from ir.schema import (
+    SimulationIntent,
+    StrictModel,
+    material_proposal_fingerprint,
+)
 from ir.validate import ValidationReport, validate_intent
 
 EntityIds = Union[list[int], list[str]]
@@ -178,8 +182,24 @@ class SelectionSessionStore:
                     f"{assumption.status} to {target}; only pending assumptions may transition"
                 )
 
+            decision_update: dict[str, str] = {"status": target}
+            if target == "accepted":
+                linked_materials = [
+                    material
+                    for material in record.intent.materials
+                    if material.authority == "system_proposed"
+                    and material.proposal_assumption_ref == assumption_id
+                ]
+                if len(linked_materials) > 1:
+                    raise InvalidAssumptionTransitionError(
+                        "a proposal decision must identify exactly one material"
+                    )
+                if linked_materials:
+                    decision_update["material_proposal_fingerprint_sha256"] = (
+                        material_proposal_fingerprint(linked_materials[0])
+                    )
             assumptions = [
-                existing.model_copy(update={"status": target})
+                existing.model_copy(update=decision_update)
                 if existing.id == assumption_id
                 else existing.model_copy(deep=True)
                 for existing in record.intent.assumptions
@@ -248,6 +268,10 @@ class SelectionSessionStore:
         for assumption in incoming.assumptions:
             previous = current_assumptions.get(assumption.id)
             if assumption.status == "pending":
+                if assumption.material_proposal_fingerprint_sha256 is not None:
+                    raise InvalidAssumptionTransitionError(
+                        f"assumption '{assumption.id}' material fingerprint is server-managed"
+                    )
                 if previous is not None and previous.status != "pending":
                     raise InvalidAssumptionTransitionError(
                         f"assumption '{assumption.id}' status is server-managed"
@@ -262,6 +286,54 @@ class SelectionSessionStore:
                     f"assumption '{assumption.id}' status '{assumption.status}' "
                     "is server-managed"
                 )
+
+        incoming_decisions = {item.id: item for item in incoming.assumptions}
+        for material in incoming.materials:
+            if material.authority != "system_proposed":
+                continue
+            decision = incoming_decisions.get(
+                material.proposal_assumption_ref or ""
+            )
+            if decision is None or decision.status == "rejected":
+                raise InvalidAssumptionTransitionError(
+                    "a system-proposed material must reference a pending "
+                    "decision or its exact accepted snapshot"
+                )
+
+        # An accepted proposal decision approves one exact material snapshot.
+        # A changed system proposal must point to a new pending decision; an
+        # explicit engineer-entered replacement must remove the proposal link.
+        if current is not None:
+            accepted_ids = {
+                item.id
+                for item in current.assumptions
+                if item.status == "accepted"
+                and item.material_proposal_fingerprint_sha256 is not None
+            }
+            current_materials = {
+                item.proposal_assumption_ref: item
+                for item in current.materials
+                if item.authority == "system_proposed"
+                and item.proposal_assumption_ref is not None
+            }
+            for material in incoming.materials:
+                proposal_ref = material.proposal_assumption_ref
+                if (
+                    material.authority != "system_proposed"
+                    or proposal_ref not in accepted_ids
+                ):
+                    continue
+                previous_material = current_materials.get(proposal_ref)
+                if (
+                    previous_material is None
+                    or material_proposal_fingerprint(material)
+                    != material_proposal_fingerprint(previous_material)
+                ):
+                    raise InvalidAssumptionTransitionError(
+                        "an accepted material proposal cannot be changed while "
+                        "retaining its old decision; create a new pending proposal "
+                        "or make an explicit engineer-entered material"
+                    )
 
     @staticmethod
     def _refresh_derived_state(record: _SessionRecord) -> None:

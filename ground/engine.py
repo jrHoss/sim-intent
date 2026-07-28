@@ -143,7 +143,8 @@ class GroundedIntent(StrictModel):
 
 
 class GroundingBatch(StrictModel):
-    results: list[GroundedIntent] = Field(min_length=1)
+    # A material-only numeric proposal has no geometry operation to ground.
+    results: list[GroundedIntent]
 
 
 class QueryExecutor(Protocol):

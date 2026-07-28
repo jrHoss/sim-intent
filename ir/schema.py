@@ -60,7 +60,7 @@ class StrictModel(BaseModel):
 ForceUnit = Literal["N", "kN", "MN"]
 StressUnit = Literal["Pa", "kPa", "MPa", "GPa"]
 LengthUnit = Literal["mm", "m"]
-DensityUnit = Literal["kg/m^3", "kg/m3", "t/mm^3", "tonne/mm^3"]
+DensityUnit = Literal["kg/m^3", "kg/m3", "kg/m³", "t/mm^3", "tonne/mm^3"]
 AccelerationUnit = Literal["mm/s^2", "m/s^2"]
 
 
@@ -208,6 +208,8 @@ class Analysis(StrictModel):
 class Material(StrictModel):
     name: str
     model: Literal["linear_elastic_isotropic"]
+    authority: Literal["engineer_entered", "system_proposed"] = "engineer_entered"
+    proposal_assumption_ref: str | None = None
     E_MPa: float = Field(gt=0)
     nu: float = Field(gt=-1.0, lt=0.5)
     # Optional for non-body-load analyses. The canonical mm-N-MPa mass unit
@@ -268,7 +270,55 @@ class Material(StrictModel):
     @model_validator(mode="after")
     def _consistent_provenance(self) -> "Material":
         self.check_consistency()
+        if self.authority == "system_proposed":
+            if not self.proposal_assumption_ref:
+                raise EngineeringConsistencyError(
+                    "material.proposal_decision_required",
+                    "a system-proposed material must reference its pending decision",
+                )
+        elif self.proposal_assumption_ref is not None:
+            raise EngineeringConsistencyError(
+                "material.proposal_decision_unexpected",
+                "an engineer-entered material cannot reference a system proposal decision",
+            )
         return self
+
+
+def material_proposal_fingerprint(material: Material) -> str:
+    """Bind a proposal decision to the exact canonical material reviewed.
+
+    The proposal reference is the stable material identifier in the current
+    single-material IR.  Name is retained separately because it is itself
+    reviewed content.  Exact hexadecimal float encodings avoid locale,
+    formatting, and JSON-number ambiguity.
+    """
+
+    def quantity(value: OriginalQuantity | None) -> dict[str, str] | None:
+        if value is None:
+            return None
+        return {"value": float(value.value).hex(), "unit": value.unit}
+
+    payload = {
+        "fingerprint_version": 1,
+        "material_identifier": material.proposal_assumption_ref,
+        "name": material.name,
+        "model": material.model,
+        "authority": material.authority,
+        "youngs_modulus_MPa": float(material.E_MPa).hex(),
+        "youngs_modulus_original": quantity(material.youngs_modulus_original),
+        "poissons_ratio": float(material.nu).hex(),
+        "density_tonne_per_mm3": (
+            None
+            if material.density_tonne_per_mm3 is None
+            else float(material.density_tonne_per_mm3).hex()
+        ),
+        "density_original": quantity(material.density_original),
+        "proposal_assumption_ref": material.proposal_assumption_ref,
+    }
+    canonical = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 # --------------------------------------------------------------------------
@@ -312,12 +362,12 @@ class FixedDisplacementBC(StrictModel):
 
 
 class PrescribedDisplacementBC(StrictModel):
-    """Zero-only prescribed displacement.
+    """Finite translational prescribed displacement in canonical millimetres.
 
-    The R3.1 preview envelope has no verified nonzero prescribed-displacement
-    interpretation or export path, so every component must be an exact zero.
-    Signed zero is accepted because ``-0.0 == 0.0``; any other value is a
-    deterministic rejection rather than a silently exported approximation.
+    Only the global Cartesian X/Y/Z translational components are representable.
+    Rotations, local/cylindrical coordinates, time dependence, and nonlinear
+    behavior have no fields in this strict model and are rejected rather than
+    approximated.
     """
 
     type: Literal["prescribed_displacement"]
@@ -331,12 +381,6 @@ class PrescribedDisplacementBC(StrictModel):
                 raise EngineeringConsistencyError(
                     "bc.prescribed_displacement_nonfinite",
                     f"prescribed displacement component '{axis}' must be finite",
-                )
-            if value != 0.0:
-                raise EngineeringConsistencyError(
-                    "bc.prescribed_displacement_nonzero",
-                    "the supported envelope permits zero prescribed displacement "
-                    f"only; component '{axis}' is {value}",
                 )
         if self.components_original is not None:
             if set(self.components_original) != set(self.components):
@@ -356,7 +400,7 @@ class PrescribedDisplacementBC(StrictModel):
                     )
 
     @model_validator(mode="after")
-    def _zero_only_components(self) -> "PrescribedDisplacementBC":
+    def _consistent_components(self) -> "PrescribedDisplacementBC":
         self.check_consistency()
         return self
 
@@ -785,6 +829,11 @@ class Assumption(StrictModel):
     text: str = Field(min_length=1)
     criticality: AssumptionCriticality = "noncritical"
     status: Literal["pending", "accepted", "rejected"]
+    # Server-owned only when an accepted decision reviews a system proposal.
+    # Generic assumptions and pending/rejected proposal decisions keep None.
+    material_proposal_fingerprint_sha256: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -810,13 +859,10 @@ ValidationStatus = Literal["unvalidated", "valid", "invalid"]
 
 class SimulationIntent(StrictModel):
     # Task 19 (ADR-004): explicit positive-integer payload version.  The
-    # default keeps in-process construction ergonomic; it must never be relied
-    # on for untrusted input.  ``ir.versioning.load_simulation_intent`` is the
-    # authoritative external ingestion path and requires an explicit
-    # declaration.
-    schema_version: int = Field(
-        default=SIMULATION_INTENT_SCHEMA_VERSION, ge=1
-    )
+    # field is deliberately required so every generated contract exposes the
+    # durable write boundary honestly. Historical documents are migrated by
+    # ``ir.versioning.load_simulation_intent`` before model validation.
+    schema_version: int = Field(ge=1)
     analysis: Analysis
     materials: list[Material]
     regions: list[Region]
@@ -859,6 +905,17 @@ class SimulationIntent(StrictModel):
                 "export blocked: regions not confirmed: " + ", ".join(blocked)
             )
         return self.model_dump(mode="json")
+
+
+class LegacySimulationIntent(SimulationIntent):
+    """Route-scoped compatibility model for the frozen legacy session PUT.
+
+    This is the sole place where an absent version can still normalize to the
+    current in-memory contract. Durable ``/api/v1`` writes always use the
+    required ``SimulationIntent`` field above.
+    """
+
+    schema_version: int = Field(default=SIMULATION_INTENT_SCHEMA_VERSION, ge=1)
 
 
 def export_json_schema() -> dict:

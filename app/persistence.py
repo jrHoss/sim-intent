@@ -39,7 +39,8 @@ from sqlalchemy.orm import (
 
 from app.blob_store import BlobStore, SourceStorageLimitExceededError
 from ir.schema import SimulationIntent
-from ir.versioning import dump_simulation_intent, load_simulation_intent
+from ir.canonical import canonical_intent_document
+from ir.versioning import load_simulation_intent
 
 
 def uuid4_string() -> str:
@@ -172,7 +173,7 @@ def _immutable_setup_revision(*_args) -> None:
 
 def canonical_intent(intent: SimulationIntent) -> tuple[str, str]:
     canonical = json.dumps(
-        dump_simulation_intent(intent),
+        canonical_intent_document(intent),
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
