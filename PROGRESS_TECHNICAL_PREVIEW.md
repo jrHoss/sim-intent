@@ -1527,3 +1527,414 @@ untracked test modules.
 - Focused R2.2 plus setup projection tests: **26 passed**. Full suite:
   **667 passed, 1 skipped**, with all 49 required baseline comparisons
   executed. Contract drift, compile, and whitespace checks passed.
+
+## R3.1 — Durable engineering setup schema (working tree, 2026-07-27)
+
+### Scope
+
+Completed the narrow single-solid linear-static setup aggregate: explicit
+3D-solid / global-Cartesian / CalculiX declarations, auditable original *and*
+normalized engineering quantities, deterministic Gmsh tetrahedral mesh controls,
+CalculiX solver and requested-result settings, and load-specific provenance.
+
+No mesh generation, solver execution, result parsing, topology work, or frontend
+work was performed.
+
+### Schema version 2 and controlled migration
+
+- `SIMULATION_INTENT_SCHEMA_VERSION` is now **2**;
+  `SIMULATION_INTENT_MINIMUM_SUPPORTED_VERSION` stays **1**, so version-1
+  payloads remain loadable.
+- `ir.versioning` registers the single `1 -> 2` edge. It writes an explicit
+  `null` for `analysis.dimensionality`, `analysis.solver_target`,
+  `analysis.coordinate_system`, `mesh_settings` and `solver_settings`, and
+  changes nothing else. No unit, load, region, assumption, or validation
+  semantics is reinterpreted.
+- **A migrated legacy payload stays incomplete.** It never acquires 3D-solid
+  approval, global-coordinate approval, a CalculiX target, a 1 mm mesh, a Gmsh
+  profile, a solver profile, or requested result fields. `validate_intent`
+  reports `structurally_incomplete` and `export_eligible = false` until an
+  engineer states each decision deliberately. There is no export-enabling
+  compatibility default anywhere in the schema.
+- Load → canonical dump → reload is deterministic for every checked-in legacy
+  document, and canonical hashes and request-ID fingerprints stay stable.
+- Unsupported future versions are still rejected by the typed loader before any
+  body parsing.
+- The checked-in `examples/*.json`, `docs/task13-bracket-demo.json` and
+  `eval/fallback/*.json` documents deliberately **remain at version 1**: they
+  are genuine version-1 setups, and restamping them would hand them decisions
+  their authors never made. `scripts/stamp_schema_versions.py` now treats any
+  declared version inside the supported range as already stamped, which keeps
+  the Task 19 baseline byte evidence intact (`--check` is clean, 35 targets).
+
+### Normalization consistency
+
+- `ground/semantics.py` remains the sole conversion owner and now holds the one
+  supported-unit table for force (`N`, `kN`, `MN`), stress (`Pa`, `kPa`, `MPa`,
+  `GPa`), length (`mm`, `m`), density (`kg/m^3`, `kg/m3`, `t/mm^3`,
+  `tonne/mm^3`) and acceleration (`mm/s^2`, `m/s^2`), plus
+  `normalize_quantity`, `normalized_matches` and the direction helpers.
+  `ir/schema.py` mirrors the vocabulary as `Literal` types and a conformance
+  test asserts the two are identical, so an arbitrary nonempty unit string is
+  not representable.
+- Agreement uses one documented deterministic tolerance:
+  `NORMALIZATION_RELATIVE_TOLERANCE = 1e-9`, relative to the larger compared
+  magnitude or to an explicit vector scale. There is no absolute floor, so an
+  exact zero must stay an exact zero.
+- Every quantity that stores both forms is validated against the trusted
+  parser, with stable machine-readable codes such as
+  `material.youngs_modulus_normalization_mismatch`,
+  `material.density_normalization_mismatch`,
+  `load.force.vector_magnitude_mismatch`,
+  `load.force.vector_direction_mismatch`,
+  `load.traction.magnitude_normalization_mismatch`,
+  `load.gravity.direction_zero`, `load.pressure_normalization_mismatch`,
+  `mesh.target_size_normalization_mismatch` and
+  `bc.displacement_normalization_mismatch`. NaN and infinity are rejected
+  before canonical serialization. `/api/v1` problem details now publish that
+  code alongside the field location.
+- Load provenance is load-specific, not one generic representation. A resultant
+  surface force and a concentrated force carry `original_force`, `magnitude_N`
+  and a normalized nonzero `direction` whose product must equal `vector`.
+  Traction carries `original_traction`/`magnitude_MPa`/`direction`. Pressure is
+  a nonnegative scalar with `original_pressure` and **no** direction field, so a
+  client-controlled direction is not representable. Gravity carries
+  `original_acceleration`/`magnitude_mm_per_s2`/`direction`. Irrelevant
+  cross-load metadata is rejected by `extra="forbid"`.
+
+### Zero-only prescribed displacement
+
+The supported envelope permits zero prescribed displacement only.
+`PrescribedDisplacementBC` rejects any nonzero component on any axis with
+`bc.prescribed_displacement_nonzero`, accepts positive and negative signed zero,
+retains component-wise zero constraints, and keeps its optional
+`components_original` provenance consistent. `ir.validate` reports the same code
+for objects built below the schema, and export eligibility stays false.
+
+### Load-to-region compatibility
+
+`ir/schema.py` holds one authoritative table over the existing region entity
+vocabulary (`cad_face`, `cad_edge`, `mesh_face`, `node_set`, `element_set`); no
+mesh-domain type is invented before meshing exists:
+
+| Condition | Target | Supported region entity types |
+|---|---|---|
+| `resultant_surface_force` | required | `cad_face`, `mesh_face`, `node_set` |
+| `surface_traction` | required | `cad_face`, `mesh_face` |
+| `pressure` | required | `cad_face`, `mesh_face` |
+| `gravity` | optional (model-wide) | `element_set` only; every surface target rejected |
+| `concentrated_force` | required | `node_set` |
+| `fixed_displacement` / `prescribed_displacement` | required | `cad_face`, `mesh_face`, `node_set` |
+
+Validation covers region existence, entity type, confirmation status, rejection
+status, and target requirement or prohibition, with the codes
+`load.region_entity_unsupported`, `load.region_target_prohibited`,
+`bc.region_entity_unsupported`, `load.region_missing` and the existing
+`*.region_unresolved` / `*.region_rejected` / `*.region_unconfirmed`.
+
+### Readiness precedence
+
+Deterministic order: `structurally_incomplete` → `semantically_invalid` →
+`stale_source` → `awaiting_region_confirmation` →
+`awaiting_assumption_acceptance` → `ready`. Structural incompleteness and
+semantic invalidity are no longer hidden by source staleness: a stale but
+otherwise complete and valid setup reports `stale_source`, a stale incomplete
+setup reports `structurally_incomplete`, and a stale invalid setup reports
+`semantically_invalid`. All findings are retained in the report regardless of
+the single selected status, and issue ordering is stable.
+
+### API and durable-revision safety
+
+All new nested engineering fields participate in canonical serialization, intent
+hashing, immutable full-snapshot revisions, request-ID fingerprints, exact
+idempotent replay, changed-content request-ID conflict detection,
+expected-revision conflict handling, and restart/reopen persistence. Clients
+still cannot declare terminal region or assumption states, and nothing is
+dual-written into `SelectionSessionStore`.
+
+### Validation evidence
+
+- Focused R3.1 tests (`tests/test_engineering_setup.py`): **152 passed**.
+- Schema/versioning/contract tests (`test_schema_versioning`,
+  `test_schema_versioned_payloads`, `test_schema_version_routes`,
+  `test_migration_safety`, `test_openapi_contract`): **216 passed**, with all 49
+  required baseline comparisons executed.
+- Unit/load semantics, readiness, and IR tests (`test_semantics`,
+  `test_validate`, `test_ir`, `test_grounding`): **89 passed**.
+- Setup-revision and persistence tests (`test_setup_revisions`,
+  `test_project_persistence`, `test_source_supersession_storage`,
+  `test_session`): **59 passed**.
+- Export tests (`test_export`): **38 passed, 1 skipped** (optional local
+  CalculiX parse-run).
+- Interpretation, query, R2 ingestion/supersession, and migration tests
+  (`test_eval`, `test_interpreter`, `test_queries`, `test_safe_ingestion`,
+  `test_database_migration`): **153 passed**.
+- Full suite: **831 passed, 1 skipped**.
+- `scripts/export_schema.py --check`, `scripts/stamp_schema_versions.py
+  --check`, TypeScript regeneration plus byte comparison, `compileall`,
+  `git diff --check` and `git status --short` all clean.
+- `scripts/export_requirements.py --check` could not run because `uv` is not on
+  PATH on this host; `pyproject.toml`, `uv.lock` and `requirements.txt` are
+  unchanged.
+- No commit, merge, tag, or push was performed.
+
+### R3.1 independent-review remediation (working tree, 2026-07-28)
+
+Three findings from the final R3.1 review were remediated. Scope was not
+broadened: no generalized proposal framework was added, no roadmap scope was
+touched, and schema version 2 with minimum supported version 1, the exact
+`1 -> 2` migration behaviour, trusted original/normalized checks, zero-only
+prescribed displacement, load-region compatibility, readiness precedence,
+immutable durable revisions, expected-revision conflicts, request-ID replay and
+changed-content conflicts, stale-source blocking, server-owned confirmation
+states, the existing exporters, and the Task 19 baseline evidence are all
+unchanged.
+
+#### 1. Orchestration no longer supplies unapproved engineering configuration
+
+`app/orchestration.py` previously emitted a server-generated
+`PREVIEW_ANALYSIS_DECISIONS` / `PREVIEW_MESH_SETTINGS` / `PREVIEW_SOLVER_SETTINGS`
+block on every new proposal, so an underspecified natural-language request
+silently became a solver-ready engineering setup. All three constants and
+`preview_analysis()` were removed.
+
+- Interpretation now proposes regions, boundary conditions, loads and the
+  existing explicit assumptions only. `proposal_analysis()` states the analysis
+  type and the fixed internal mm-N-MPa unit convention, and nothing else.
+- `analysis.dimensionality`, `analysis.solver_target`,
+  `analysis.coordinate_system`, `mesh_settings` and `solver_settings` are left
+  `None` -- explicitly missing, not defaulted -- so the proposal reports
+  `structurally_incomplete` and `export_eligible = false`.
+- Mesh target size, mesher/element profile, solver profile and requested result
+  fields are no longer emitted at all, so `target_size_original` provenance can
+  never be mistaken for engineer acceptance. A source scan in
+  `tests/test_engineering_setup.py` asserts none of `MeshSettings(`,
+  `SolverSettings(`, `gmsh_tet_v1`, `linear_static_v1`, `3d_solid`,
+  `global_cartesian`, `target_size_original` or `requested_results` appears in
+  `app/orchestration.py`.
+- Confirming every proposed region and accepting every existing assumption
+  synthesizes nothing: the setup stays `structurally_incomplete` and
+  export-ineligible, and the incompleteness survives restart/reopen.
+- Only a later explicit durable full-intent revision that supplies the v2
+  engineering configuration makes the setup `ready` and export-eligible.
+- `merge_session_intents` keeps its existing rule: the current setup retains
+  authority over its own configuration, and a setup that has none inherits the
+  proposal's -- which is now also none.
+
+Exact behaviour, before and after the explicit engineering revision, on an
+underspecified request ("Fix both bolt holes and pull the top flange down with
+5 kN.") over `tests/fixtures/bracket.step`:
+
+| Stage | `dimensionality` / `solver_target` / `coordinate_system` | `mesh_settings` | `solver_settings` | `readiness_status` | `export_eligible` |
+|---|---|---|---|---|---|
+| After interpretation | `null` / `null` / `null` | `null` | `null` | `structurally_incomplete` | `false` |
+| After confirming both proposed regions | `null` / `null` / `null` | `null` | `null` | `structurally_incomplete` | `false` |
+| After accepting all three assumptions | `null` / `null` / `null` | `null` | `null` | `structurally_incomplete` | `false` |
+| After restart / reopen | `null` / `null` / `null` | `null` | `null` | `structurally_incomplete` | `false` |
+| After the explicit `/api/v1` engineering revision | `3d_solid` / `calculix` / `global_cartesian` | stated | stated | `ready` | `true` |
+
+The revision changes configuration only: `regions`, `bcs`, `loads`,
+`assumptions` and `materials` are asserted equal across it.
+
+`eval/harness.py` now plays the engineer for this step as well. It already
+interprets the frozen request through the production interpretation path, but it
+no longer creates a replacement `SelectionSessionStore` or mutates an in-memory
+intent into readiness. For each case it persists the source model and proposed
+intent through `/api/v1`, confirms regions and accepts assumptions through the
+normal durable decision endpoints, observes `structurally_incomplete`, and then
+submits exactly one explicit full-intent engineering revision through
+`POST /api/v1/setups/{id}/revisions`. The request carries the current
+`expected_revision` and deterministic
+`evaluation-{case_id}-engineering-v1` request ID. The harness reads the
+resulting immutable revision back before validation/export, verifies that the
+prior incomplete revision remains readable, and verifies that an exact request
+replay returns the same revision without extending history.
+
+The `EVALUATION_ANALYSIS_DECISIONS`, `EVALUATION_MESH_SETTINGS` and
+`EVALUATION_SOLVER_SETTINGS` constants remain evaluation-only fixture input and
+are visibly carried in that engineer-authored revision request. They are not
+imported into production orchestration. The frozen 15-case corpus, checked-in
+`eval/fallback/*.json` records and golden export artifacts are unchanged, and
+REPLAY remains 15/15.
+
+#### 2. Supported-version stamping performs typed validation
+
+`scripts/stamp_schema_versions.py` previously returned any document whose
+declared `schema_version` fell inside the supported range unchanged, without
+looking at its body. A malformed checked-in payload declaring version 1 or 2
+therefore passed `--check`.
+
+Design: each family is validated by **its own authoritative loader**, not by a
+second implementation inside the script, so there is still exactly one owner of
+each contract:
+
+| Target | Validator | What it enforces |
+|---|---|---|
+| `examples/*.json`, `docs/task13-bracket-demo.json` | `ir.versioning.load_simulation_intent` | structural gate, explicit version, version bounds, sequential `n -> n+1` migration, strict current typed schema |
+| `eval/cases/*.json` | `eval.schema.load_evaluation_case` | the versioned `EvaluationCase` record |
+| `eval/fallback/*.json` | `app.record_versions.load_fallback_record` | the envelope **and** the nested `proposed_ir` `SimulationIntent` |
+
+Because the loader runs zero migrations at the current version, a
+current-version `SimulationIntent` document is judged directly by the current
+typed schema, while a legacy document is judged by the same schema *after* the
+registered migration path has carried it forward -- both requirements are met by
+one authoritative path rather than two.
+
+- Validation runs before a supported-version document is returned unchanged, and
+  again after any document is stamped by insertion or canonical re-emission.
+- Malformed nested objects, invalid discriminators, unsupported units, missing
+  required legacy structure, dangling references and invalid nested
+  schema-version combinations are all rejected.
+- Every declared version is bounds-checked by its family registry before any
+  insertion, canonical re-emission, builder or nested normalization can run.
+  Consequently a future standalone intent, evaluation-case envelope, fallback
+  envelope, or nested fallback intent is rejected without changing its bytes.
+  Stable diagnostics are
+  `simulation_intent.schema_version_unsupported_future`,
+  `evaluation_case.schema_version_unsupported_future`, and
+  `fallback_record.schema_version_unsupported_future`.
+- **Validation never rewrites.** A valid version-1 document is returned
+  byte-identical at version 1, and a valid version-2 document is also
+  byte-identical; no future declaration is downgraded to a supported version.
+- `--check` now fails (exit 2, `stamping refused: ...`) for a malformed
+  or future-version checked-in document whether it declares version 1, version
+  2, a future version, or nothing. A future-version refusal performs no write.
+- Diagnostics carry only the repository-relative path (`repository_path()`) and
+  the family's own stable `code` (falling back to `payload_contract_invalid`).
+  The underlying exception text is deliberately dropped, and a JSON decode
+  failure is converted to a `StampError` instead of escaping as a traceback.
+- The Task 19 baseline byte evidence is intact: all **35** targets still pass
+  `--check`, and all 49 required baseline comparisons execute.
+
+The test that treated an arbitrary mapping (`{"schema_version": 1, "a": 1}`) as
+a valid stamped document was removed; it asserted precisely the behaviour this
+finding rejects.
+
+#### 3. Unsupported units publish one stable `quantity.unsupported_unit` code
+
+`ir/schema.py` adds a trusted pre-validation boundary on `OriginalQuantity`: a
+`field_validator("unit", mode="before", check_fields=False)` inherited by every
+subclass, which checks the submitted spelling against
+`ground.semantics.supported_units(cls.QUANTITY_KIND)` -- the single central unit
+table -- *before* the generic `Literal` core schema runs.
+
+- The published code is always exactly `quantity.unsupported_unit`
+  (`ir.schema.UNSUPPORTED_UNIT_CODE`), a fixed server-owned constant no request
+  can influence.
+- The message is a fixed sentence plus the server's own supported vocabulary;
+  the rejected value is never echoed back.
+- The field location stays precise, for example
+  `["body", "intent", "materials", 0, "youngs_modulus_original", "unit"]` and
+  `["body", "intent", "loads", 0, "pressure", "original_pressure", "unit"]`.
+- `app/problems.py` now narrows the published-code lookup to
+  `isinstance(candidate, EngineeringConsistencyError)` rather than any
+  `ValueError` carrying a `code` attribute, so the published vocabulary stays
+  closed and a client cannot route a value of its own choosing into that field.
+  Raw pydantic message text is still withheld.
+- The declared field types are untouched, so the `Literal`/enum unit vocabulary
+  is preserved end to end. `scripts/export_schema.py --check` is clean, and
+  regenerating `schema/openapi.json` and
+  `schema/generated/typescript/api-types.ts` is byte-identical (sha256
+  `40b228864a2041f522aa889feb88e55ad553e734d4481134d6c698ef81760b1d` and
+  `fd756429db31676239445e2a7a681be69a5dd3c578beb03974768db674fa74a8`). Spot
+  check: `StressQuantity.unit` is `"Pa" | "kPa" | "MPa" | "GPa"` in TypeScript
+  and `enum: [Pa, kPa, MPa, GPa]` in both JSON Schema documents.
+
+Applied consistently to every original quantity the R3.1 envelope retains, each
+tested through the durable `/api/v1` revision endpoint:
+
+| Quantity | Field | Kind | Supported vocabulary |
+|---|---|---|---|
+| Young's modulus | `materials[].youngs_modulus_original` | stress | `Pa`, `kPa`, `MPa`, `GPa` |
+| Density | `materials[].density_original` | density | `kg/m^3`, `kg/m3`, `t/mm^3`, `tonne/mm^3` |
+| Prescribed displacement | `bcs[].components_original[axis]` | length | `mm`, `m` |
+| Resultant surface force | `loads[].original_force` | force | `N`, `kN`, `MN` |
+| Concentrated force | `loads[].original_force` | force | `N`, `kN`, `MN` |
+| Pressure | `loads[].original_pressure` | stress | `Pa`, `kPa`, `MPa`, `GPa` |
+| Traction | `loads[].original_traction` | stress | `Pa`, `kPa`, `MPa`, `GPa` |
+| Gravity acceleration | `loads[].original_acceleration` | acceleration | `mm/s^2`, `m/s^2` |
+| Mesh target size | `mesh_settings.target_size_original` | length | `mm`, `m` |
+
+For all nine, `POST /api/v1/setups/{id}/revisions` returns RFC 9457
+`application/problem+json` with `status: 422`, `type: about:blank`,
+`code: request_validation_failed`, `retryable: false`, a `trace_id`, and exactly
+one `errors[]` entry carrying `code: quantity.unsupported_unit` at the correct
+nested location. The response body contains no `Traceback`, `ValidationError`,
+`pydantic`, `literal_error`, `Input should be` or `object at 0x` text, and does
+not reflect the submitted `psi` / `lb/in^3` / `inch` / `lbf` / `ft/s^2`
+spellings. In every case no revision is created and `current_revision` stays 1.
+Supported units keep flowing through normalization and persistence: `210 GPa`,
+`7850 kg/m3`, `0.0025 m` and `0.005 MN` are stored verbatim as originals, agree
+with `210000 MPa`, `7.85e-9 tonne/mm^3`, `2.5 mm` and `5000 N`, and survive
+restart/reopen unchanged.
+
+#### Files changed by this remediation
+
+- `app/orchestration.py` -- removed the server-generated engineering
+  configuration; added `proposal_analysis()`.
+- `app/problems.py` -- narrowed the published engineering-code lookup to
+  `EngineeringConsistencyError`.
+- `ir/schema.py` -- `UNSUPPORTED_UNIT_CODE`, the `QUANTITY_KIND` class variable
+  and the trusted pre-validation unit boundary on `OriginalQuantity`.
+- `scripts/stamp_schema_versions.py` -- typed validation of already-versioned
+  documents, safe repository-relative diagnostics, JSON-decode failures reported
+  as `StampError`.
+- `eval/harness.py` -- the explicit evaluation-side engineering-setup revision.
+- `tests/test_engineering_setup.py` -- new sections 6 and 7: orchestration
+  incompleteness across the durable API and a restart, and the
+  unsupported-unit matrix.
+- `tests/test_schema_versioned_payloads.py` -- malformed-payload and direct
+  future-envelope/nested-intent/no-rewrite regressions; removed the
+  arbitrary-mapping test.
+- `tests/test_eval.py` -- the gravity session test asserts absent configuration
+  and supplies it through the normal revision route; durable evaluation
+  regressions cover immutable history, exact replay, changed-content request-ID
+  conflict, stale expected revision, and the absence of a new in-memory store.
+
+#### Validation evidence (2026-07-28)
+
+Run with the repository's pinned `.venv` (CPython 3.13.14, pydantic 2.13.4,
+FastAPI 0.139.2, gmsh 4.15.2). Note that the host's default interpreter carries
+an unpinned pydantic/FastAPI and cannot reach `gmsh` from the isolated parser
+subprocess; only `.venv` reproduces the supported environment.
+
+- Focused orchestration-incompleteness tests: **3 passed**.
+- Direct future-version and byte-preservation regressions: **7 passed**.
+- Complete schema-stamping payload module: **107 passed**, with baseline
+  comparisons `executed=49 skipped=0 failed=0`.
+- Complete evaluation module: **60 passed**; all 15 replay cases executed and
+  scored 15/15. The durable engineering regression proves one new immutable
+  revision, readable prior state, exact replay, changed-content request-ID
+  conflict, stale expected-revision conflict, and no new
+  `SelectionSessionStore` for the engineering update.
+- Focused setup-revision/idempotency module: **13 passed**.
+- Durable `/api/v1` unsupported-unit matrix and quantity-code tests:
+  **16 passed**.
+- Full R3.1 engineering tests (`tests/test_engineering_setup.py`):
+  **171 passed** (was 152).
+- Schema/versioning/contract tests (`test_schema_versioning`,
+  `test_schema_versioned_payloads`, `test_schema_version_routes`,
+  `test_migration_safety`, `test_openapi_contract`): **231 passed**, with all 49
+  required baseline comparisons executed under
+  `SIM_INTENT_REQUIRE_BASELINE_EVIDENCE=1`.
+- Readiness, unit/load semantics and IR tests (`test_semantics`,
+  `test_validate`, `test_ir`, `test_grounding`): **89 passed**.
+- Setup-revision and persistence tests (`test_setup_revisions`,
+  `test_project_persistence`, `test_source_supersession_storage`,
+  `test_session`): **59 passed**.
+- Export tests (`test_export`): **38 passed, 1 skipped** (optional local
+  CalculiX parse-run).
+- Interpretation/evaluation and R2 regression tests (`test_eval`,
+  `test_interpreter`, `test_queries`, `test_safe_ingestion`,
+  `test_database_migration`): **153 passed**.
+- Full suite: **870 passed, 1 skipped**. Baseline accounting was
+  `executed=49 skipped=0 failed=0`; the one skip is the optional local CalculiX
+  capability check.
+- `scripts/export_schema.py --check`: clean. `scripts/stamp_schema_versions.py
+  --check`: clean, 35 targets. TypeScript regeneration (`npm run generate`,
+  openapi-typescript 7.13.0) plus byte comparison: identical. `compileall`:
+  clean. `git diff --check`: clean.
+- `scripts/export_requirements.py --check` still could not run because `uv` is
+  not on PATH on this host; `pyproject.toml`, `uv.lock` and `requirements.txt`
+  are unchanged.
+- No commit, merge, tag, or push was performed.

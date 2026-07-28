@@ -1,9 +1,69 @@
 {
   "components": {
     "schemas": {
-      "Analysis": {
+      "AccelerationQuantity": {
         "additionalProperties": false,
         "properties": {
+          "unit": {
+            "enum": [
+              "mm/s^2",
+              "m/s^2"
+            ],
+            "title": "Unit",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "value",
+          "unit"
+        ],
+        "title": "AccelerationQuantity",
+        "type": "object"
+      },
+      "Analysis": {
+        "additionalProperties": false,
+        "description": "Analysis configuration.\n\n``dimensionality``, ``solver_target`` and ``coordinate_system`` were\nintroduced by schema version 2 and default to ``None`` — *explicitly\nmissing*, not silently approved.  A schema-version-1 payload migrated\nforward keeps them ``None`` and is therefore structurally incomplete until\nan engineer states them; a current-version submission must supply them.",
+        "properties": {
+          "coordinate_system": {
+            "anyOf": [
+              {
+                "const": "global_cartesian",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coordinate System"
+          },
+          "dimensionality": {
+            "anyOf": [
+              {
+                "const": "3d_solid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimensionality"
+          },
+          "solver_target": {
+            "anyOf": [
+              {
+                "const": "calculix",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solver Target"
+          },
           "type": {
             "const": "static_structural",
             "title": "Type",
@@ -437,6 +497,49 @@
       "ConcentratedForceLoad": {
         "additionalProperties": false,
         "properties": {
+          "direction": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
+          },
+          "distribution": {
+            "const": "uniform",
+            "default": "uniform",
+            "title": "Distribution",
+            "type": "string"
+          },
+          "magnitude_N": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Magnitude N"
+          },
+          "original_force": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ForceQuantity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "region_ref": {
             "title": "Region Ref",
             "type": "string"
@@ -488,6 +591,31 @@
           "type"
         ],
         "title": "ConcentratedForcePayload",
+        "type": "object"
+      },
+      "DensityQuantity": {
+        "additionalProperties": false,
+        "properties": {
+          "unit": {
+            "enum": [
+              "kg/m^3",
+              "kg/m3",
+              "t/mm^3",
+              "tonne/mm^3"
+            ],
+            "title": "Unit",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "value",
+          "unit"
+        ],
+        "title": "DensityQuantity",
         "type": "object"
       },
       "ExportGateResponse": {
@@ -610,9 +738,77 @@
         "title": "FixedDisplacementPayload",
         "type": "object"
       },
-      "GravityLoad": {
+      "ForceQuantity": {
         "additionalProperties": false,
         "properties": {
+          "unit": {
+            "enum": [
+              "N",
+              "kN",
+              "MN"
+            ],
+            "title": "Unit",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "value",
+          "unit"
+        ],
+        "title": "ForceQuantity",
+        "type": "object"
+      },
+      "GravityLoad": {
+        "additionalProperties": false,
+        "description": "Model-wide gravity acceleration in mm/s^2.\n\n``region_ref`` stays ``None`` for the whole model; the only supported\nnon-null target is an element-set material domain (see\n``LOAD_REGION_COMPATIBILITY``).  A surface target is never valid.",
+        "properties": {
+          "direction": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
+          },
+          "distribution": {
+            "const": "uniform",
+            "default": "uniform",
+            "title": "Distribution",
+            "type": "string"
+          },
+          "magnitude_mm_per_s2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Magnitude Mm Per S2"
+          },
+          "original_acceleration": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccelerationQuantity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "region_ref": {
             "anyOf": [
               {
@@ -961,6 +1157,29 @@
         "title": "InterpretResponse",
         "type": "object"
       },
+      "LengthQuantity": {
+        "additionalProperties": false,
+        "properties": {
+          "unit": {
+            "enum": [
+              "mm",
+              "m"
+            ],
+            "title": "Unit",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "value",
+          "unit"
+        ],
+        "title": "LengthQuantity",
+        "type": "object"
+      },
       "Material": {
         "additionalProperties": false,
         "properties": {
@@ -968,6 +1187,16 @@
             "exclusiveMinimum": 0.0,
             "title": "E Mpa",
             "type": "number"
+          },
+          "density_original": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DensityQuantity"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "density_tonne_per_mm3": {
             "anyOf": [
@@ -995,6 +1224,16 @@
             "exclusiveMinimum": -1.0,
             "title": "Nu",
             "type": "number"
+          },
+          "youngs_modulus_original": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StressQuantity"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1004,6 +1243,56 @@
           "nu"
         ],
         "title": "Material",
+        "type": "object"
+      },
+      "MeshSettings": {
+        "additionalProperties": false,
+        "description": "The deterministic preview meshing profile.\n\nEvery field is required: schema version 2 makes the meshing decision an\nexplicit client statement rather than a default a legacy payload could\nsilently acquire.",
+        "properties": {
+          "element_order": {
+            "const": "first_order",
+            "title": "Element Order",
+            "type": "string"
+          },
+          "element_type": {
+            "const": "tetrahedral",
+            "title": "Element Type",
+            "type": "string"
+          },
+          "global_element_size_mm": {
+            "exclusiveMinimum": 0.0,
+            "title": "Global Element Size Mm",
+            "type": "number"
+          },
+          "mesher": {
+            "const": "gmsh",
+            "title": "Mesher",
+            "type": "string"
+          },
+          "mesher_preset": {
+            "const": "gmsh_tet_v1",
+            "title": "Mesher Preset",
+            "type": "string"
+          },
+          "target_size_original": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LengthQuantity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "global_element_size_mm",
+          "element_type",
+          "element_order",
+          "mesher",
+          "mesher_preset"
+        ],
+        "title": "MeshSettings",
         "type": "object"
       },
       "ModelUploadResponse": {
@@ -1124,6 +1413,7 @@
       },
       "PrescribedDisplacementBC": {
         "additionalProperties": false,
+        "description": "Zero-only prescribed displacement.\n\nThe R3.1 preview envelope has no verified nonzero prescribed-displacement\ninterpretation or export path, so every component must be an exact zero.\nSigned zero is accepted because ``-0.0 == 0.0``; any other value is a\ndeterministic rejection rather than a silently exported approximation.",
         "properties": {
           "components": {
             "additionalProperties": {
@@ -1139,6 +1429,27 @@
             },
             "title": "Components",
             "type": "object"
+          },
+          "components_original": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/LengthQuantity"
+                },
+                "propertyNames": {
+                  "enum": [
+                    "x",
+                    "y",
+                    "z"
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Components Original"
           },
           "region_ref": {
             "title": "Region Ref",
@@ -1191,10 +1502,28 @@
       },
       "PressureLoad": {
         "additionalProperties": false,
+        "description": "A nonnegative scalar pressure on the inward surface normal.\n\nThere is deliberately no ``direction`` field: the sign convention is the\nsurface normal, so a client-controlled direction is not representable and\n``extra=\"forbid\"`` rejects one.",
         "properties": {
+          "distribution": {
+            "const": "uniform",
+            "default": "uniform",
+            "title": "Distribution",
+            "type": "string"
+          },
           "magnitude": {
+            "minimum": 0.0,
             "title": "Magnitude",
             "type": "number"
+          },
+          "original_pressure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StressQuantity"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "region_ref": {
             "title": "Region Ref",
@@ -1467,7 +1796,51 @@
       },
       "ResultantSurfaceForceLoad": {
         "additionalProperties": false,
+        "description": "A total force on a surface region, with unambiguous force provenance.",
         "properties": {
+          "direction": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
+          },
+          "distribution": {
+            "const": "uniform",
+            "default": "uniform",
+            "title": "Distribution",
+            "type": "string"
+          },
+          "magnitude_N": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Magnitude N"
+          },
+          "original_force": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ForceQuantity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "region_ref": {
             "title": "Region Ref",
             "type": "string"
@@ -2002,6 +2375,16 @@
             "title": "Materials",
             "type": "array"
           },
+          "mesh_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeshSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "regions": {
             "items": {
               "$ref": "#/components/schemas/Region"
@@ -2010,10 +2393,20 @@
             "type": "array"
           },
           "schema_version": {
-            "default": 1,
+            "default": 2,
             "minimum": 1.0,
             "title": "Schema Version",
             "type": "integer"
+          },
+          "solver_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SolverSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "validation_status": {
             "default": "unvalidated",
@@ -2037,9 +2430,114 @@
         "title": "SimulationIntent",
         "type": "object"
       },
-      "SurfaceTractionLoad": {
+      "SolverSettings": {
+        "additionalProperties": false,
+        "description": "The deterministic preview solver profile; every field is required.",
+        "properties": {
+          "analysis_profile": {
+            "const": "linear_static_v1",
+            "title": "Analysis Profile",
+            "type": "string"
+          },
+          "requested_results": {
+            "items": {
+              "enum": [
+                "displacement",
+                "stress",
+                "reaction_force"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Requested Results",
+            "type": "array"
+          },
+          "target": {
+            "const": "calculix",
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "analysis_profile",
+          "requested_results"
+        ],
+        "title": "SolverSettings",
+        "type": "object"
+      },
+      "StressQuantity": {
         "additionalProperties": false,
         "properties": {
+          "unit": {
+            "enum": [
+              "Pa",
+              "kPa",
+              "MPa",
+              "GPa"
+            ],
+            "title": "Unit",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "value",
+          "unit"
+        ],
+        "title": "StressQuantity",
+        "type": "object"
+      },
+      "SurfaceTractionLoad": {
+        "additionalProperties": false,
+        "description": "The already-supported traction interpretation: a uniform MPa vector.\n\n``original_traction`` is the traction magnitude the engineer entered and\n``direction`` is the unit vector it acts along; the canonical ``vector`` is\ntheir product in MPa.  No second traction mode exists.",
+        "properties": {
+          "direction": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
+          },
+          "distribution": {
+            "const": "uniform",
+            "default": "uniform",
+            "title": "Distribution",
+            "type": "string"
+          },
+          "magnitude_MPa": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Magnitude Mpa"
+          },
+          "original_traction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StressQuantity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "region_ref": {
             "title": "Region Ref",
             "type": "string"
@@ -2245,6 +2743,18 @@
             "title": "Issues",
             "type": "array"
           },
+          "readiness_status": {
+            "enum": [
+              "structurally_incomplete",
+              "semantically_invalid",
+              "stale_source",
+              "awaiting_region_confirmation",
+              "awaiting_assumption_acceptance",
+              "ready"
+            ],
+            "title": "Readiness Status",
+            "type": "string"
+          },
           "validation_status": {
             "enum": [
               "valid",
@@ -2256,6 +2766,7 @@
         },
         "required": [
           "validation_status",
+          "readiness_status",
           "export_eligible",
           "issues"
         ],

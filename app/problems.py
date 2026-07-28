@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
+from ir.schema import EngineeringConsistencyError
 from ir.versioning import ProblemDetailsError
 
 
@@ -67,11 +68,38 @@ def problem_response(request: Request, error: ProblemDetailsError) -> JSONRespon
     )
 
 
+def engineering_consistency_code(item: dict[str, Any]) -> str | None:
+    """Return the stable engineering code behind one pydantic error, if any.
+
+    ``EngineeringConsistencyError.code`` is drawn from a fixed server-side
+    vocabulary and carries no request content, so it is safe to publish while
+    the free-text pydantic message is still withheld.  Without it a client that
+    submits a contradictory quantity or an unsupported unit would only learn
+    *which field* failed, not why.
+
+    Only :class:`EngineeringConsistencyError` qualifies.  Narrowing to the
+    server's own type -- rather than to any ``ValueError`` that happens to
+    carry a ``code`` attribute -- keeps the published vocabulary closed, so a
+    client can never route a value of its own choosing into this field.
+    """
+
+    candidate = (item.get("ctx") or {}).get("error")
+    if not isinstance(candidate, EngineeringConsistencyError):
+        return None
+    return candidate.code if isinstance(candidate.code, str) else None
+
+
 def validation_problem(request: Request, error: RequestValidationError) -> JSONResponse:
-    safe_errors = [
-        {"location": list(item["loc"]), "type": item["type"]}
-        for item in error.errors()
-    ]
+    safe_errors = []
+    for item in error.errors():
+        safe_item: dict[str, Any] = {
+            "location": list(item["loc"]),
+            "type": item["type"],
+        }
+        code = engineering_consistency_code(item)
+        if code is not None:
+            safe_item["code"] = code
+        safe_errors.append(safe_item)
     return problem_response(
         request,
         ApiProblem(

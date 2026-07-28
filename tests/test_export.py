@@ -6,6 +6,7 @@ import ast
 import asyncio
 import copy
 import hashlib
+import json
 import re
 import shutil
 import socket
@@ -18,6 +19,7 @@ import pytest
 
 from app import server as server_module
 from app.server import create_app
+from export.abaqus_py import _preflight as abaqus_preflight
 from export.abaqus_py import export_abaqus_py
 from export.ccx_inp import export_ccx_inp
 from export.common import (
@@ -33,8 +35,15 @@ from export.common import (
     UnsupportedLoadTypeError,
 )
 from geom.meshes import _scan_inp_native_ids, parse_inp
-from ir.schema import SimulationIntent
+from ir.schema import (
+    Material,
+    PrescribedDisplacementBC,
+    SimulationIntent,
+    StressQuantity,
+)
 from ir.schema import Region as IrRegion
+from ir.validate import validate_intent
+from ir.versioning import load_simulation_intent
 
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -62,12 +71,38 @@ Task 14 deterministic tetra
 """
 
 
+#: The explicit schema-version-2 engineering configuration.  None of it is
+#: defaulted by the schema, so an export fixture must state it to be eligible.
+EXPLICIT_ANALYSIS_DECISIONS = {
+    "dimensionality": "3d_solid",
+    "solver_target": "calculix",
+    "coordinate_system": "global_cartesian",
+}
+EXPLICIT_MESH_SETTINGS = {
+    "global_element_size_mm": 1.0,
+    "element_type": "tetrahedral",
+    "element_order": "first_order",
+    "mesher": "gmsh",
+    "mesher_preset": "gmsh_tet_v1",
+    "target_size_original": {"value": 1.0, "unit": "mm"},
+}
+EXPLICIT_SOLVER_SETTINGS = {
+    "target": "calculix",
+    "analysis_profile": "linear_static_v1",
+    "requested_results": ["displacement", "stress", "reaction_force"],
+}
+
+
 def canonical_payload(*, region_status: str = "confirmed", assumption_status: str = "accepted") -> dict:
     return {
+        "schema_version": 2,
         "analysis": {
             "type": "static_structural",
             "units": {"length": "mm", "force": "N", "stress": "MPa"},
+            **EXPLICIT_ANALYSIS_DECISIONS,
         },
+        "mesh_settings": dict(EXPLICIT_MESH_SETTINGS),
+        "solver_settings": dict(EXPLICIT_SOLVER_SETTINGS),
         "materials": [
             {
                 "name": "steel",
@@ -155,12 +190,39 @@ def mesh_model(tmp_path) -> MeshModelMetadata:
 
 
 def mesh_intent(*, regions: list[dict], bcs: list[dict] | None = None, loads: list[dict] | None = None) -> SimulationIntent:
+    """A complete native-mesh setup.
+
+    A setup with no constraint or no load is structurally incomplete and can
+    never be export-eligible, so a caller that is exercising something else gets
+    a minimal real constraint and load over the fixture's native sets rather
+    than an empty list.
+    """
+
+    complete_regions = list(regions)
+    complete_bcs = list(bcs or [])
+    complete_loads = list(loads or [])
+    if not complete_bcs:
+        complete_regions.append(region("_preview_support", "node_set", ["FIXED_NODES"]))
+        complete_bcs.append({
+            "type": "fixed_displacement", "region_ref": "_preview_support",
+            "components": ["x", "y", "z"],
+        })
+    if not complete_loads:
+        complete_regions.append(region("_preview_load", "node_set", ["LOAD_NODE"]))
+        complete_loads.append({
+            "type": "concentrated_force", "region_ref": "_preview_load",
+            "vector": [1.0, 0.0, 0.0],
+        })
     return SimulationIntent.model_validate(
         {
+            "schema_version": 2,
             "analysis": {
                 "type": "static_structural",
                 "units": {"length": "mm", "force": "N", "stress": "MPa"},
+                **EXPLICIT_ANALYSIS_DECISIONS,
             },
+            "mesh_settings": dict(EXPLICIT_MESH_SETTINGS),
+            "solver_settings": dict(EXPLICIT_SOLVER_SETTINGS),
             "materials": [
                 {
                     "name": "steel / test",
@@ -169,9 +231,9 @@ def mesh_intent(*, regions: list[dict], bcs: list[dict] | None = None, loads: li
                     "nu": 0.3,
                 }
             ],
-            "regions": regions,
-            "bcs": bcs or [],
-            "loads": loads or [],
+            "regions": complete_regions,
+            "bcs": complete_bcs,
+            "loads": complete_loads,
             "assumptions": [
                 {
                     "text": "Native mesh IDs and mm-N-MPa units were confirmed.",
@@ -233,11 +295,13 @@ def test_abaqus_provenance_material_bc_static_step_and_resultant_mapping(cad_mod
 def test_abaqus_prescribed_traction_pressure_and_gravity_mappings(cad_model):
     payload = canonical_payload()
     payload["materials"][0]["density_tonne_per_mm3"] = 7.85e-9
+    # The supported envelope permits zero prescribed displacement only; signed
+    # zero is accepted and must still emit an explicit zero DOF value.
     payload["bcs"] = [
         {
             "type": "prescribed_displacement",
             "region_ref": "bolt_holes",
-            "components": {"x": 1.5, "z": -0.25},
+            "components": {"x": 0.0, "z": -0.0},
         }
     ]
     payload["loads"] = [
@@ -255,7 +319,7 @@ def test_abaqus_prescribed_traction_pressure_and_gravity_mappings(cad_model):
     ]
     text = export_abaqus_py(SimulationIntent.model_validate(payload), cad_model).artifact_text
     ast.parse(text)
-    assert "u1=1.5, u2=UNSET, u3=-0.25" in text
+    assert "u1=0, u2=UNSET, u3=0" in text
     assert "magnitude=5" in text
     assert "directionVector=((0.0, 0.0, 0.0), (0.6, 0.8, 0))" in text
     assert "model.Pressure" in text
@@ -287,8 +351,17 @@ def test_abaqus_concentrated_force_fails_instead_of_inventing_point(cad_model):
             "vector": [0, -100, 0],
         }
     ]
+    intent = SimulationIntent.model_validate(payload)
+    # The load-to-region compatibility table now rejects a concentrated force on
+    # a CAD face before the adapter is reached.
+    with pytest.raises(ExportNotReadyError) as caught:
+        export_abaqus_py(intent, cad_model)
+    assert "load.region_entity_unsupported" in {
+        issue.code for issue in caught.value.report.issues
+    }
+    # The adapter's own refusal to invent a vertex or reference point remains.
     with pytest.raises(UnsupportedLoadTypeError):
-        export_abaqus_py(SimulationIntent.model_validate(payload), cad_model)
+        abaqus_preflight(intent, cad_model)
 
 
 @pytest.mark.parametrize(
@@ -323,8 +396,16 @@ def test_abaqus_rejects_dangling_face_and_missing_material_assignment(cad_model)
 
     payload = canonical_payload()
     payload["materials"].append({**payload["materials"][0], "name": "second"})
+    multi_material = SimulationIntent.model_validate(payload)
+    # Validation rejects more than one material for the single solid first ...
+    with pytest.raises(ExportNotReadyError) as caught:
+        export_abaqus_py(multi_material, cad_model)
+    assert "material.count_unsupported" in {
+        issue.code for issue in caught.value.report.issues
+    }
+    # ... and the adapter still refuses to guess a per-region assignment.
     with pytest.raises(MissingMaterialAssignmentError):
-        export_abaqus_py(SimulationIntent.model_validate(payload), cad_model)
+        abaqus_preflight(multi_material, cad_model)
 
 
 def test_abaqus_rejects_changed_source_file(cad_model, tmp_path):
@@ -384,14 +465,15 @@ def test_ccx_prescribed_displacement_and_generated_nset_order(mesh_model):
             {
                 "type": "prescribed_displacement",
                 "region_ref": "moving nodes",
-                "components": {"z": -2.5, "x": 1.25},
+                # Zero-only envelope; signed zero is accepted.
+                "components": {"z": -0.0, "x": 0.0},
             }
         ],
     )
     text = export_ccx_inp(intent, mesh_model).artifact_text
     assert "10, 30, 40" in text
-    assert ", 1, 1, 1.25" in text
-    assert ", 3, 3, -2.5" in text
+    assert ", 1, 1, 0" in text
+    assert ", 3, 3, 0" in text
 
 
 def test_ccx_concentrated_force_single_native_node(mesh_model):
@@ -502,10 +584,27 @@ def test_ccx_unsupported_entity_and_load_types_fail_explicitly(mesh_model):
     with pytest.raises(UnsupportedEntityTypeError):
         export_ccx_inp(cad, mesh_model)
 
-    traction = mesh_intent(
+    # A traction on a node set is not a surface target at all: the compatibility
+    # table blocks it before any adapter runs.
+    node_traction = mesh_intent(
         regions=[region("nodes", "node_set", [10])],
         loads=[
             {"type": "surface_traction", "region_ref": "nodes", "vector": [1, 0, 0]}
+        ],
+    )
+    with pytest.raises(ExportNotReadyError) as caught:
+        export_ccx_inp(node_traction, mesh_model)
+    assert "load.region_entity_unsupported" in {
+        issue.code for issue in caught.value.report.issues
+    }
+
+    # On a real surface region the adapter still refuses to approximate vector
+    # traction rather than mapping it to something else.
+    group_id = mesh_model.inventory.facet_groups[0].id
+    traction = mesh_intent(
+        regions=[region("surface", "mesh_face", [group_id])],
+        loads=[
+            {"type": "surface_traction", "region_ref": "surface", "vector": [1, 0, 0]}
         ],
     )
     with pytest.raises(UnsupportedLoadTypeError):
@@ -639,6 +738,11 @@ def test_blocked_endpoint_returns_409_without_artifact_and_stale_status_fails(tm
                 "components": ["x", "y", "z"],
             }
         ],
+        loads=[{
+            "type": "concentrated_force",
+            "region_ref": "fixed",
+            "vector": [1.0, 0.0, 0.0],
+        }],
     ).model_dump(mode="json")
     for assumption in payload["assumptions"]:
         assumption["status"] = "pending"
@@ -726,6 +830,139 @@ def test_exports_make_no_network_or_openai_call(cad_model, monkeypatch):
     monkeypatch.setattr(socket, "socket", forbidden_socket)
     result = export_abaqus_py(canonical_intent(), cad_model)
     assert result.adapter_name == "abaqus_py"
+
+
+# --------------------------------------------------------------------------
+# R3.1 export compatibility
+# --------------------------------------------------------------------------
+
+
+def blocking_codes(error: ExportNotReadyError) -> set[str]:
+    return {issue.code for issue in error.report.issues if issue.blocks_export}
+
+
+def test_legacy_incomplete_setup_cannot_export(cad_model):
+    """A migrated schema-version-1 setup is blocked, not silently completed."""
+
+    legacy = json.loads(
+        (Path(__file__).parents[1] / "examples" / "bracket_confirmed_export_ready.json")
+        .read_text(encoding="utf-8")
+    )
+    assert legacy["schema_version"] == 1
+    intent = load_simulation_intent(legacy, source="examples")
+    assert intent.mesh_settings is None and intent.solver_settings is None
+    with pytest.raises(ExportNotReadyError) as caught:
+        export_abaqus_py(intent, cad_model)
+    assert {
+        "analysis.dimensionality_missing",
+        "analysis.solver_target_missing",
+        "analysis.coordinate_system_missing",
+        "mesh.missing",
+        "solver.missing",
+    } <= blocking_codes(caught.value)
+
+
+def test_contradictory_quantities_cannot_export(cad_model):
+    """A contradiction constructed below the schema still blocks export."""
+
+    intent = canonical_intent()
+    contradictory = Material.model_construct(
+        name="steel",
+        model="linear_elastic_isotropic",
+        E_MPa=200_000.0,
+        nu=0.3,
+        density_tonne_per_mm3=None,
+        youngs_modulus_original=StressQuantity(value=210.0, unit="GPa"),
+        density_original=None,
+    )
+    candidate = intent.model_copy(update={"materials": [contradictory]}, deep=True)
+    with pytest.raises(ExportNotReadyError) as caught:
+        export_abaqus_py(candidate, cad_model)
+    assert "material.youngs_modulus_normalization_mismatch" in blocking_codes(
+        caught.value
+    )
+
+
+def test_unsupported_nonzero_displacement_cannot_export(cad_model):
+    intent = canonical_intent()
+    unsupported = PrescribedDisplacementBC.model_construct(
+        type="prescribed_displacement",
+        region_ref="bolt_holes",
+        components={"z": 2.5},
+        components_original=None,
+    )
+    candidate = intent.model_copy(update={"bcs": [unsupported]}, deep=True)
+    with pytest.raises(ExportNotReadyError) as caught:
+        export_abaqus_py(candidate, cad_model)
+    assert "bc.prescribed_displacement_nonzero" in blocking_codes(caught.value)
+
+
+def test_invalid_load_target_cannot_export(cad_model):
+    payload = canonical_payload()
+    payload["loads"] = [{
+        "type": "gravity",
+        "region_ref": "upper_mounting_face",  # a CAD surface, never valid for gravity
+        "vector": [0.0, 0.0, -9810.0],
+    }]
+    payload["materials"][0]["density_tonne_per_mm3"] = 7.85e-9
+    with pytest.raises(ExportNotReadyError) as caught:
+        export_abaqus_py(SimulationIntent.model_validate(payload), cad_model)
+    assert "load.region_entity_unsupported" in blocking_codes(caught.value)
+
+
+def test_stale_setup_remains_blocked_from_export():
+    intent = canonical_intent()
+    fresh = validate_intent(intent)
+    assert fresh.export_eligible is True
+    stale = validate_intent(intent, source_is_stale=True)
+    assert stale.readiness_status == "stale_source"
+    assert stale.export_eligible is False
+    assert "source.stale" in {issue.code for issue in stale.issues}
+
+
+def test_explicitly_complete_setup_remains_export_eligible_with_normalized_fields(
+    cad_model,
+):
+    """The one supported complete setup still produces the golden artifact."""
+
+    intent = canonical_intent()
+    report = validate_intent(intent)
+    assert report.readiness_status == "ready"
+    assert report.export_eligible is True
+    # The exporter consumes the normalized mm-N-MPa fields, not the originals.
+    text = export_abaqus_py(intent, cad_model).artifact_text
+    assert "material.Elastic(table=((210000, 0.3),))" in text
+    assert "_traction_magnitude = 5000 / _surface_area" in text
+
+
+def test_exporters_receive_consistent_normalized_load_fields(cad_model):
+    payload = canonical_payload()
+    payload["loads"][0] = {
+        "type": "resultant_surface_force",
+        "region_ref": "upper_mounting_face",
+        "vector": [0.0, -5000.0, 0.0],
+        "original_force": {"value": 5.0, "unit": "kN"},
+        "magnitude_N": 5000.0,
+        "direction": [0.0, -1.0, 0.0],
+    }
+    intent = SimulationIntent.model_validate(payload)
+    load = intent.loads[0]
+    assert load.magnitude_N == 5000.0
+    assert [load.magnitude_N * component for component in load.direction] == load.vector
+    text = export_abaqus_py(intent, cad_model).artifact_text
+    # Provenance is audit metadata only; the generated code is driven purely by
+    # the normalized vector and never carries an original unit.
+    assert "_traction_magnitude = 5000 / _surface_area" in text
+    code_lines = [
+        line for line in text.splitlines() if line and not line.lstrip().startswith("#")
+    ]
+    assert not any("kN" in line for line in code_lines)
+    assert not any("original_force" in line for line in code_lines)
+    # The same setup without provenance produces a byte-identical artifact.
+    bare = canonical_payload()
+    assert export_abaqus_py(
+        SimulationIntent.model_validate(bare), cad_model
+    ).artifact_bytes == export_abaqus_py(intent, cad_model).artifact_bytes
 
 
 def test_production_exporters_do_not_hardcode_fixture_face_ids():

@@ -12,7 +12,12 @@ import zipfile
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
+from app.config import LocalDataConfig
+from app.orchestration import interpret_and_propose
+from app.runtime_mode import RuntimeMode
+from app.session import SelectionSessionStore
 from app.server import create_app
 from eval.harness import (
     HarnessPaths,
@@ -21,8 +26,10 @@ from eval.harness import (
     _contains_forbidden_id_key,
     evaluate_case,
     load_replay,
+    persist_evaluation_setup_to_incomplete,
     render_markdown,
     run_evaluation,
+    submit_evaluation_engineering_revision,
     write_report,
     write_live_unavailable_report,
 )
@@ -73,6 +80,23 @@ def upload(app, fixture: str = "bracket.step") -> str:
     response = request(app, "POST", "/models", files={"file": (fixture, path.read_bytes(), "application/step")})
     assert response.status_code == 201
     return response.json()["id"]
+
+
+def replay_intent(case: EvaluationCase):
+    fixture = PATHS.fixture_dir / case.model_fixture
+    inventory, _ = get_inventory(fixture)
+    proposal = interpret_and_propose(
+        instruction=case.instruction,
+        inventory=inventory,
+        cylinders=analyze_cylinders(fixture),
+        interpreter=Interpreter(
+            transport=ReplayTransport(load_replay(case, PATHS.replay_dir))
+        ),
+        click_evidence_by_intent=_clicks(case, inventory),
+    )
+    assert proposal.intent is not None
+    assert not proposal.clarifications
+    return proposal.intent
 
 
 def test_exactly_15_case_files_exist(cases):
@@ -133,6 +157,94 @@ def test_runner_calls_production_grounding_engine(cases, monkeypatch):
     monkeypatch.setattr(GroundingEngine, "ground_interpretation", lambda self, *args, **kwargs: (calls.append(args[0]), original(self, *args, **kwargs))[1])
     result = evaluate_case(by_id(cases, "bracket_bottom_fixed"), paths=PATHS, mode="REPLAY")
     assert result.status == "PASS" and calls
+
+
+def test_evaluation_engineering_update_is_one_durable_idempotent_revision(
+    tmp_path, cases, monkeypatch
+):
+    case = by_id(cases, "bracket_bottom_fixed")
+    intent = replay_intent(case)
+    app = create_app(
+        tmp_path / "legacy",
+        mode=RuntimeMode.TEST,
+        data_config=LocalDataConfig(tmp_path / "durable-data"),
+    )
+
+    with TestClient(app) as client:
+        setup_id, incomplete = persist_evaluation_setup_to_incomplete(
+            client,
+            case=case,
+            intent=intent,
+            fixture=PATHS.fixture_dir / case.model_fixture,
+        )
+        assert incomplete["validation"]["readiness_status"] == (
+            "structurally_incomplete"
+        )
+        assert incomplete["intent"]["mesh_settings"] is None
+        assert incomplete["intent"]["solver_settings"] is None
+        before = client.get(f"/api/v1/setups/{setup_id}/revisions").json()
+
+        def reject_new_session_store(*args, **kwargs):
+            raise AssertionError(
+                "engineering revision created a SelectionSessionStore"
+            )
+
+        monkeypatch.setattr(
+            SelectionSessionStore,
+            "__init__",
+            reject_new_session_store,
+        )
+        configured, request_body = submit_evaluation_engineering_revision(
+            client,
+            case_id=case.case_id,
+            setup_id=setup_id,
+            incomplete_revision=incomplete,
+        )
+
+        after = client.get(f"/api/v1/setups/{setup_id}/revisions").json()
+        assert len(after) == len(before) + 1
+        assert configured["revision"] == incomplete["revision"] + 1
+        assert configured["parent_revision_id"] == incomplete["id"]
+        assert configured["request_id"] == (
+            f"evaluation-{case.case_id}-engineering-v1"
+        )
+
+        prior = client.get(
+            f"/api/v1/setups/{setup_id}/revisions/{incomplete['revision']}"
+        )
+        assert prior.status_code == 200
+        assert prior.json()["id"] == incomplete["id"]
+        assert prior.json()["intent_sha256"] == incomplete["intent_sha256"]
+        assert prior.json()["intent"]["mesh_settings"] is None
+
+        replay = client.post(
+            f"/api/v1/setups/{setup_id}/revisions",
+            json=request_body,
+        )
+        assert replay.status_code == 201
+        assert replay.json()["id"] == configured["id"]
+
+        changed = json.loads(json.dumps(request_body))
+        changed["intent"]["mesh_settings"]["global_element_size_mm"] = 2.0
+        changed["intent"]["mesh_settings"]["target_size_original"]["value"] = 2.0
+        conflict = client.post(
+            f"/api/v1/setups/{setup_id}/revisions",
+            json=changed,
+        )
+        assert conflict.status_code == 409
+        assert conflict.json()["code"] == "setup_request_id_conflict"
+
+        stale = json.loads(json.dumps(request_body))
+        stale["request_id"] = f"evaluation-{case.case_id}-stale-v1"
+        stale_response = client.post(
+            f"/api/v1/setups/{setup_id}/revisions",
+            json=stale,
+        )
+        assert stale_response.status_code == 409
+        assert stale_response.json()["code"] == "setup_revision_conflict"
+
+        final = client.get(f"/api/v1/setups/{setup_id}/revisions").json()
+        assert [item["id"] for item in final] == [item["id"] for item in after]
 
 
 def test_click_evidence_only_for_marked_cases(cases):
@@ -898,8 +1010,18 @@ def test_repeated_gravity_is_one_whole_model_load_and_exports_once(tmp_path, cas
             "E_MPa": 210000.0,
             "nu": 0.3,
             "density_tonne_per_mm3": 7.85e-9,
+            "youngs_modulus_original": None,
+            "density_original": None,
         }
     ]
+    # Interpreting an instruction approves no engineering configuration: the
+    # schema-version-2 decisions stay explicitly missing until an engineer
+    # states them.
+    assert intent["analysis"]["dimensionality"] is None
+    assert intent["analysis"]["solver_target"] is None
+    assert intent["analysis"]["coordinate_system"] is None
+    assert intent["mesh_settings"] is None
+    assert intent["solver_settings"] is None
     density_assumptions = [
         assumption
         for assumption in intent["assumptions"]
@@ -910,7 +1032,70 @@ def test_repeated_gravity_is_one_whole_model_load_and_exports_once(tmp_path, cas
     assert density_assumptions[0]["status"] == "pending"
     assert len(second.json()["notices"]) == 1
 
-    for assumption in intent["assumptions"]:
+    # A gravity-only setup has no constraint and no engineering configuration,
+    # so it is structurally incomplete and cannot export.  Supply both through
+    # the normal revision route rather than lowering the bar for the export
+    # assertions below.
+    incomplete = request(
+        app,
+        "POST",
+        f"/session/{model_id}/export",
+        json={"adapter": "abaqus_py"},
+    )
+    assert incomplete.status_code == 409
+    assert "bc.missing" in incomplete.text
+    assert "mesh.missing" in incomplete.text
+    assert "solver.missing" in incomplete.text
+    assert "analysis.dimensionality_missing" in incomplete.text
+
+    supported = dict(intent)
+    supported["analysis"] = {
+        **intent["analysis"],
+        "dimensionality": "3d_solid",
+        "solver_target": "calculix",
+        "coordinate_system": "global_cartesian",
+    }
+    supported["mesh_settings"] = {
+        "global_element_size_mm": 1.0,
+        "element_type": "tetrahedral",
+        "element_order": "first_order",
+        "mesher": "gmsh",
+        "mesher_preset": "gmsh_tet_v1",
+        "target_size_original": {"value": 1.0, "unit": "mm"},
+    }
+    supported["solver_settings"] = {
+        "target": "calculix",
+        "analysis_profile": "linear_static_v1",
+        "requested_results": ["displacement", "stress", "reaction_force"],
+    }
+    supported["regions"] = [
+        {
+            "id": "support_face",
+            "entity_type": "cad_face",
+            "entity_ids": [1],
+            "selection_method": "user_click",
+            "confidence": 1.0,
+            "source_instruction": "Fix the mounting face.",
+            "status": "proposed",
+        }
+    ]
+    supported["bcs"] = [
+        {
+            "type": "fixed_displacement",
+            "region_ref": "support_face",
+            "components": ["x", "y", "z"],
+        }
+    ]
+    saved = request(app, "PUT", f"/session/{model_id}/intent", json=supported)
+    assert saved.status_code == 200, saved.text
+    confirmed = request(
+        app,
+        "POST",
+        f"/session/{model_id}/confirm_region",
+        json={"region_id": "support_face"},
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    for assumption in confirmed.json()["intent"]["assumptions"]:
         if assumption["criticality"] == "unit_critical":
             accepted = request(
                 app,
@@ -924,7 +1109,7 @@ def test_repeated_gravity_is_one_whole_model_load_and_exports_once(tmp_path, cas
         f"/session/{model_id}/export",
         json={"adapter": "abaqus_py"},
     )
-    assert exported.status_code == 200
+    assert exported.status_code == 200, exported.text
     assert exported.text.count("model.Gravity(") == 1
     assert exported.text.count("material.Density(") == 1
     assert "material.Density(table=((7.85e-09,),))" in exported.text

@@ -103,7 +103,15 @@ def test_every_production_registry_has_a_contract():
 def test_representative_payload_is_complete_and_current(contract: FamilyContract):
     payload = contract.representative()
     assert isinstance(payload, dict) and payload
-    assert payload[SCHEMA_VERSION_FIELD] == contract.registry.current_version
+    # A checked-in representative may legitimately remain at an older supported
+    # version -- ``audit_registry`` restamps it per edge anyway -- but it must
+    # never declare a version this build cannot load.
+    declared = payload[SCHEMA_VERSION_FIELD]
+    assert (
+        contract.registry.minimum_supported_version
+        <= declared
+        <= contract.registry.current_version
+    )
     for path in contract.protected_paths:
         assert isinstance(path, str) and path
 

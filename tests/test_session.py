@@ -45,10 +45,34 @@ def upload(app, filename: str = "one.inp") -> str:
 
 
 def intent_payload(first_ids=None, second_ids=None) -> dict:
+    """A schema-version-2 setup that states its engineering configuration.
+
+    Nothing here is defaulted by the schema: the analysis dimensionality,
+    coordinate system, solver target, meshing profile and solver profile are all
+    explicit client decisions, which is what makes this fixture reach ``ready``.
+    """
+
     return {
+        "schema_version": 2,
         "analysis": {
             "type": "static_structural",
             "units": {"length": "mm", "force": "N", "stress": "MPa"},
+            "dimensionality": "3d_solid",
+            "solver_target": "calculix",
+            "coordinate_system": "global_cartesian",
+        },
+        "mesh_settings": {
+            "global_element_size_mm": 1.0,
+            "element_type": "tetrahedral",
+            "element_order": "first_order",
+            "mesher": "gmsh",
+            "mesher_preset": "gmsh_tet_v1",
+            "target_size_original": {"value": 1.0, "unit": "mm"},
+        },
+        "solver_settings": {
+            "target": "calculix",
+            "analysis_profile": "linear_static_v1",
+            "requested_results": ["displacement", "stress", "reaction_force"],
         },
         "materials": [
             {

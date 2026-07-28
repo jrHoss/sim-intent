@@ -7,15 +7,19 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
+from fastapi.testclient import TestClient
 from pydantic import Field
 
+from app.config import LocalDataConfig
 from app.orchestration import interpret_and_propose, propose_from_interpretation
 from app.record_versions import build_fallback_envelope
-from app.session import SelectionSessionStore
+from app.runtime_mode import RuntimeMode
+from app.server import create_app
 from eval.schema import EvaluationCase, ExpectedCondition, load_cases, manifest_hash
 from eval.versioning import verify_replay_directory
 from export.abaqus_py import export_abaqus_py
@@ -23,8 +27,12 @@ from export.common import CadModelMetadata
 from geom.cylinders import analyze_cylinders
 from geom.inventory import FaceInventory, get_inventory
 from ground.engine import ClickEvidence
-from ir.schema import SimulationIntent, StrictModel
+from ir.schema import (
+    SimulationIntent,
+    StrictModel,
+)
 from ir.validate import validate_intent
+from ir.versioning import load_simulation_intent
 from llm.interpreter import (
     DEFAULT_MODEL,
     Interpretation,
@@ -239,17 +247,307 @@ def _classify_mismatch(
     return None, "All frozen expected fields match."
 
 
-def _confirm_validate_export(case: EvaluationCase, intent: SimulationIntent, inventory: FaceInventory, fixture: Path) -> tuple[str, dict[str, Any] | None]:
-    store = SelectionSessionStore()
-    snapshot = store.save_intent(case.case_id, intent)
-    for region in snapshot.intent.regions if snapshot.intent else []:
-        snapshot = store.confirm_region(case.case_id, region.id)
-    for assumption in snapshot.intent.assumptions if snapshot.intent else []:
-        if assumption.status == "pending" and assumption.criticality == "unit_critical":
-            snapshot = store.accept_assumption(case.case_id, assumption.id)
-    confirmed, report = store.intent_and_report(case.case_id)
+#: The engineering configuration the simulated engineer states during review.
+#:
+#: Natural-language interpretation never supplies any of it: ``app`` leaves the
+#: schema-version-2 analysis, meshing and solver decisions explicitly missing so
+#: a proposal cannot become ready without a deliberate engineering-setup
+#: revision.  The evaluation harness plays the engineer, so it must make that
+#: revision itself, in the open, exactly as :func:`_confirm_validate_export`
+#: already plays the engineer for region confirmation and assumption
+#: acceptance.  It lives here, in evaluation-only code that the supported
+#: runtime image physically excludes, so no production path can acquire an
+#: engineering decision from it.
+EVALUATION_ANALYSIS_DECISIONS: dict[str, str] = {
+    "dimensionality": "3d_solid",
+    "solver_target": "calculix",
+    "coordinate_system": "global_cartesian",
+}
+EVALUATION_MESH_SETTINGS: dict[str, Any] = {
+    "global_element_size_mm": 1.0,
+    "element_type": "tetrahedral",
+    "element_order": "first_order",
+    "mesher": "gmsh",
+    "mesher_preset": "gmsh_tet_v1",
+    "target_size_original": {"value": 1.0, "unit": "mm"},
+}
+EVALUATION_SOLVER_SETTINGS: dict[str, Any] = {
+    "target": "calculix",
+    "analysis_profile": "linear_static_v1",
+    "requested_results": ["displacement", "stress", "reaction_force"],
+}
+
+
+@dataclass(frozen=True)
+class DurableReviewEvidence:
+    """Immutable-revision evidence captured by the evaluation workflow."""
+
+    setup_id: str
+    revision_count_before_engineering: int
+    revision_count_after_engineering: int
+    incomplete_revision: dict[str, Any]
+    prior_revision_after_update: dict[str, Any]
+    configured_revision: dict[str, Any]
+    replay_revision: dict[str, Any]
+
+
+def evaluation_engineering_revision_payload(
+    intent: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build the explicit engineer-authored full-intent request body.
+
+    The returned mapping is not used as an in-memory evaluation shortcut.  Its
+    only consumer submits it to the durable revision endpoint with optimistic
+    concurrency and idempotency metadata.
+    """
+
+    payload = json.loads(json.dumps(dict(intent)))
+    payload["analysis"] = {
+        **payload["analysis"],
+        **EVALUATION_ANALYSIS_DECISIONS,
+    }
+    payload["mesh_settings"] = dict(EVALUATION_MESH_SETTINGS)
+    payload["solver_settings"] = dict(EVALUATION_SOLVER_SETTINGS)
+    return payload
+
+
+def _require_response(response, status: int, action: str) -> Any:
+    if response.status_code != status:
+        raise RuntimeError(
+            f"durable evaluation {action} failed with HTTP {response.status_code}"
+        )
+    body = response.json()
+    return body
+
+
+def submit_evaluation_engineering_revision(
+    client: TestClient,
+    *,
+    case_id: str,
+    setup_id: str,
+    incomplete_revision: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Submit one explicit configuration revision through the product API."""
+
+    request_body = {
+        "expected_revision": incomplete_revision["revision"],
+        "request_id": f"evaluation-{case_id}-engineering-v1",
+        "intent": evaluation_engineering_revision_payload(
+            incomplete_revision["intent"]
+        ),
+    }
+    response = client.post(
+        f"/api/v1/setups/{setup_id}/revisions",
+        json=request_body,
+    )
+    return (
+        _require_response(response, 201, "engineering revision"),
+        request_body,
+    )
+
+
+def persist_evaluation_setup_to_incomplete(
+    client: TestClient,
+    *,
+    case: EvaluationCase,
+    intent: SimulationIntent,
+    fixture: Path,
+) -> tuple[str, dict[str, Any]]:
+    """Persist the interpreted setup and perform normal review decisions."""
+
+    project = _require_response(
+        client.post(
+            "/api/v1/projects",
+            json={"name": f"Evaluation {case.case_id}"},
+        ),
+        201,
+        "project creation",
+    )
+    uploaded = _require_response(
+        client.post(
+            f"/api/v1/projects/{project['id']}/models",
+            files={
+                "file": (
+                    case.model_fixture,
+                    fixture.read_bytes(),
+                    "application/octet-stream",
+                )
+            },
+        ),
+        201,
+        "model persistence",
+    )
+    created = _require_response(
+        client.post(
+            f"/api/v1/projects/{project['id']}/setups",
+            json={
+                "model_id": uploaded["model_id"],
+                "model_version_id": uploaded["model_version"]["id"],
+                "request_id": f"evaluation-{case.case_id}-create-v1",
+                "intent": intent.model_dump(mode="json"),
+            },
+        ),
+        201,
+        "setup persistence",
+    )
+    setup_id = created["setup"]["id"]
+    current = created["current"]
+
+    for region in list(current["intent"]["regions"]):
+        if region["status"] != "proposed":
+            continue
+        current = _require_response(
+            client.post(
+                f"/api/v1/setups/{setup_id}/regions/{region['id']}/confirm",
+                json={
+                    "expected_revision": current["revision"],
+                    "request_id": (
+                        f"evaluation-{case.case_id}-confirm-{region['id']}"
+                    ),
+                },
+            ),
+            201,
+            "region confirmation",
+        )
+
+    for assumption in list(current["intent"]["assumptions"]):
+        if assumption["status"] != "pending":
+            continue
+        current = _require_response(
+            client.post(
+                f"/api/v1/setups/{setup_id}/assumptions/"
+                f"{assumption['id']}/accept",
+                json={
+                    "expected_revision": current["revision"],
+                    "request_id": (
+                        f"evaluation-{case.case_id}-accept-{assumption['id']}"
+                    ),
+                },
+            ),
+            201,
+            "assumption acceptance",
+        )
+
+    if current["validation"]["readiness_status"] != "structurally_incomplete":
+        raise RuntimeError(
+            "durable evaluation setup was expected to remain "
+            "structurally_incomplete before engineering review"
+        )
+    return setup_id, current
+
+
+def _durable_review(
+    case: EvaluationCase,
+    intent: SimulationIntent,
+    fixture: Path,
+) -> tuple[SimulationIntent, Any, DurableReviewEvidence]:
+    """Run the same persisted review sequence as the durable product."""
+
+    with tempfile.TemporaryDirectory(
+        prefix=f"sim-intent-eval-{case.case_id}-"
+    ) as temporary:
+        workspace = Path(temporary)
+        app = create_app(
+            workspace / "legacy-models",
+            mode=RuntimeMode.TEST,
+            data_config=LocalDataConfig(workspace / "durable-data"),
+        )
+        with TestClient(app) as client:
+            setup_id, incomplete = persist_evaluation_setup_to_incomplete(
+                client,
+                case=case,
+                intent=intent,
+                fixture=fixture,
+            )
+            history_before = _require_response(
+                client.get(f"/api/v1/setups/{setup_id}/revisions"),
+                200,
+                "revision history read",
+            )
+
+            configured, request_body = submit_evaluation_engineering_revision(
+                client,
+                case_id=case.case_id,
+                setup_id=setup_id,
+                incomplete_revision=incomplete,
+            )
+            history_after = _require_response(
+                client.get(f"/api/v1/setups/{setup_id}/revisions"),
+                200,
+                "updated revision history read",
+            )
+            if len(history_after) != len(history_before) + 1:
+                raise RuntimeError(
+                    "engineering update did not create exactly one revision"
+                )
+
+            configured_read = _require_response(
+                client.get(
+                    f"/api/v1/setups/{setup_id}/revisions/"
+                    f"{configured['revision']}"
+                ),
+                200,
+                "engineering revision read",
+            )
+            prior = _require_response(
+                client.get(
+                    f"/api/v1/setups/{setup_id}/revisions/"
+                    f"{incomplete['revision']}"
+                ),
+                200,
+                "prior revision read",
+            )
+            replay = _require_response(
+                client.post(
+                    f"/api/v1/setups/{setup_id}/revisions",
+                    json=request_body,
+                ),
+                201,
+                "engineering request replay",
+            )
+            if replay["id"] != configured["id"]:
+                raise RuntimeError(
+                    "exact engineering request replay created another revision"
+                )
+            history_after_replay = _require_response(
+                client.get(f"/api/v1/setups/{setup_id}/revisions"),
+                200,
+                "post-replay revision history read",
+            )
+            if len(history_after_replay) != len(history_after):
+                raise RuntimeError(
+                    "exact engineering request replay changed revision history"
+                )
+
+            durable_intent = load_simulation_intent(
+                configured_read["intent"],
+                source=(
+                    f"evaluation/{case.case_id}/revision/"
+                    f"{configured_read['revision']}"
+                ),
+            )
+            report = validate_intent(durable_intent)
+            evidence = DurableReviewEvidence(
+                setup_id=setup_id,
+                revision_count_before_engineering=len(history_before),
+                revision_count_after_engineering=len(history_after),
+                incomplete_revision=incomplete,
+                prior_revision_after_update=prior,
+                configured_revision=configured_read,
+                replay_revision=replay,
+            )
+            return durable_intent, report, evidence
+
+
+def _confirm_validate_export(
+    case: EvaluationCase,
+    intent: SimulationIntent,
+    inventory: FaceInventory,
+    fixture: Path,
+) -> tuple[str, dict[str, Any] | None, DurableReviewEvidence]:
+    confirmed, report, evidence = _durable_review(case, intent, fixture)
     if not case.artifact_export_eligible:
-        return report.validation_status, None
+        return report.validation_status, None, evidence
     metadata = CadModelMetadata(
         source_path=fixture,
         source_name=case.model_fixture,
@@ -264,7 +562,7 @@ def _confirm_validate_export(case: EvaluationCase, intent: SimulationIntent, inv
         "bytes": result.artifact_size,
         "validation_status": report.validation_status,
         "export_eligible": report.export_eligible,
-    }
+    }, evidence
 
 
 def evaluate_case(
@@ -357,7 +655,9 @@ def evaluate_case(
                 break
 
         initial_validation = validate_intent(intent)
-        validation_status, export_result = _confirm_validate_export(case, intent, inventory, fixture)
+        validation_status, export_result, _ = _confirm_validate_export(
+            case, intent, inventory, fixture
+        )
         status: Status = "FAIL" if category else ("PASS_AFTER_CLARIFICATION" if observed else "PASS")
 
         if write_fallback:

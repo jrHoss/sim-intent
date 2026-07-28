@@ -27,7 +27,13 @@ SCHEMA_VERSION_FIELD: Final[str] = "schema_version"
 # SimulationIntent (ir/schema.py) -- the setup-bearing engineering aggregate
 # --------------------------------------------------------------------------
 
-SIMULATION_INTENT_SCHEMA_VERSION: Final[int] = 1
+# Version 2 (R3.1) makes the analysis dimensionality, coordinate system,
+# solver target, meshing profile and solver profile explicit engineering
+# decisions.  Version 1 remains supported and loadable: the registered
+# ``1 -> 2`` migration marks each new decision as explicitly missing instead of
+# granting it a default, so a legacy payload can never become ready or
+# export-eligible without a deliberate edit.
+SIMULATION_INTENT_SCHEMA_VERSION: Final[int] = 2
 SIMULATION_INTENT_MINIMUM_SUPPORTED_VERSION: Final[int] = 1
 
 

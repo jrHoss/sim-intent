@@ -15,7 +15,7 @@ dependencies, so every other package can import it without an import cycle.
 
 | Family | Constant | Current | Minimum supported | Registry | Declared in |
 |---|---|---|---|---|---|
-| `simulation_intent` | `SIMULATION_INTENT_SCHEMA_VERSION` | 1 | 1 | `ir.versioning.SIMULATION_INTENT_MIGRATIONS` | `SimulationIntent.schema_version` |
+| `simulation_intent` | `SIMULATION_INTENT_SCHEMA_VERSION` | 2 | 1 | `ir.versioning.SIMULATION_INTENT_MIGRATIONS` | `SimulationIntent.schema_version` |
 | `evaluation_case` | `EVALUATION_CASE_SCHEMA_VERSION` | 1 | 1 | `eval.versioning.EVALUATION_CASE_MIGRATIONS` | `EvaluationCase.schema_version` |
 | `fallback_record` | `FALLBACK_RECORD_SCHEMA_VERSION` | 1 | 1 | `app.record_versions.FALLBACK_RECORD_MIGRATIONS` | fallback envelope key |
 | `replay_record` | `REPLAY_RECORD_SCHEMA_VERSION` | 1 | 1 | `eval.versioning.REPLAY_RECORD_MIGRATIONS` | `eval/replay/manifest.json` |
@@ -44,17 +44,40 @@ migration loader. Task 36 owns that contract.
 
 | Family | Registered edges | Notes |
 |---|---|---|
-| `simulation_intent` | *(none)* | `minimum == current == 1` |
+| `simulation_intent` | `1 → 2` | R3.1 engineering-setup decisions |
 | `evaluation_case` | *(none)* | `minimum == current == 1` |
 | `fallback_record` | *(none)* | `minimum == current == 1` |
 | `replay_record` | *(none)* | `minimum == current == 1` |
 
-**The registries are legitimately empty.** The pre-Task-19 shape of this
-repository *is* version 1; no earlier shape has ever existed. Fabricating a
-`1 → 2` production migration to exercise the mechanism would force "version 1"
-to mean "field absent", which is exactly the absence-inference Task 19
-forbids. `MigrationRegistry.validate()` runs at import for every production
-registry and proves the emptiness is intentional rather than forgotten.
+The three empty registries are legitimately empty: the pre-Task-19 shape of
+those families *is* version 1 and no earlier shape has ever existed.
+`MigrationRegistry.validate()` runs at import for every production registry and
+proves that emptiness is intentional rather than forgotten.
+
+### `simulation_intent` 1 → 2 (R3.1)
+
+Version 2 makes five engineering decisions explicit rather than implied:
+`analysis.dimensionality`, `analysis.solver_target`,
+`analysis.coordinate_system`, `mesh_settings` and `solver_settings`.
+
+`_simulation_intent_one_to_two` writes an explicit `null` for each and changes
+nothing else. That is deliberate and is the whole point of the edge: a
+version-1 payload predates every one of those decisions, so inventing a value
+would hand an old setup a 3D-solid approval, a global-coordinate approval, a
+CalculiX target, a 1 mm Gmsh mesh, a solver profile and a set of requested
+results that no engineer ever chose. Explicitly missing is the honest state, and
+`ir.validate` reports the migrated payload as `structurally_incomplete` with
+`export_eligible = false` until each decision is stated deliberately.
+
+The corresponding model fields therefore carry `None` defaults rather than
+usable values. There is **no export-enabling default anywhere in the schema**;
+compatibility is achieved by staying incomplete, never by filling gaps.
+
+`APPROVED_SAFETY_CHANGES` in `tests/migration_safety.py` remains **empty**: the
+migration touches no path in `SAFETY_CRITICAL_PATHS`, so it needs no waiver.
+`tests/test_engineering_setup.py` additionally pins that the migration adds
+exactly those five keys, all `null`, and leaves materials, regions, BCs, loads,
+assumptions, units and `validation_status` byte-identical.
 
 Registry mechanics are proven with **synthetic test-owned registries** in
 [`tests/test_schema_versioning.py`](../tests/test_schema_versioning.py):
@@ -251,6 +274,26 @@ payload, and it is re-asserted against the **actual committed `6f92b53` blobs**
 by `tests/test_schema_versioned_payloads.py`. The baseline blobs are never
 copied into the repository as fixture data; the comparison needs real Git
 history.
+
+A *declared* version is never taken as evidence that a document is valid.
+Before a supported-version document is returned unchanged — and again after any
+document is stamped — the stamper validates it through the family's own
+authoritative loader: `ir.versioning.load_simulation_intent` for the intent
+documents, `eval.schema.load_evaluation_case` for the case records, and
+`app.record_versions.load_fallback_record` for the fallback envelopes including
+their nested `proposed_ir`. At the current version the loader runs zero
+migrations, so a current-version document is judged directly by the current
+typed schema; a legacy document is judged by the same schema after the
+registered migration path has carried it forward. Malformed nested objects,
+invalid discriminators, unsupported units, missing required legacy structure and
+invalid nested schema-version combinations therefore fail `--check` whether the
+document declares version 1, version 2, or nothing at all.
+
+Validation never rewrites. A valid schema-version-1 document stays
+byte-identical at version 1, so valid v1 evidence is not silently upgraded to
+v2. Refusal diagnostics carry only the repository-relative path and the
+family's own stable error `code`; the underlying exception text and any host
+filesystem detail are deliberately dropped.
 
 #### Where the baseline evidence executes
 

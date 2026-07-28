@@ -118,7 +118,32 @@ def test_legacy_put_accepts_an_unversioned_body(session_app, model_id):
     )
     assert response.status_code == 200, response.text
     saved = response.json()["intent"]
-    assert saved[SCHEMA_VERSION_FIELD] == LEGACY_UNVERSIONED_INTENT_VERSION
+    # The route normalises an absent version to the legacy version, then the
+    # authoritative loader migrates it forward; writes emit only the current
+    # version.
+    assert LEGACY_UNVERSIONED_INTENT_VERSION == 1
+    assert saved[SCHEMA_VERSION_FIELD] == SIMULATION_INTENT_SCHEMA_VERSION
+
+
+def test_legacy_unversioned_body_gains_no_engineering_decisions(
+    session_app, model_id
+):
+    """The compatibility exception must not approve anything by migrating."""
+
+    response = request(
+        session_app,
+        "PUT",
+        f"/session/{model_id}/intent",
+        json=unversioned_intent(),
+    )
+    assert response.status_code == 200, response.text
+    saved = response.json()["intent"]
+    assert saved["analysis"]["dimensionality"] is None
+    assert saved["analysis"]["solver_target"] is None
+    assert saved["analysis"]["coordinate_system"] is None
+    assert saved["mesh_settings"] is None
+    assert saved["solver_settings"] is None
+    assert response.json()["export_eligible"] is False
 
 
 def test_legacy_put_accepts_an_explicit_current_version(session_app, model_id):

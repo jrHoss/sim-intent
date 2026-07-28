@@ -12,16 +12,22 @@ import re
 from dataclasses import dataclass
 from typing import Literal, Sequence, cast, get_args
 
-from ir.schema import Assumption
+from ir.schema import Assumption, DensityQuantity, OriginalQuantity, StressQuantity
 
 
-QuantityKind = Literal["force", "stress", "length"]
+QuantityKind = Literal["force", "stress", "length", "density", "acceleration"]
+CanonicalUnit = Literal["N", "MPa", "mm", "tonne/mm^3", "mm/s^2"]
 ConstraintAxis = Literal["x", "y", "z"]
 LoadType = Literal[
     "resultant_surface_force", "surface_traction", "pressure", "gravity", "concentrated_force"
 ]
 
-_UNIT_TABLE: dict[str, tuple[QuantityKind, float, str]] = {
+# The single supported-unit table for every engineering quantity in the IR.
+# Keys are case-folded spellings; values are (kind, factor to canonical, canonical).
+# ``force``/``stress``/``length`` are the unchanged Task 7 text-phrase vocabulary.
+# ``density``/``acceleration`` are structured-only kinds: they are never parsed
+# out of free text, so ``_QUANTITY_RE`` deliberately does not mention them.
+_UNIT_TABLE: dict[str, tuple[QuantityKind, float, CanonicalUnit]] = {
     "n": ("force", 1.0, "N"),
     "kn": ("force", 1_000.0, "N"),
     "mn": ("force", 1_000_000.0, "N"),
@@ -31,6 +37,12 @@ _UNIT_TABLE: dict[str, tuple[QuantityKind, float, str]] = {
     "gpa": ("stress", 1_000.0, "MPa"),
     "mm": ("length", 1.0, "mm"),
     "m": ("length", 1_000.0, "mm"),
+    "kg/m^3": ("density", 1e-12, "tonne/mm^3"),
+    "kg/m3": ("density", 1e-12, "tonne/mm^3"),
+    "t/mm^3": ("density", 1.0, "tonne/mm^3"),
+    "tonne/mm^3": ("density", 1.0, "tonne/mm^3"),
+    "mm/s^2": ("acceleration", 1.0, "mm/s^2"),
+    "m/s^2": ("acceleration", 1_000.0, "mm/s^2"),
 }
 _QUANTITY_RE = re.compile(
     r"(?<![\w.])([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*"
@@ -38,6 +50,27 @@ _QUANTITY_RE = re.compile(
     re.IGNORECASE,
 )
 SUPPORTED_QUANTITY_UNITS = ("N", "kN", "MN", "Pa", "kPa", "MPa", "GPa", "mm", "m")
+
+#: Canonical wire spellings per quantity kind.  ``ir.schema`` mirrors these as
+#: ``Literal`` unit vocabularies; ``tests/test_engineering_setup.py`` asserts the
+#: two stay identical, so a unit may never be added in only one place.
+SUPPORTED_UNITS_BY_KIND: dict[QuantityKind, tuple[str, ...]] = {
+    "force": ("N", "kN", "MN"),
+    "stress": ("Pa", "kPa", "MPa", "GPa"),
+    "length": ("mm", "m"),
+    "density": ("kg/m^3", "kg/m3", "t/mm^3", "tonne/mm^3"),
+    "acceleration": ("mm/s^2", "m/s^2"),
+}
+
+#: Deterministic agreement tolerance between a client-submitted normalized value
+#: and the value this module derives from the submitted original quantity.
+#: Agreement is purely *relative* to the larger compared magnitude (or to an
+#: explicit vector scale), so an exact zero must remain an exact zero and a
+#: denormal density is not compared against a meaningless absolute floor.
+NORMALIZATION_RELATIVE_TOLERANCE: float = 1e-9
+
+#: Tolerance on ``|direction| == 1`` for a normalized direction vector.
+DIRECTION_NORM_TOLERANCE: float = 1e-9
 _VERTICAL_MOTION_RE = re.compile(
     r"\bvertical\s+(?:motion|movement|displacement|translation)\b",
     re.IGNORECASE,
@@ -77,7 +110,7 @@ def semantics_vocabulary() -> dict[str, list[str]]:
 @dataclass(frozen=True)
 class ConvertedQuantity:
     value: float
-    unit: Literal["N", "MPa", "mm"]
+    unit: CanonicalUnit
     kind: QuantityKind
 
 
@@ -95,7 +128,7 @@ class SemanticLoad:
 
 
 def convert_value(value: float, unit: str) -> ConvertedQuantity:
-    """Convert a numeric value into N, MPa, or mm."""
+    """Convert a numeric value into its canonical mm-N-MPa unit."""
     try:
         kind, factor, internal_unit = _UNIT_TABLE[unit.strip().lower()]
     except KeyError as exc:
@@ -103,7 +136,7 @@ def convert_value(value: float, unit: str) -> ConvertedQuantity:
     numeric = float(value)
     if not math.isfinite(numeric):
         raise ValueError("quantity must be finite")
-    unit_name = cast(Literal["N", "MPa", "mm"], internal_unit)
+    unit_name = cast(CanonicalUnit, internal_unit)
     return ConvertedQuantity(numeric * factor, unit_name, kind)
 
 
@@ -120,6 +153,110 @@ def parse_quantity(text: str, expected_kind: QuantityKind | None = None) -> Conv
 
 # Descriptive alias used by callers that already split value and unit.
 convert_to_internal = convert_value
+
+
+def supported_units(kind: QuantityKind | None = None) -> tuple[str, ...]:
+    """Return the supported original-unit vocabulary, optionally for one kind."""
+
+    if kind is None:
+        return tuple(
+            unit for group in SUPPORTED_UNITS_BY_KIND.values() for unit in group
+        )
+    try:
+        return SUPPORTED_UNITS_BY_KIND[kind]
+    except KeyError as exc:
+        raise ValueError(f"unsupported quantity kind: {kind!r}") from exc
+
+
+def unit_kind(unit: str) -> QuantityKind:
+    """Return the quantity kind of a supported unit, or raise ``ValueError``."""
+
+    try:
+        return _UNIT_TABLE[str(unit).strip().lower()][0]
+    except (AttributeError, KeyError) as exc:
+        raise ValueError(f"unsupported unit: {unit!r}") from exc
+
+
+def normalize_quantity(
+    value: float, unit: str, *, kind: QuantityKind | None = None
+) -> ConvertedQuantity:
+    """The single trusted original -> canonical conversion for the IR.
+
+    Every engineering quantity that stores both an original and a normalized
+    form is normalized here, so the supported unit vocabulary and the conversion
+    factors can never disagree between call sites.
+    """
+
+    converted = convert_value(value, unit)
+    if kind is not None and converted.kind != kind:
+        raise ValueError(
+            f"expected a {kind} quantity, got {converted.kind} from unit {unit!r}"
+        )
+    return converted
+
+
+def normalized_matches(
+    expected: float, actual: float, *, scale: float | None = None
+) -> bool:
+    """Deterministic agreement test between a derived and a submitted value.
+
+    The comparison is relative to the larger of the two magnitudes, or to an
+    explicit ``scale`` when one component of a vector is compared against the
+    vector's own magnitude.  There is no absolute floor: without a scale an
+    exact zero must stay an exact zero.
+    """
+
+    try:
+        left, right = float(expected), float(actual)
+    except (TypeError, ValueError):
+        return False
+    if not (math.isfinite(left) and math.isfinite(right)):
+        return False
+    reference = max(abs(left), abs(right))
+    if scale is not None and math.isfinite(float(scale)):
+        reference = max(reference, abs(float(scale)))
+    if reference == 0.0:
+        return left == right
+    return abs(left - right) <= NORMALIZATION_RELATIVE_TOLERANCE * reference
+
+
+def direction_norm(direction: Sequence[float]) -> float:
+    """Euclidean norm of a candidate direction, or ``nan`` when unusable."""
+
+    try:
+        components = [float(value) for value in direction]
+    except (TypeError, ValueError):
+        return math.nan
+    if len(components) != 3 or not all(math.isfinite(value) for value in components):
+        return math.nan
+    return math.sqrt(sum(value * value for value in components))
+
+
+def is_unit_direction(direction: Sequence[float]) -> bool:
+    """True only for a finite three-component vector of unit length."""
+
+    norm = direction_norm(direction)
+    if not math.isfinite(norm):
+        return False
+    return abs(norm - 1.0) <= DIRECTION_NORM_TOLERANCE
+
+
+def normalize_youngs_modulus(value: float, unit: str) -> tuple[float, OriginalQuantity]:
+    """Normalize a user-entered elastic modulus to MPa with audit provenance."""
+
+    converted = normalize_quantity(value, unit, kind="stress")
+    if converted.value <= 0:
+        raise ValueError("Young's modulus must be a positive stress quantity")
+    return converted.value, StressQuantity(value=float(value), unit=unit)
+
+
+def normalize_density(value: float, unit: str) -> tuple[float, OriginalQuantity]:
+    """Normalize supported density units to the canonical tonne/mm^3 unit."""
+
+    converted = normalize_quantity(value, unit, kind="density")
+    if converted.value <= 0:
+        raise ValueError("density must be finite and greater than zero")
+    return converted.value, DensityQuantity(value=float(value), unit=unit)
 
 
 def parse_direction(
