@@ -40,6 +40,34 @@ class OrchestrationError(RuntimeError):
     """Raised when validated upstream pieces cannot form supported IR."""
 
 
+# Natural-language interpretation is not an engineering approval.
+#
+# This bridge proposes exactly what the instruction and the geometry support:
+# regions, boundary conditions, loads, and the assumptions those conversions
+# already make explicit.  It states no analysis dimensionality, coordinate
+# system, solver target, meshing profile, solver profile, or requested result
+# set, because the engineer never supplied any of them.  Schema version 2 gives
+# those fields no model default, so each stays ``None`` -- *explicitly missing*
+# -- and ``ir.validate`` reports the proposal as ``structurally_incomplete``
+# and export-ineligible until a deliberate engineering-setup revision states
+# them.  Confirming a region or accepting an assumption approves only that
+# region or that assumption; it never synthesizes the missing configuration.
+def proposal_analysis(units: Units | None = None) -> Analysis:
+    """The analysis block a natural-language proposal can honestly state.
+
+    Only the analysis type and the fixed internal mm-N-MPa unit convention are
+    known here.  ``dimensionality``, ``solver_target`` and
+    ``coordinate_system`` are deliberately left unset.
+    """
+
+    return Analysis(
+        type="static_structural",
+        units=(units or Units(length="mm", force="N", stress="MPa")).model_copy(
+            deep=True
+        ),
+    )
+
+
 DEMO_MATERIAL = Material(
     name="steel",
     model="linear_elastic_isotropic",
@@ -239,12 +267,15 @@ def _build_intent(*, instruction: str, grounding: GroundingBatch) -> SimulationI
         assumptions.insert(0, DEMO_MATERIAL_ASSUMPTION.model_copy(deep=True))
     unique_assumptions = {assumption.id: assumption for assumption in assumptions}
     return SimulationIntent(
-        analysis=Analysis(type="static_structural", units=Units(length="mm", force="N", stress="MPa")),
+        analysis=proposal_analysis(),
         materials=[material],
         regions=regions,
         bcs=bcs,
         loads=loads,
         assumptions=list(unique_assumptions.values()),
+        # Never server-generated: an engineering-setup revision must state them.
+        mesh_settings=None,
+        solver_settings=None,
         validation_status="unvalidated",
     )
 
@@ -366,8 +397,21 @@ def merge_session_intents(
             ):
                 continue
             assumptions.setdefault(item.id, item.model_copy(deep=True))
+    # The existing setup keeps authority over its own engineering configuration;
+    # only a setup that has none yet inherits the proposal's.
+    source = current if current is not None else proposal
     merged = SimulationIntent(
-        analysis=(current.analysis if current is not None else proposal.analysis).model_copy(deep=True),
+        analysis=source.analysis.model_copy(deep=True),
+        mesh_settings=(
+            source.mesh_settings.model_copy(deep=True)
+            if source.mesh_settings is not None
+            else None
+        ),
+        solver_settings=(
+            source.solver_settings.model_copy(deep=True)
+            if source.solver_settings is not None
+            else None
+        ),
         materials=list(materials.values()),
         regions=[
             *(item.model_copy(deep=True) for item in existing_regions),

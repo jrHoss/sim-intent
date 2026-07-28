@@ -47,17 +47,22 @@ from eval.versioning import (
 )
 from ir.schema_version import SCHEMA_VERSION_FIELD, SIMULATION_INTENT_SCHEMA_VERSION
 from ir.versioning import (
+    SIMULATION_INTENT_MIGRATIONS,
     MissingSchemaVersionError,
     PayloadStructureError,
     SchemaVersionError,
     dump_simulation_intent,
     load_simulation_intent,
 )
+from scripts import stamp_schema_versions as stamp_module
 from scripts.stamp_schema_versions import (
     StampError,
     stamp_by_insertion,
+    stamp_fallback_record,
     stamp_targets,
     strip_declared_versions,
+    validate_evaluation_case_document,
+    validate_simulation_intent_document,
 )
 from scripts.stamp_schema_versions import main as stamp_main
 from tests.baseline_evidence import (
@@ -128,7 +133,15 @@ def test_all_evaluation_cases_declare_current_version():
         assert case.schema_version == EVALUATION_CASE_MIGRATIONS.current_version
 
 
-def test_all_fallback_records_declare_current_version_including_nested_intent():
+def test_all_fallback_records_declare_a_supported_version_and_load_current():
+    """The frozen records stay at the version they were written at.
+
+    They are genuine schema-version-1 setups.  Restamping them to the current
+    version would hand each one the version-2 engineering decisions its author
+    never made; instead the loader migrates them on read and every *loaded*
+    intent carries the current version.
+    """
+
     paths = sorted(FALLBACK_DIR.glob("*.json"))
     assert len(paths) == 15
     for path in paths:
@@ -141,9 +154,11 @@ def test_all_fallback_records_declare_current_version_including_nested_intent():
         )
         assert intent.schema_version == SIMULATION_INTENT_SCHEMA_VERSION
         raw = json.loads(path.read_text(encoding="utf-8"))
+        declared = raw[NESTED_INTENT_KEY][SCHEMA_VERSION_FIELD]
         assert (
-            raw[NESTED_INTENT_KEY][SCHEMA_VERSION_FIELD]
-            == SIMULATION_INTENT_SCHEMA_VERSION
+            SIMULATION_INTENT_MIGRATIONS.minimum_supported_version
+            <= declared
+            <= SIMULATION_INTENT_SCHEMA_VERSION
         )
 
 
@@ -193,7 +208,19 @@ def test_envelope_migration_delegates_nested_intent_without_rewriting_it():
     )
     envelope, intent = load_fallback_record(raw, source="t")
     assert envelope[NESTED_INTENT_KEY] == raw[NESTED_INTENT_KEY]
-    assert dump_simulation_intent(intent) == raw[NESTED_INTENT_KEY]
+    dumped = dump_simulation_intent(intent)
+    # The nested body is migrated 1 -> 2 on read and nothing else: every
+    # version-2 engineering decision stays explicitly missing.
+    assert dumped[SCHEMA_VERSION_FIELD] == SIMULATION_INTENT_SCHEMA_VERSION
+    assert dumped["analysis"]["dimensionality"] is None
+    assert dumped["analysis"]["solver_target"] is None
+    assert dumped["analysis"]["coordinate_system"] is None
+    assert dumped["mesh_settings"] is None
+    assert dumped["solver_settings"] is None
+    # ... and the pre-existing engineering content is untouched.
+    assert dumped["loads"] == raw[NESTED_INTENT_KEY]["loads"]
+    assert dumped["bcs"] == raw[NESTED_INTENT_KEY]["bcs"]
+    assert dumped["regions"] == raw[NESTED_INTENT_KEY]["regions"]
 
 
 def test_build_fallback_envelope_emits_only_current_versions():
@@ -448,18 +475,319 @@ def test_stamper_check_is_clean_and_idempotent():
         assert path.read_text(encoding="utf-8").replace("\r\n", "\n") == text
 
 
-def test_stamper_refuses_to_change_meaning(tmp_path):
-    target = tmp_path / "already.json"
-    target.write_text('{\n  "schema_version": 7,\n  "a": 1\n}\n', encoding="utf-8")
+# --------------------------------------------------------------------------
+# A declared version is a claim, not proof (R3.1 finding 2)
+# --------------------------------------------------------------------------
+
+
+EXPLICIT_ANALYSIS_DECISIONS = {
+    "dimensionality": "3d_solid",
+    "solver_target": "calculix",
+    "coordinate_system": "global_cartesian",
+}
+EXPLICIT_MESH_SETTINGS = {
+    "global_element_size_mm": 1.0,
+    "element_type": "tetrahedral",
+    "element_order": "first_order",
+    "mesher": "gmsh",
+    "mesher_preset": "gmsh_tet_v1",
+    "target_size_original": {"value": 1.0, "unit": "mm"},
+}
+EXPLICIT_SOLVER_SETTINGS = {
+    "target": "calculix",
+    "analysis_profile": "linear_static_v1",
+    "requested_results": ["displacement", "stress", "reaction_force"],
+}
+
+LEGACY_INTENT_SOURCE = ROOT / "examples" / "bracket_confirmed_export_ready.json"
+
+
+def legacy_intent_document() -> dict[str, Any]:
+    """A genuine, valid schema-version-1 ``SimulationIntent`` document."""
+
+    body = json.loads(LEGACY_INTENT_SOURCE.read_text(encoding="utf-8"))
+    assert body[SCHEMA_VERSION_FIELD] == 1
+    return body
+
+
+def current_intent_document() -> dict[str, Any]:
+    """The same setup, explicitly complete at the current schema version."""
+
+    body = legacy_intent_document()
+    body[SCHEMA_VERSION_FIELD] = SIMULATION_INTENT_SCHEMA_VERSION
+    body["analysis"] = {**body["analysis"], **EXPLICIT_ANALYSIS_DECISIONS}
+    body["mesh_settings"] = dict(EXPLICIT_MESH_SETTINGS)
+    body["solver_settings"] = dict(EXPLICIT_SOLVER_SETTINGS)
+    return body
+
+
+def write_document(path: Path, body: dict[str, Any]) -> str:
+    text = json.dumps(body, indent=2) + "\n"
+    path.write_text(text, encoding="utf-8", newline="\n")
+    return text
+
+
+#: One corruption per failure mode the stamper must catch behind a supported
+#: declared version.
+MALFORMED_INTENT_MUTATIONS = {
+    "malformed_nested_object": lambda body: body.update(
+        {"analysis": {**body["analysis"], "units": "mm-N-MPa"}}
+    ),
+    "invalid_discriminator": lambda body: body["loads"][0].update({"type": "torque"}),
+    "unsupported_unit": lambda body: body["analysis"]["units"].update({"force": "lbf"}),
+    "missing_required_structure": lambda body: body.pop("regions"),
+    "dangling_reference": lambda body: body["bcs"][0].update({"region_ref": "nowhere"}),
+}
+
+
+@pytest.mark.parametrize("mutation", sorted(MALFORMED_INTENT_MUTATIONS))
+@pytest.mark.parametrize("declared", [1, SIMULATION_INTENT_SCHEMA_VERSION])
+def test_stamper_rejects_a_malformed_document_behind_a_supported_version(
+    tmp_path, mutation, declared
+):
+    """Version 1 and version 2 alike: the declaration proves nothing."""
+
+    body = (
+        legacy_intent_document() if declared == 1 else current_intent_document()
+    )
+    MALFORMED_INTENT_MUTATIONS[mutation](body)
+    body[SCHEMA_VERSION_FIELD] = declared
+    target = tmp_path / "malformed.json"
+    write_document(target, body)
+
+    with pytest.raises(StampError) as caught:
+        stamp_by_insertion(
+            target,
+            SIMULATION_INTENT_MIGRATIONS,
+            validate_simulation_intent_document,
+        )
+    assert_safe_diagnostic(caught.value, target)
+
+
+def test_stamper_rejects_a_malformed_nested_fallback_intent(tmp_path):
+    """The envelope may be perfect while the nested setup is not."""
+
+    raw = json.loads(
+        (FALLBACK_DIR / "bracket_bottom_fixed.json").read_text(encoding="utf-8")
+    )
+    raw[NESTED_INTENT_KEY]["loads"] = [{"type": "torque", "region_ref": None}]
+    target = tmp_path / "bracket_bottom_fixed.json"
+    write_document(target, raw)
+
+    with pytest.raises(StampError) as caught:
+        stamp_fallback_record(target)
+    assert_safe_diagnostic(caught.value, target)
+
+
+def test_stamper_rejects_a_future_nested_intent_before_reading_its_body(tmp_path):
+    """A current evaluation fallback envelope cannot mask a future intent."""
+
+    raw = json.loads(
+        (FALLBACK_DIR / "bracket_bottom_fixed.json").read_text(encoding="utf-8")
+    )
+    raw[NESTED_INTENT_KEY] = current_intent_document()
+    raw[NESTED_INTENT_KEY][SCHEMA_VERSION_FIELD] += 1
+    target = tmp_path / "future_nested.json"
+    original = write_document(target, raw)
+    with pytest.raises(StampError) as caught:
+        stamp_fallback_record(target)
+    assert (
+        "simulation_intent.schema_version_unsupported_future"
+        in str(caught.value)
+    )
+    assert target.read_text(encoding="utf-8") == original
+    assert_safe_diagnostic(caught.value, target)
+
+
+def test_stamper_rejects_a_future_top_level_fallback_envelope(tmp_path):
+    raw = json.loads(
+        (FALLBACK_DIR / "bracket_bottom_fixed.json").read_text(encoding="utf-8")
+    )
+    raw[SCHEMA_VERSION_FIELD] = FALLBACK_RECORD_MIGRATIONS.current_version + 1
+    target = tmp_path / "future_fallback.json"
+    original = write_document(target, raw)
+
+    with pytest.raises(StampError) as caught:
+        stamp_fallback_record(target)
+
+    assert "fallback_record.schema_version_unsupported_future" in str(caught.value)
+    assert target.read_text(encoding="utf-8") == original
+    assert_safe_diagnostic(caught.value, target)
+
+
+def test_stamper_rejects_a_future_nested_intent_in_a_legacy_envelope(tmp_path):
+    """Even an unstamped envelope validates nested bounds before stamping."""
+
+    raw = json.loads(
+        (FALLBACK_DIR / "bracket_bottom_fixed.json").read_text(encoding="utf-8")
+    )
+    raw.pop(SCHEMA_VERSION_FIELD)
+    raw[NESTED_INTENT_KEY] = current_intent_document()
+    raw[NESTED_INTENT_KEY][SCHEMA_VERSION_FIELD] += 1
+    target = tmp_path / "legacy_envelope_future_nested.json"
+    original = write_document(target, raw)
+
+    with pytest.raises(StampError) as caught:
+        stamp_fallback_record(target)
+
+    assert (
+        "simulation_intent.schema_version_unsupported_future"
+        in str(caught.value)
+    )
+    assert target.read_text(encoding="utf-8") == original
+    assert_safe_diagnostic(caught.value, target)
+
+
+def test_stamper_rejects_a_future_evaluation_case_envelope(tmp_path):
+    source = CASE_DIR / "01_bracket_bottom_fixed.json"
+    raw = json.loads(source.read_text(encoding="utf-8"))
+    raw[SCHEMA_VERSION_FIELD] = EVALUATION_CASE_MIGRATIONS.current_version + 1
+    target = tmp_path / "future_evaluation_case.json"
+    original = write_document(target, raw)
+
+    with pytest.raises(StampError) as caught:
+        stamp_by_insertion(
+            target,
+            EVALUATION_CASE_MIGRATIONS,
+            validate_evaluation_case_document,
+        )
+
+    assert "evaluation_case.schema_version_unsupported_future" in str(caught.value)
+    assert target.read_text(encoding="utf-8") == original
+    assert_safe_diagnostic(caught.value, target)
+
+
+def assert_safe_diagnostic(error: StampError, target: Path) -> None:
+    """The message names the file safely and leaks nothing internal."""
+
+    message = str(error)
+    assert target.name in message
+    assert str(target.parent) not in message
+    assert "Traceback" not in message
+    assert "ValidationError" not in message
+    assert "pydantic" not in message
+    assert "\n" not in message
+
+
+@pytest.mark.parametrize(
+    ("build", "declared"),
+    [
+        (legacy_intent_document, 1),
+        (current_intent_document, SIMULATION_INTENT_SCHEMA_VERSION),
+    ],
+)
+def test_a_valid_document_at_a_supported_version_stays_byte_identical(
+    tmp_path, build, declared
+):
+    """Validation must never become a silent rewrite to the current version."""
+
+    body = build()
+    assert body[SCHEMA_VERSION_FIELD] == declared
+    target = tmp_path / f"valid_v{declared}.json"
+    original = write_document(target, body)
+
+    stamped = stamp_by_insertion(
+        target, SIMULATION_INTENT_MIGRATIONS, validate_simulation_intent_document
+    )
+    assert stamped == original
+    assert json.loads(stamped)[SCHEMA_VERSION_FIELD] == declared
+
+
+def test_stamper_refuses_an_unsupported_declared_version(tmp_path):
+    body = current_intent_document()
+    body[SCHEMA_VERSION_FIELD] = SIMULATION_INTENT_SCHEMA_VERSION + 1
+    target = tmp_path / "future.json"
+    write_document(target, body)
+    with pytest.raises(StampError) as caught:
+        stamp_by_insertion(
+            target, SIMULATION_INTENT_MIGRATIONS, validate_simulation_intent_document
+        )
+    assert (
+        "simulation_intent.schema_version_unsupported_future"
+        in str(caught.value)
+    )
+    assert_safe_diagnostic(caught.value, target)
+
+
+def test_stamper_inserts_and_validates_when_no_version_is_declared(tmp_path):
+    body = current_intent_document()
+    body.pop(SCHEMA_VERSION_FIELD)
+    target = tmp_path / "unversioned.json"
+    write_document(target, body)
+    stamped = stamp_by_insertion(
+        target, SIMULATION_INTENT_MIGRATIONS, validate_simulation_intent_document
+    )
+    assert json.loads(stamped)[SCHEMA_VERSION_FIELD] == (
+        SIMULATION_INTENT_MIGRATIONS.current_version
+    )
+
+    # An unversioned document that is *invalid* is still refused.
+    body["loads"][0]["type"] = "torque"
+    invalid = tmp_path / "unversioned_invalid.json"
+    write_document(invalid, body)
     with pytest.raises(StampError):
-        stamp_by_insertion(target, 1)
+        stamp_by_insertion(
+            invalid, SIMULATION_INTENT_MIGRATIONS, validate_simulation_intent_document
+        )
 
 
-def test_stamper_insertion_is_a_no_op_when_already_current(tmp_path):
-    target = tmp_path / "current.json"
-    original = '{\n  "schema_version": 1,\n  "a": 1\n}\n'
-    target.write_text(original, encoding="utf-8")
-    assert stamp_by_insertion(target, 1) == original
+def test_all_thirty_five_checked_in_payloads_validate(capsys):
+    """Every approved target passes typed validation, not just version parsing."""
+
+    targets = stamp_targets(ROOT)
+    assert len(targets) == 35
+    assert stamp_main(["--check"]) == 0
+    assert "all 35 versioned payloads are stamped and current" in capsys.readouterr().out
+
+
+def staged_repository(destination: Path) -> Path:
+    for relative in ("examples", "eval/cases", "eval/fallback", "eval/replay"):
+        shutil.copytree(ROOT / relative, destination / relative)
+    (destination / "docs").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(
+        ROOT / "docs" / "task13-bracket-demo.json",
+        destination / "docs" / "task13-bracket-demo.json",
+    )
+    return destination
+
+
+@pytest.mark.parametrize("declared", [1, SIMULATION_INTENT_SCHEMA_VERSION])
+def test_check_fails_for_a_malformed_checked_in_document(
+    tmp_path, monkeypatch, capsys, declared
+):
+    """``--check`` is the gate; a supported declaration cannot slip past it."""
+
+    staged = staged_repository(tmp_path / "repo")
+    victim = staged / "examples" / "bracket_confirmed_export_ready.json"
+    body = json.loads(victim.read_text(encoding="utf-8"))
+    body[SCHEMA_VERSION_FIELD] = declared
+    body["loads"][0]["type"] = "torque"
+    write_document(victim, body)
+
+    monkeypatch.setattr(stamp_module, "ROOT", staged)
+    exit_code = stamp_main(["--check"])
+    assert exit_code != 0
+    captured = capsys.readouterr()
+    assert "stamping refused" in captured.err
+    assert "examples/bracket_confirmed_export_ready.json" in captured.err
+    assert str(staged) not in captured.err
+
+
+def test_check_refuses_future_versions_without_rewriting(tmp_path, monkeypatch, capsys):
+    staged = staged_repository(tmp_path / "repo")
+    victim = staged / "eval" / "fallback" / "bracket_bottom_fixed.json"
+    body = json.loads(victim.read_text(encoding="utf-8"))
+    body[NESTED_INTENT_KEY] = current_intent_document()
+    body[NESTED_INTENT_KEY][SCHEMA_VERSION_FIELD] += 1
+    original = write_document(victim, body)
+
+    monkeypatch.setattr(stamp_module, "ROOT", staged)
+    assert stamp_main(["--check"]) == 2
+
+    captured = capsys.readouterr()
+    assert "simulation_intent.schema_version_unsupported_future" in captured.err
+    assert victim.read_text(encoding="utf-8") == original
+    assert str(staged) not in captured.err
 
 
 def test_unstamped_families_remain_unstamped():
@@ -527,10 +855,14 @@ def test_legacy_normalizer_only_fills_a_missing_key(intent_payload):
 
     payload, normalized = normalize_legacy_intent_payload(json.dumps(intent_payload))
     assert normalized is False
-    assert payload[SCHEMA_VERSION_FIELD] == SIMULATION_INTENT_SCHEMA_VERSION
+    # A declared version is passed through exactly, never rewritten forward.
+    assert payload[SCHEMA_VERSION_FIELD] == intent_payload[SCHEMA_VERSION_FIELD]
 
 
-@pytest.mark.parametrize("declared", [2, 99, "1", 0, -1, 1.0, True])
+@pytest.mark.parametrize(
+    "declared",
+    [SIMULATION_INTENT_SCHEMA_VERSION + 1, 99, "1", 0, -1, 1.0, True],
+)
 def test_legacy_normalizer_never_rewrites_a_declared_version(intent_payload, declared):
     payload = dict(intent_payload)
     payload[SCHEMA_VERSION_FIELD] = declared

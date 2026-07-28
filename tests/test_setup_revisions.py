@@ -364,6 +364,123 @@ def test_setup_creation_idempotency_sequential_concurrent_and_project_scoped(tmp
             assert session.scalar(select(func.count()).select_from(SimulationSetup)) == 3
 
 
+def test_nested_engineering_quantities_participate_in_request_id_fingerprints(tmp_path):
+    """R3.1: the new nested quantities are part of the durable identity."""
+
+    config = LocalDataConfig(tmp_path / "data")
+    with TestClient(create_app(tmp_path / "legacy", mode=RuntimeMode.TEST, data_config=config)) as client:
+        app = client.app
+        project = create_project(app, "nested-quantities")
+        uploaded = upload(app, project["id"], minimal_inp())
+        body = {
+            "model_id": uploaded["model_id"],
+            "model_version_id": uploaded["model_version"]["id"],
+            "request_id": "nested-create",
+            "intent": intent_payload(),
+        }
+        first = request(app, "POST", f"/api/v1/projects/{project['id']}/setups", json=body)
+        assert first.status_code == 201, first.text
+        setup_id = first.json()["setup"]["id"]
+
+        # Byte-identical replay stays exactly idempotent.
+        replay = request(app, "POST", f"/api/v1/projects/{project['id']}/setups", json=body)
+        assert replay.status_code == 201
+        assert replay.json() == first.json()
+
+        for field, mutate in (
+            ("mesh_settings", lambda p: p["mesh_settings"].update(
+                {"global_element_size_mm": 2.0, "target_size_original": {
+                    "value": 2.0, "unit": "mm"}})),
+            ("solver_settings", lambda p: p["solver_settings"].update(
+                {"requested_results": ["displacement"]})),
+            ("analysis", lambda p: p["analysis"].update({"dimensionality": None})),
+            ("materials", lambda p: p["materials"][0].update(
+                {"E_MPa": 200_000.0})),
+        ):
+            changed = intent_payload()
+            mutate(changed)
+            conflict = request(
+                app, "POST", f"/api/v1/projects/{project['id']}/setups",
+                json={**body, "intent": changed},
+            )
+            assert conflict.status_code == 409, f"{field}: {conflict.text}"
+            assert conflict.json()["code"] == "setup_request_id_conflict"
+
+        stored = request(app, "GET", f"/api/v1/setups/{setup_id}").json()["current"]
+        assert stored["intent"]["mesh_settings"] == intent_payload()["mesh_settings"]
+        assert stored["intent"]["solver_settings"] == intent_payload()["solver_settings"]
+
+    with TestClient(create_app(tmp_path / "legacy-reopen", mode=RuntimeMode.TEST, data_config=config)) as client:
+        reopened = request(client.app, "GET", f"/api/v1/setups/{setup_id}").json()
+        assert reopened["current"]["intent"]["mesh_settings"] == (
+            intent_payload()["mesh_settings"]
+        )
+        assert reopened["current"]["intent"]["analysis"]["dimensionality"] == "3d_solid"
+
+
+def test_durable_api_rejects_contradictory_and_unsupported_quantities(tmp_path):
+    config = LocalDataConfig(tmp_path / "data")
+    with TestClient(create_app(tmp_path / "legacy", mode=RuntimeMode.TEST, data_config=config)) as client:
+        app = client.app
+        project = create_project(app, "contradictions")
+        uploaded = upload(app, project["id"], minimal_inp())
+
+        def submit(intent, request_id):
+            return request(
+                app, "POST", f"/api/v1/projects/{project['id']}/setups",
+                json={
+                    "model_id": uploaded["model_id"],
+                    "model_version_id": uploaded["model_version"]["id"],
+                    "request_id": request_id,
+                    "intent": intent,
+                },
+            )
+
+        contradictory = intent_payload()
+        contradictory["materials"][0]["youngs_modulus_original"] = {
+            "value": 210.0, "unit": "GPa",
+        }
+        contradictory["materials"][0]["E_MPa"] = 200_000.0
+        response = submit(contradictory, "contradictory-modulus")
+        assert response.status_code == 422
+        assert "material.youngs_modulus_normalization_mismatch" in response.text
+
+        mesh_mismatch = intent_payload()
+        mesh_mismatch["mesh_settings"]["target_size_original"] = {
+            "value": 1.0, "unit": "m",
+        }
+        response = submit(mesh_mismatch, "contradictory-mesh")
+        assert response.status_code == 422
+        assert "mesh.target_size_normalization_mismatch" in response.text
+
+        nonzero = intent_payload()
+        nonzero["bcs"] = [{
+            "type": "prescribed_displacement",
+            "region_ref": "fixed_region",
+            "components": {"z": 2.5},
+        }]
+        response = submit(nonzero, "nonzero-displacement")
+        assert response.status_code == 422
+        assert "bc.prescribed_displacement_nonzero" in response.text
+
+        # Nothing was persisted by any rejected submission.
+        with app.state.persistence.sessions() as session:
+            assert session.scalar(
+                select(func.count()).select_from(SimulationSetup)
+            ) == 0
+
+        # A zero prescribed displacement is inside the supported envelope.
+        supported = intent_payload()
+        supported["bcs"] = [{
+            "type": "prescribed_displacement",
+            "region_ref": "fixed_region",
+            "components": {"x": 0.0, "y": -0.0, "z": 0.0},
+        }]
+        accepted = submit(supported, "zero-displacement")
+        assert accepted.status_code == 201, accepted.text
+        assert accepted.json()["current"]["export_eligible"] is False  # unconfirmed
+
+
 def test_decision_replay_fingerprints_exact_region_and_assumption_operation(tmp_path):
     config = LocalDataConfig(tmp_path / "data")
     payload = intent_payload()

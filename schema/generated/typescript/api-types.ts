@@ -593,8 +593,33 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** Analysis */
+        /** AccelerationQuantity */
+        AccelerationQuantity: {
+            /**
+             * Unit
+             * @enum {string}
+             */
+            unit: "mm/s^2" | "m/s^2";
+            /** Value */
+            value: number;
+        };
+        /**
+         * Analysis
+         * @description Analysis configuration.
+         *
+         *     ``dimensionality``, ``solver_target`` and ``coordinate_system`` were
+         *     introduced by schema version 2 and default to ``None`` — *explicitly
+         *     missing*, not silently approved.  A schema-version-1 payload migrated
+         *     forward keeps them ``None`` and is therefore structurally incomplete until
+         *     an engineer states them; a current-version submission must supply them.
+         */
         Analysis: {
+            /** Coordinate System */
+            coordinate_system?: "global_cartesian" | null;
+            /** Dimensionality */
+            dimensionality?: "3d_solid" | null;
+            /** Solver Target */
+            solver_target?: "calculix" | null;
             /**
              * Type
              * @constant
@@ -774,6 +799,17 @@ export interface components {
         };
         /** ConcentratedForceLoad */
         ConcentratedForceLoad: {
+            /** Direction */
+            direction?: number[] | null;
+            /**
+             * Distribution
+             * @default uniform
+             * @constant
+             */
+            distribution: "uniform";
+            /** Magnitude N */
+            magnitude_N?: number | null;
+            original_force?: components["schemas"]["ForceQuantity"] | null;
             /** Region Ref */
             region_ref: string;
             /**
@@ -795,6 +831,16 @@ export interface components {
              * @enum {string}
              */
             type: "concentrated_force";
+        };
+        /** DensityQuantity */
+        DensityQuantity: {
+            /**
+             * Unit
+             * @enum {string}
+             */
+            unit: "kg/m^3" | "kg/m3" | "t/mm^3" | "tonne/mm^3";
+            /** Value */
+            value: number;
         };
         /**
          * ExportGateResponse
@@ -844,8 +890,36 @@ export interface components {
              */
             type: "fixed_displacement";
         };
-        /** GravityLoad */
+        /** ForceQuantity */
+        ForceQuantity: {
+            /**
+             * Unit
+             * @enum {string}
+             */
+            unit: "N" | "kN" | "MN";
+            /** Value */
+            value: number;
+        };
+        /**
+         * GravityLoad
+         * @description Model-wide gravity acceleration in mm/s^2.
+         *
+         *     ``region_ref`` stays ``None`` for the whole model; the only supported
+         *     non-null target is an element-set material domain (see
+         *     ``LOAD_REGION_COMPATIBILITY``).  A surface target is never valid.
+         */
         GravityLoad: {
+            /** Direction */
+            direction?: number[] | null;
+            /**
+             * Distribution
+             * @default uniform
+             * @constant
+             */
+            distribution: "uniform";
+            /** Magnitude Mm Per S2 */
+            magnitude_mm_per_s2?: number | null;
+            original_acceleration?: components["schemas"]["AccelerationQuantity"] | null;
             /** Region Ref */
             region_ref?: string | null;
             /**
@@ -944,10 +1018,21 @@ export interface components {
              */
             state: "proposed" | "clarification";
         };
+        /** LengthQuantity */
+        LengthQuantity: {
+            /**
+             * Unit
+             * @enum {string}
+             */
+            unit: "mm" | "m";
+            /** Value */
+            value: number;
+        };
         /** Material */
         Material: {
             /** E Mpa */
             E_MPa: number;
+            density_original?: components["schemas"]["DensityQuantity"] | null;
             /** Density Tonne Per Mm3 */
             density_tonne_per_mm3?: number | null;
             /**
@@ -959,6 +1044,40 @@ export interface components {
             name: string;
             /** Nu */
             nu: number;
+            youngs_modulus_original?: components["schemas"]["StressQuantity"] | null;
+        };
+        /**
+         * MeshSettings
+         * @description The deterministic preview meshing profile.
+         *
+         *     Every field is required: schema version 2 makes the meshing decision an
+         *     explicit client statement rather than a default a legacy payload could
+         *     silently acquire.
+         */
+        MeshSettings: {
+            /**
+             * Element Order
+             * @constant
+             */
+            element_order: "first_order";
+            /**
+             * Element Type
+             * @constant
+             */
+            element_type: "tetrahedral";
+            /** Global Element Size Mm */
+            global_element_size_mm: number;
+            /**
+             * Mesher
+             * @constant
+             */
+            mesher: "gmsh";
+            /**
+             * Mesher Preset
+             * @constant
+             */
+            mesher_preset: "gmsh_tet_v1";
+            target_size_original?: components["schemas"]["LengthQuantity"] | null;
         };
         /** ModelUploadResponse */
         ModelUploadResponse: {
@@ -1005,12 +1124,24 @@ export interface components {
             /** Version */
             version: number;
         };
-        /** PrescribedDisplacementBC */
+        /**
+         * PrescribedDisplacementBC
+         * @description Zero-only prescribed displacement.
+         *
+         *     The R3.1 preview envelope has no verified nonzero prescribed-displacement
+         *     interpretation or export path, so every component must be an exact zero.
+         *     Signed zero is accepted because ``-0.0 == 0.0``; any other value is a
+         *     deterministic rejection rather than a silently exported approximation.
+         */
         PrescribedDisplacementBC: {
             /** Components */
             components: {
                 [key: string]: number;
             };
+            /** Components Original */
+            components_original?: {
+                [key: string]: components["schemas"]["LengthQuantity"];
+            } | null;
             /** Region Ref */
             region_ref: string;
             /**
@@ -1031,10 +1162,24 @@ export interface components {
              */
             type: "prescribed_displacement";
         };
-        /** PressureLoad */
+        /**
+         * PressureLoad
+         * @description A nonnegative scalar pressure on the inward surface normal.
+         *
+         *     There is deliberately no ``direction`` field: the sign convention is the
+         *     surface normal, so a client-controlled direction is not representable and
+         *     ``extra="forbid"`` rejects one.
+         */
         PressureLoad: {
+            /**
+             * Distribution
+             * @default uniform
+             * @constant
+             */
+            distribution: "uniform";
             /** Magnitude */
             magnitude: number;
+            original_pressure?: components["schemas"]["StressQuantity"] | null;
             /** Region Ref */
             region_ref: string;
             /**
@@ -1148,8 +1293,22 @@ export interface components {
             /** Region Id */
             region_id: string;
         };
-        /** ResultantSurfaceForceLoad */
+        /**
+         * ResultantSurfaceForceLoad
+         * @description A total force on a surface region, with unambiguous force provenance.
+         */
         ResultantSurfaceForceLoad: {
+            /** Direction */
+            direction?: number[] | null;
+            /**
+             * Distribution
+             * @default uniform
+             * @constant
+             */
+            distribution: "uniform";
+            /** Magnitude N */
+            magnitude_N?: number | null;
+            original_force?: components["schemas"]["ForceQuantity"] | null;
             /** Region Ref */
             region_ref: string;
             /**
@@ -1329,13 +1488,15 @@ export interface components {
             loads: (components["schemas"]["ResultantSurfaceForceLoad"] | components["schemas"]["SurfaceTractionLoad"] | components["schemas"]["PressureLoad"] | components["schemas"]["GravityLoad"] | components["schemas"]["ConcentratedForceLoad"])[];
             /** Materials */
             materials: components["schemas"]["Material"][];
+            mesh_settings?: components["schemas"]["MeshSettings"] | null;
             /** Regions */
             regions: components["schemas"]["Region"][];
             /**
              * Schema Version
-             * @default 1
+             * @default 2
              */
             schema_version: number;
+            solver_settings?: components["schemas"]["SolverSettings"] | null;
             /**
              * Validation Status
              * @default unvalidated
@@ -1343,8 +1504,54 @@ export interface components {
              */
             validation_status: "unvalidated" | "valid" | "invalid";
         };
-        /** SurfaceTractionLoad */
+        /**
+         * SolverSettings
+         * @description The deterministic preview solver profile; every field is required.
+         */
+        SolverSettings: {
+            /**
+             * Analysis Profile
+             * @constant
+             */
+            analysis_profile: "linear_static_v1";
+            /** Requested Results */
+            requested_results: ("displacement" | "stress" | "reaction_force")[];
+            /**
+             * Target
+             * @constant
+             */
+            target: "calculix";
+        };
+        /** StressQuantity */
+        StressQuantity: {
+            /**
+             * Unit
+             * @enum {string}
+             */
+            unit: "Pa" | "kPa" | "MPa" | "GPa";
+            /** Value */
+            value: number;
+        };
+        /**
+         * SurfaceTractionLoad
+         * @description The already-supported traction interpretation: a uniform MPa vector.
+         *
+         *     ``original_traction`` is the traction magnitude the engineer entered and
+         *     ``direction`` is the unit vector it acts along; the canonical ``vector`` is
+         *     their product in MPa.  No second traction mode exists.
+         */
         SurfaceTractionLoad: {
+            /** Direction */
+            direction?: number[] | null;
+            /**
+             * Distribution
+             * @default uniform
+             * @constant
+             */
+            distribution: "uniform";
+            /** Magnitude Mpa */
+            magnitude_MPa?: number | null;
+            original_traction?: components["schemas"]["StressQuantity"] | null;
             /** Region Ref */
             region_ref: string;
             /**
@@ -1434,6 +1641,11 @@ export interface components {
             export_eligible: boolean;
             /** Issues */
             issues: components["schemas"]["ValidationIssue"][];
+            /**
+             * Readiness Status
+             * @enum {string}
+             */
+            readiness_status: "structurally_incomplete" | "semantically_invalid" | "stale_source" | "awaiting_region_confirmation" | "awaiting_assumption_acceptance" | "ready";
             /**
              * Validation Status
              * @enum {string}

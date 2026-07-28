@@ -817,7 +817,10 @@ def create_app(
 
     def revision_response(revision: SetupRevision) -> SetupRevisionResponse:
         intent = persistence().revision_intent(revision)
-        report = validate_intent(intent)
+        setup = persistence().get_setup(revision.setup_id)
+        if setup is None:
+            raise RuntimeError("setup is missing")
+        report = validate_intent(intent, source_is_stale=setup.is_stale)
         intent = intent.model_copy(update={"validation_status": report.validation_status}, deep=True)
         selected = {
             region.id: list(region.entity_ids) for region in intent.regions
@@ -829,9 +832,6 @@ def create_app(
             )
             for region in intent.regions if region.status in {"proposed", "confirmed"}
         }
-        setup = persistence().get_setup(revision.setup_id)
-        if setup is None:
-            raise RuntimeError("setup is missing")
         return SetupRevisionResponse(
             id=revision.id, setup_id=revision.setup_id, revision=revision.revision,
             parent_revision_id=revision.parent_revision_id,

@@ -25,12 +25,39 @@ from ir.schema import (
 from ir.validate import validate_intent
 
 
+#: The explicit R3.1 engineering configuration a current-version client must
+#: state.  Schema version 2 gives none of these a model default, so a fixture
+#: that omits them is legitimately ``structurally_incomplete``.
+EXPLICIT_ANALYSIS_DECISIONS = {
+    "dimensionality": "3d_solid",
+    "solver_target": "calculix",
+    "coordinate_system": "global_cartesian",
+}
+EXPLICIT_MESH_SETTINGS = {
+    "global_element_size_mm": 1.0,
+    "element_type": "tetrahedral",
+    "element_order": "first_order",
+    "mesher": "gmsh",
+    "mesher_preset": "gmsh_tet_v1",
+    "target_size_original": {"value": 1.0, "unit": "mm"},
+}
+EXPLICIT_SOLVER_SETTINGS = {
+    "target": "calculix",
+    "analysis_profile": "linear_static_v1",
+    "requested_results": ["displacement", "stress", "reaction_force"],
+}
+
+
 def valid_payload(*, region_status: str = "confirmed", assumption_status: str = "accepted") -> dict:
     return {
+        "schema_version": 2,
         "analysis": {
             "type": "static_structural",
             "units": {"length": "mm", "force": "N", "stress": "MPa"},
+            **EXPLICIT_ANALYSIS_DECISIONS,
         },
+        "mesh_settings": dict(EXPLICIT_MESH_SETTINGS),
+        "solver_settings": dict(EXPLICIT_SOLVER_SETTINGS),
         "materials": [
             {
                 "name": "steel",
@@ -211,13 +238,15 @@ def test_zero_or_nonfinite_load_vectors_are_blocking(vector):
     candidate.regions = intent().regions
     candidate.bcs = intent().bcs
     candidate.assumptions = intent().assumptions
+    candidate.mesh_settings = intent().mesh_settings
+    candidate.solver_settings = intent().solver_settings
     report = validate_intent(candidate)
     expected = "load.vector_zero" if vector == [0, 0, 0] else "load.vector_nonfinite"
     assert expected in codes(report)
     assert report.export_eligible is False
 
 
-def test_zero_prescribed_displacement_pressure_and_gravity_are_blocking():
+def test_zero_prescribed_displacement_is_supported_but_zero_loads_are_blocking():
     base = intent()
     displacement = base.model_copy(
         update={
@@ -251,7 +280,7 @@ def test_zero_prescribed_displacement_pressure_and_gravity_are_blocking():
         },
         deep=True,
     )
-    assert "bc.vector_zero" in codes(validate_intent(displacement))
+    assert validate_intent(displacement).export_eligible
     assert "load.magnitude_zero" in codes(validate_intent(pressure))
     assert "load.vector_zero" in codes(validate_intent(gravity))
 

@@ -530,9 +530,46 @@ SIMULATION_INTENT_MIGRATIONS: Final[MigrationRegistry] = MigrationRegistry(
     current_version=SIMULATION_INTENT_SCHEMA_VERSION,
     minimum_supported_version=SIMULATION_INTENT_MINIMUM_SUPPORTED_VERSION,
 )
-# The pre-Task-19 shape of this repository *is* version 1, so no migration edge
-# exists yet and the registry is legitimately empty.  ``validate()`` proves that
-# emptiness is correct rather than forgotten.
+
+#: The version-2 engineering decisions that a version-1 payload never made.
+#: The migration writes an explicit ``null`` for each rather than a value: an
+#: absent decision must stay visibly absent so ``ir.validate`` reports the setup
+#: as ``structurally_incomplete`` until an engineer states it.
+V1_TO_V2_MISSING_ANALYSIS_DECISIONS: Final[tuple[str, ...]] = (
+    "dimensionality",
+    "solver_target",
+    "coordinate_system",
+)
+V1_TO_V2_MISSING_SETUP_DECISIONS: Final[tuple[str, ...]] = (
+    "mesh_settings",
+    "solver_settings",
+)
+
+
+@SIMULATION_INTENT_MIGRATIONS.register(1)
+def _simulation_intent_one_to_two(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Carry a version-1 setup forward as *legacy-incomplete*.
+
+    Version 1 predates the analysis dimensionality, coordinate system, solver
+    target, meshing profile and solver profile.  Inventing any of them here
+    would hand an old setup a 3D-solid approval, a global-coordinate approval, a
+    CalculiX target, a 1 mm Gmsh mesh, a solver profile and a set of requested
+    results that no engineer ever chose.  Nothing else is reinterpreted: unit,
+    load, region, assumption and validation semantics are copied untouched.
+    """
+
+    body = dict(payload)
+    analysis = body.get("analysis")
+    if isinstance(analysis, Mapping):
+        migrated_analysis = dict(analysis)
+        for key in V1_TO_V2_MISSING_ANALYSIS_DECISIONS:
+            migrated_analysis.setdefault(key, None)
+        body["analysis"] = migrated_analysis
+    for key in V1_TO_V2_MISSING_SETUP_DECISIONS:
+        body.setdefault(key, None)
+    return body
+
+
 SIMULATION_INTENT_MIGRATIONS.validate()
 
 

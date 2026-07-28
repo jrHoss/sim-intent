@@ -56,13 +56,27 @@ EXAMPLES = ROOT / "examples"
 
 @pytest.fixture
 def intent_payload() -> dict[str, Any]:
-    """A complete, version-1 SimulationIntent payload."""
+    """A complete SimulationIntent payload declaring the current version."""
 
     payload = json.loads(
         (EXAMPLES / "bracket_sprint_goal.json").read_text(encoding="utf-8")
     )
     payload[SCHEMA_VERSION_FIELD] = SIMULATION_INTENT_SCHEMA_VERSION
     return payload
+
+
+@pytest.fixture
+def legacy_intent_payload() -> dict[str, Any]:
+    """The checked-in example exactly as committed: a real version-1 payload.
+
+    The synthetic-registry tests need a payload that is genuinely *below* the
+    registry's current version, otherwise the registry runs zero migrations and
+    the assertion under test becomes vacuous.
+    """
+
+    return json.loads(
+        (EXAMPLES / "bracket_sprint_goal.json").read_text(encoding="utf-8")
+    )
 
 
 def make_registry(
@@ -262,15 +276,22 @@ def test_registry_construction_rejects_invalid_bounds():
 
 
 def test_production_registries_validate_at_import():
-    # An empty registry is correct when minimum == current; validate() proves
-    # the emptiness is intentional rather than forgotten.
+    # validate() proves the registered edge set exactly covers
+    # minimum .. current - 1, so neither a forgotten edge nor a forgotten empty
+    # registry can pass silently.
     SIMULATION_INTENT_MIGRATIONS.validate()
-    assert SIMULATION_INTENT_MIGRATIONS.registered_edges == ()
-    assert (
-        SIMULATION_INTENT_MIGRATIONS.current_version
-        == SIMULATION_INTENT_MIGRATIONS.minimum_supported_version
-        == 1
+    assert SIMULATION_INTENT_MIGRATIONS.minimum_supported_version == 1
+    assert SIMULATION_INTENT_MIGRATIONS.current_version == (
+        SIMULATION_INTENT_SCHEMA_VERSION
     )
+    assert SIMULATION_INTENT_MIGRATIONS.registered_edges == tuple(
+        range(
+            SIMULATION_INTENT_MIGRATIONS.minimum_supported_version,
+            SIMULATION_INTENT_MIGRATIONS.current_version,
+        )
+    )
+    # R3.1 introduced version 2, so the 1 -> 2 edge must exist.
+    assert 1 in SIMULATION_INTENT_MIGRATIONS.registered_edges
 
 
 # --------------------------------------------------------------------------
@@ -433,16 +454,20 @@ def test_safety_critical_projection_marks_absence(intent_payload):
     assert projected["loads[].magnitude"] == (ABSENT,)
 
 
-def test_safety_critical_fields_preserved_across_migration(intent_payload):
+def test_safety_critical_fields_preserved_across_migration(legacy_intent_payload):
+    intent_payload = legacy_intent_payload
     registry = make_registry(current=2)
     registry.register(1)(lambda payload: {**payload, "cosmetic": "added"})
     registry.validate()
 
     migrated = registry.migrate(intent_payload)
+    assert migrated[SCHEMA_VERSION_FIELD] == 2
+    assert migrated["cosmetic"] == "added"  # the migration really ran
     assert safety_critical_differences(intent_payload, migrated) == {}
 
 
-def test_no_silent_approval_or_confirmation_upgrade(intent_payload):
+def test_no_silent_approval_or_confirmation_upgrade(legacy_intent_payload):
+    intent_payload = legacy_intent_payload
     unsafe_registry = make_registry(current=2)
 
     def _unsafe(payload: Mapping[str, Any]) -> dict[str, Any]:

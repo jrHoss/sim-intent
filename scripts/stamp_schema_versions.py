@@ -30,6 +30,13 @@ Every write is verified: the stamped document, with its declared versions
 removed again, must parse equal to the original document.  That equality is the
 migration evidence required before rewriting a checked-in payload.
 
+A *declared* version is never taken as evidence that the document is valid.
+Before a supported-version document is returned unchanged -- and after any
+document is stamped -- it is validated through its family's authoritative
+loader, so a malformed checked-in payload fails ``--check`` whether it declares
+version 1, version 2, or nothing at all.  Validation never rewrites: a valid
+schema-version-1 document stays byte-identical at version 1.
+
 Usage::
 
     python scripts/stamp_schema_versions.py            # write
@@ -52,7 +59,9 @@ from app.record_versions import (  # noqa: E402
     FALLBACK_RECORD_MIGRATIONS,
     NESTED_INTENT_KEY,
     build_fallback_envelope,
+    load_fallback_record,
 )
+from eval.schema import load_evaluation_case  # noqa: E402
 from eval.versioning import (  # noqa: E402
     EVALUATION_CASE_MIGRATIONS,
     REPLAY_MANIFEST_FILENAME,
@@ -61,7 +70,11 @@ from eval.versioning import (  # noqa: E402
 )
 from ir.schema import SimulationIntent  # noqa: E402
 from ir.schema_version import SCHEMA_VERSION_FIELD  # noqa: E402
-from ir.versioning import SIMULATION_INTENT_MIGRATIONS  # noqa: E402
+from ir.versioning import (  # noqa: E402
+    SIMULATION_INTENT_MIGRATIONS,
+    MigrationRegistry,
+    load_simulation_intent,
+)
 
 
 class StampError(RuntimeError):
@@ -70,6 +83,60 @@ class StampError(RuntimeError):
 
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
+# Safe diagnostics
+# --------------------------------------------------------------------------
+
+
+def repository_path(path: Path) -> str:
+    """Identify a target by its repository-relative path and nothing more.
+
+    A diagnostic must be reproducible on any checkout, so an absolute host path
+    is reduced to the normal repository-relative label.
+    """
+
+    try:
+        return path.resolve().relative_to(ROOT).as_posix()
+    except ValueError:
+        return path.name
+
+
+#: The reason reported when a loader rejects a document without a typed code.
+GENERIC_CONTRACT_CODE = "payload_contract_invalid"
+
+
+def _contract_failure(path: Path, exc: Exception) -> StampError:
+    """Report *which file* failed and a server-owned reason code.
+
+    Only the repository-relative path and the family's own stable ``code`` are
+    published.  The underlying exception text is deliberately dropped: it can
+    quote document content and host paths, and it is not a stable contract.
+    """
+
+    code = getattr(exc, "code", None)
+    if not isinstance(code, str) or not code:
+        code = GENERIC_CONTRACT_CODE
+    family = getattr(exc, "family", None)
+    if isinstance(family, str) and family:
+        code = f"{family}.{code}"
+    return StampError(
+        f"{repository_path(path)}: the document does not satisfy its declared "
+        f"schema contract ({code})"
+    )
+
+
+def load_json_object(path: Path) -> Mapping[str, Any]:
+    try:
+        payload = json.loads(read_text(path))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise StampError(
+            f"{repository_path(path)}: the file is not valid JSON"
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise StampError(f"{repository_path(path)}: not a JSON object")
+    return payload
 
 
 def write_text(path: Path, text: str) -> None:
@@ -96,19 +163,80 @@ def insert_top_level_version(text: str, version: int) -> str:
     return head + line + rest
 
 
-def stamp_by_insertion(path: Path, version: int) -> str:
+def validate_declared_version(
+    path: Path, payload: Mapping[str, Any], registry: MigrationRegistry
+) -> None:
+    """Validate one declaration before any stamping or normalization.
+
+    Composite records call this for both the envelope and its nested intent.
+    In particular, a future declaration must reach the family registry before
+    any builder can replace it with the current version.
+    """
+
+    try:
+        registry.check_version(payload, source=repository_path(path))
+    except Exception as exc:
+        raise _contract_failure(path, exc) from exc
+
+
+# --------------------------------------------------------------------------
+# Typed validation: a declared version is not evidence of a valid document
+# --------------------------------------------------------------------------
+#
+# Each family is validated by its own authoritative loader -- the same one the
+# runtime uses -- rather than by a second implementation living here.  Every
+# loader performs the fixed ADR-004 order: structural gate, explicit version
+# declaration, version bounds, sequential ``n -> n + 1`` migration, then strict
+# typed validation.  A *current-version* document therefore runs zero migrations
+# and is judged directly by the current typed schema, while a *legacy* document
+# is judged by the same schema after the registered migration path has carried
+# it forward.  Neither branch rewrites the file.
+
+Validator = Any  # Callable[[Mapping[str, Any], str], object]
+
+
+def validate_simulation_intent_document(
+    payload: Mapping[str, Any], source: str
+) -> None:
+    load_simulation_intent(payload, source=source)
+
+
+def validate_evaluation_case_document(payload: Mapping[str, Any], source: str) -> None:
+    load_evaluation_case(dict(payload), source=source)
+
+
+def validate_fallback_record_document(payload: Mapping[str, Any], source: str) -> None:
+    """Validate the envelope *and* the nested ``SimulationIntent``."""
+
+    load_fallback_record(payload, source=source)
+
+
+def validate_document(path: Path, payload: Mapping[str, Any], validator: Validator) -> None:
+    """Run one family's authoritative loader, reporting failures safely."""
+
+    try:
+        validator(payload, repository_path(path))
+    except StampError:
+        raise
+    except Exception as exc:  # typed schema-version failures and pydantic errors
+        raise _contract_failure(path, exc) from exc
+
+
+def stamp_by_insertion(
+    path: Path, registry: MigrationRegistry, validator: Validator
+) -> str:
     original_text = read_text(path)
-    original = json.loads(original_text)
-    if not isinstance(original, Mapping):
-        raise StampError(f"{path}: not a JSON object")
+    original = load_json_object(path)
     if SCHEMA_VERSION_FIELD in original:
-        if original[SCHEMA_VERSION_FIELD] == version:
-            return original_text
-        raise StampError(
-            f"{path}: already declares version {original[SCHEMA_VERSION_FIELD]!r}"
-        )
-    stamped_text = insert_top_level_version(original_text, version)
-    verify_semantics(path, original, json.loads(stamped_text))
+        validate_declared_version(path, original, registry)
+        # A supported declaration is a claim, not proof.  Validate before
+        # returning the bytes unchanged.
+        validate_document(path, original, validator)
+        return original_text
+    stamped_text = insert_top_level_version(original_text, registry.current_version)
+    stamped = json.loads(stamped_text)
+    verify_semantics(path, original, stamped)
+    validate_document(path, stamped, validator)
     return stamped_text
 
 
@@ -118,19 +246,32 @@ def stamp_by_insertion(path: Path, version: int) -> str:
 
 
 def stamp_fallback_record(path: Path) -> str:
-    original = json.loads(read_text(path))
-    if not isinstance(original, Mapping):
-        raise StampError(f"{path}: not a JSON object")
+    original = load_json_object(path)
     nested = original.get(NESTED_INTENT_KEY)
     if not isinstance(nested, Mapping):
-        raise StampError(f"{path}: missing '{NESTED_INTENT_KEY}'")
+        raise StampError(f"{repository_path(path)}: missing '{NESTED_INTENT_KEY}'")
+    envelope_declared = SCHEMA_VERSION_FIELD in original
+    nested_declared = SCHEMA_VERSION_FIELD in nested
+    if envelope_declared:
+        validate_declared_version(path, original, FALLBACK_RECORD_MIGRATIONS)
+    if nested_declared:
+        validate_declared_version(path, nested, SIMULATION_INTENT_MIGRATIONS)
+    if envelope_declared and nested_declared:
+        # Both declarations are supported; prove the envelope and the nested
+        # intent are actually valid before returning the bytes unchanged.
+        validate_document(path, original, validate_fallback_record_document)
+        return read_text(path)
     # The stamper is the one-shot migration action itself, so it constructs the
     # typed model directly.  Every *runtime* read of this file afterwards goes
     # through app.record_versions.load_fallback_record.
-    intent = SimulationIntent.model_validate(dict(nested), strict=True)
+    try:
+        intent = SimulationIntent.model_validate(dict(nested), strict=True)
+    except Exception as exc:
+        raise _contract_failure(path, exc) from exc
     body = {key: value for key, value in original.items() if key != NESTED_INTENT_KEY}
     stamped = build_fallback_envelope(body, intent)
     verify_semantics(path, original, stamped, nested_keys=(NESTED_INTENT_KEY,))
+    validate_document(path, stamped, validate_fallback_record_document)
     return json.dumps(stamped, indent=2, sort_keys=True) + "\n"
 
 
@@ -168,7 +309,8 @@ def verify_semantics(
     after = strip_declared_versions(stamped, nested_keys)
     if before != after:
         raise StampError(
-            f"{path}: stamping would change the document's meaning; refusing"
+            f"{repository_path(path)}: stamping would change the document's "
+            "meaning; refusing"
         )
 
 
@@ -181,18 +323,35 @@ def stamp_targets(root: Path) -> list[tuple[Path, str]]:
     """Return ``(path, stamped_text)`` for every approved target."""
 
     targets: list[tuple[Path, str]] = []
-    intent_version = SIMULATION_INTENT_MIGRATIONS.current_version
-    case_version = EVALUATION_CASE_MIGRATIONS.current_version
 
     for path in sorted((root / "examples").glob("*.json")):
-        targets.append((path, stamp_by_insertion(path, intent_version)))
+        targets.append((
+            path,
+            stamp_by_insertion(
+                path,
+                SIMULATION_INTENT_MIGRATIONS,
+                validate_simulation_intent_document,
+            ),
+        ))
 
     demo = root / "docs" / "task13-bracket-demo.json"
     if demo.is_file():
-        targets.append((demo, stamp_by_insertion(demo, intent_version)))
+        targets.append((
+            demo,
+            stamp_by_insertion(
+                demo,
+                SIMULATION_INTENT_MIGRATIONS,
+                validate_simulation_intent_document,
+            ),
+        ))
 
     for path in sorted((root / "eval" / "cases").glob("*.json")):
-        targets.append((path, stamp_by_insertion(path, case_version)))
+        targets.append((
+            path,
+            stamp_by_insertion(
+                path, EVALUATION_CASE_MIGRATIONS, validate_evaluation_case_document
+            ),
+        ))
 
     for path in sorted((root / "eval" / "fallback").glob("*.json")):
         targets.append((path, stamp_fallback_record(path)))
