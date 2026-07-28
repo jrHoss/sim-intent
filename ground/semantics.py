@@ -39,6 +39,7 @@ _UNIT_TABLE: dict[str, tuple[QuantityKind, float, CanonicalUnit]] = {
     "m": ("length", 1_000.0, "mm"),
     "kg/m^3": ("density", 1e-12, "tonne/mm^3"),
     "kg/m3": ("density", 1e-12, "tonne/mm^3"),
+    "kg/m³": ("density", 1e-12, "tonne/mm^3"),
     "t/mm^3": ("density", 1.0, "tonne/mm^3"),
     "tonne/mm^3": ("density", 1.0, "tonne/mm^3"),
     "mm/s^2": ("acceleration", 1.0, "mm/s^2"),
@@ -58,7 +59,7 @@ SUPPORTED_UNITS_BY_KIND: dict[QuantityKind, tuple[str, ...]] = {
     "force": ("N", "kN", "MN"),
     "stress": ("Pa", "kPa", "MPa", "GPa"),
     "length": ("mm", "m"),
-    "density": ("kg/m^3", "kg/m3", "t/mm^3", "tonne/mm^3"),
+    "density": ("kg/m^3", "kg/m3", "kg/m³", "t/mm^3", "tonne/mm^3"),
     "acceleration": ("mm/s^2", "m/s^2"),
 }
 

@@ -115,12 +115,12 @@ No duplicate submission should confirm any region automatically.
 Use a fresh server session and load `tests/fixtures/bracket.step`.
 
 1. Submit `Use steel with Young's modulus 210 GPa, Poisson's ratio 0.3, and density 7850 kg/m³. Fix both bolt holes, apply a total downward force of 5 kN to the top flange, and apply gravity in negative Z.`
-2. Verify the request returns HTTP 422 with code `unsupported_material_input` and a visible explanation that natural-language material definitions are outside Task 15.
+2. Verify the combined request returns HTTP 422 with code `material.combined_request_requires_separation`, then submit the numeric material proposal separately.
 3. Verify the response has no retry count, no provider retry occurred, no intent was created, and audit remains unvalidated.
 4. In the same clean session, submit `Fix both bolt holes, apply a total downward force of 5 kN to the top flange, and apply gravity in negative Z.`
-5. Verify the proposed IR contains one steel material with `density_tonne_per_mm3=7.85e-9`, gravity has `region_ref=null`, and the audit shows a pending unit-critical assumption stating `density=7850 kg/m^3 = 7.85e-9 tonne/mm^3 internal`.
-6. Confirm the two proposed face regions but do not accept the density assumption. Verify export remains blocked.
-7. Accept the density assumption and every other critical assumption, then export Abaqus Python.
+5. Verify the material-only proposal contains `authority=system_proposed`, `density_tonne_per_mm3=7.85e-9`, and a linked pending unit-critical assumption; the gravity proposal itself assigns no material.
+6. Confirm the two proposed face regions but do not accept the material proposal. Verify engineering readiness remains blocked.
+7. Accept the material proposal and every other critical assumption, then export Abaqus Python.
 8. Verify the artifact contains exactly one `material.Density(table=((7.85e-09,),))`, exactly one `model.Gravity(`, and gravity targets `instance.sets['ALL_SOLID_CELLS']`.
 
 As a non-gravity control, start a fresh session and submit `Fix both bolt holes.`

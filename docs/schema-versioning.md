@@ -202,17 +202,20 @@ relative label.
 | `app.record_versions.load_fallback_record` | `fallback_record` | the REPLAY fallback route and the harness |
 | `eval.versioning.verify_replay_directory` | `replay_record` | `load_replay` before any body is trusted |
 
-The `schema_version` model field carries a **default** so in-process
-construction stays ergonomic. That default must never bypass a loader: every
-untrusted file and every new API path goes through the authoritative loader,
-which requires an explicit declaration. Internal object-copy and
-model-construction paths may use the typed model directly.
+The current `SimulationIntent.schema_version` field is **required**, including
+in generated JSON Schema, OpenAPI, and TypeScript contracts. Durable `/api/v1`
+create and full-intent revision boundaries additionally reject missing,
+malformed, legacy, and future declarations with the stable
+`simulation_intent.schema_version_*` codes before persistence. Historical
+records still pass through the authoritative loader and controlled migration.
 
 ## 6. Legacy compatibility exception (decision D-2)
 
 `PUT /session/{session_id}/intent` is the **only** exception. CLAUDE.md
 invariant 8 makes the frozen legacy viewer contracts additive-only, so Task 19
 may not turn a previously absent field into a mandatory one on that route.
+The route uses the typed `LegacySimulationIntent` compatibility schema; no
+durable endpoint uses that model.
 
 `app/schema_compat.py` normalises an **absent** `schema_version` to
 `LEGACY_UNVERSIONED_INTENT_VERSION = 1`. The exception:

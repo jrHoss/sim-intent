@@ -26,6 +26,7 @@ from export.common import (
     MeshModelMetadata,
     MissingMaterialAssignmentError,
     MissingMeshTopologyError,
+    MissingNativeRegionError,
     MissingRegionMappingError,
     UnsupportedEntityTypeError,
     UnsupportedLoadTypeError,
@@ -374,7 +375,7 @@ def _resolve_region(
             ids = tuple(sorted(set(int(value) for value in values)))
             universe = node_universe if expected_kind == "node_set" else element_universe
             if len(ids) != len(values) or any(value not in universe for value in ids):
-                raise InvalidRegionReferenceError(
+                raise MissingNativeRegionError(
                     f"Region '{region.id}' contains duplicate or unknown native IDs."
                 )
             set_name = stable_name("NSET" if expected_kind == "node_set" else "ELSET", region.id)
@@ -396,18 +397,18 @@ def _resolve_region(
         for value in values:
             native = native_by_name.get(str(value))
             if native is None:
-                raise InvalidRegionReferenceError(
+                raise MissingNativeRegionError(
                     f"Region '{region.id}' references an unknown native set name."
                 )
             if native.kind != expected_kind:
-                raise InvalidRegionReferenceError(
+                raise MissingNativeRegionError(
                     f"Region '{region.id}' references a native set of the wrong entity kind."
                 )
             native_regions.append(native)
         ids = tuple(sorted({value for native in native_regions for value in native.ids}))
         universe = node_universe if expected_kind == "node_set" else element_universe
         if not ids or any(value not in universe for value in ids):
-            raise InvalidRegionReferenceError(
+            raise MissingNativeRegionError(
                 f"Region '{region.id}' native set membership is empty or dangling."
             )
         reuse = len(native_regions) == 1 and bool(_SAFE_NATIVE_SET.fullmatch(native_regions[0].name))
@@ -447,7 +448,7 @@ def _resolve_region(
             try:
                 group = model.inventory.facet_group(group_id)
             except KeyError:
-                raise InvalidRegionReferenceError(
+                raise MissingNativeRegionError(
                     f"Mesh-face region '{region.id}' references an unknown facet group."
                 ) from None
             for facet_id in group.facet_ids:

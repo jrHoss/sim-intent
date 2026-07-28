@@ -101,6 +101,19 @@
           "title": "Id",
           "type": "string"
         },
+        "material_proposal_fingerprint_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Material Proposal Fingerprint Sha256"
+        },
         "status": {
           "enum": [
             "pending",
@@ -206,6 +219,7 @@
           "enum": [
             "kg/m^3",
             "kg/m3",
+            "kg/m³",
             "t/mm^3",
             "tonne/mm^3"
           ],
@@ -397,6 +411,15 @@
           "title": "E Mpa",
           "type": "number"
         },
+        "authority": {
+          "default": "engineer_entered",
+          "enum": [
+            "engineer_entered",
+            "system_proposed"
+          ],
+          "title": "Authority",
+          "type": "string"
+        },
         "density_original": {
           "anyOf": [
             {
@@ -435,6 +458,18 @@
           "exclusiveMinimum": -1.0,
           "title": "Nu",
           "type": "number"
+        },
+        "proposal_assumption_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Proposal Assumption Ref"
         },
         "youngs_modulus_original": {
           "anyOf": [
@@ -510,7 +545,7 @@
     },
     "PrescribedDisplacementBC": {
       "additionalProperties": false,
-      "description": "Zero-only prescribed displacement.\n\nThe R3.1 preview envelope has no verified nonzero prescribed-displacement\ninterpretation or export path, so every component must be an exact zero.\nSigned zero is accepted because ``-0.0 == 0.0``; any other value is a\ndeterministic rejection rather than a silently exported approximation.",
+      "description": "Finite translational prescribed displacement in canonical millimetres.\n\nOnly the global Cartesian X/Y/Z translational components are representable.\nRotations, local/cylindrical coordinates, time dependence, and nonlinear\nbehavior have no fields in this strict model and are rejected rather than\napproximated.",
       "properties": {
         "components": {
           "additionalProperties": {
@@ -1025,7 +1060,6 @@
       "type": "array"
     },
     "schema_version": {
-      "default": 2,
       "minimum": 1,
       "title": "Schema Version",
       "type": "integer"
@@ -1053,6 +1087,7 @@
     }
   },
   "required": [
+    "schema_version",
     "analysis",
     "materials",
     "regions",

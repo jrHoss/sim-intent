@@ -40,10 +40,10 @@ from geom.cylinders import analyze_cylinders
 from geom.inventory import get_inventory
 from ground.engine import GroundingEngine
 from llm.interpreter import (
+    CombinedMaterialInputError,
     Interpreter,
     InterpreterProviderError,
     OpenAIStructuredOutputTransport,
-    UnsupportedMaterialInputError,
     summarize_face_inventory,
 )
 
@@ -454,6 +454,35 @@ def test_designated_case_reaches_artifact_generation(replay_report):
     assert result.export_result["filename"].endswith(".py")
 
 
+def test_evaluation_fails_if_production_orchestration_injects_material(
+    monkeypatch, cases
+):
+    import app.orchestration as orchestration
+    from ir.schema import Material
+
+    original = orchestration._build_intent
+
+    def injecting_build_intent(**kwargs):
+        intent = original(**kwargs)
+        injected = Material(
+            name="forbidden-production-material",
+            model="linear_elastic_isotropic",
+            authority="engineer_entered",
+            E_MPa=1.0,
+            nu=0.0,
+        )
+        return intent.model_copy(update={"materials": [injected]}, deep=True)
+
+    monkeypatch.setattr(orchestration, "_build_intent", injecting_build_intent)
+    result = evaluate_case(
+        by_id(cases, "bracket_bottom_fixed"),
+        paths=PATHS,
+        mode="REPLAY",
+    )
+    assert result.status == "FAIL"
+    assert result.failure_category == "material"
+
+
 def test_blocked_intents_remain_blocked(cases):
     result = evaluate_case(by_id(cases, "bracket_combined_export"), paths=PATHS, mode="REPLAY")
     fallback = json.loads((PATHS.fallback_dir / "bracket_combined_export.json").read_text(encoding="utf-8"))
@@ -770,10 +799,10 @@ def test_material_input_returns_structured_unsupported_response_without_session_
     assert failed.status_code == 422
     assert failed.json() == {
         "detail": {
-            "code": "unsupported_material_input",
-            "message": UnsupportedMaterialInputError.safe_message,
+            "code": "material.combined_request_requires_separation",
+            "message": CombinedMaterialInputError.safe_message,
             "mode": "LIVE",
-            "supported_mechanism": "reviewed_default_density_for_gravity",
+            "supported_mechanism": "explicit_numeric_isotropic_properties",
         }
     }
     assert replay.calls == 0
@@ -985,7 +1014,7 @@ def test_same_entities_with_different_displacement_components_remain_separate(
     assert [bc["components"] for bc in second.json()["intent"]["bcs"]] == [["y"], ["z"]]
 
 
-def test_repeated_gravity_is_one_whole_model_load_and_exports_once(tmp_path, cases):
+def test_repeated_gravity_is_one_load_and_step_target_stays_blocked(tmp_path, cases):
     app = create_app(tmp_path / "models")
     case = by_id(cases, "bracket_gravity_neg_z")
     app.state.interpreter = Interpreter(
@@ -1003,17 +1032,7 @@ def test_repeated_gravity_is_one_whole_model_load_and_exports_once(tmp_path, cas
     assert len(intent["loads"]) == 1
     assert intent["loads"][0]["type"] == "gravity"
     assert intent["loads"][0]["region_ref"] is None
-    assert intent["materials"] == [
-        {
-            "name": "steel",
-            "model": "linear_elastic_isotropic",
-            "E_MPa": 210000.0,
-            "nu": 0.3,
-            "density_tonne_per_mm3": 7.85e-9,
-            "youngs_modulus_original": None,
-            "density_original": None,
-        }
-    ]
+    assert intent["materials"] == []
     # Interpreting an instruction approves no engineering configuration: the
     # schema-version-2 decisions stay explicitly missing until an engineer
     # states them.
@@ -1022,14 +1041,7 @@ def test_repeated_gravity_is_one_whole_model_load_and_exports_once(tmp_path, cas
     assert intent["analysis"]["coordinate_system"] is None
     assert intent["mesh_settings"] is None
     assert intent["solver_settings"] is None
-    density_assumptions = [
-        assumption
-        for assumption in intent["assumptions"]
-        if "density=7850 kg/m^3 = 7.85e-9 tonne/mm^3" in assumption["text"]
-    ]
-    assert len(density_assumptions) == 1
-    assert density_assumptions[0]["criticality"] == "unit_critical"
-    assert density_assumptions[0]["status"] == "pending"
+    assert all("material" not in item["text"].lower() for item in intent["assumptions"])
     assert len(second.json()["notices"]) == 1
 
     # A gravity-only setup has no constraint and no engineering configuration,
@@ -1068,6 +1080,14 @@ def test_repeated_gravity_is_one_whole_model_load_and_exports_once(tmp_path, cas
         "analysis_profile": "linear_static_v1",
         "requested_results": ["displacement", "stress", "reaction_force"],
     }
+    supported["materials"] = [{
+        "name": "engineer_steel",
+        "model": "linear_elastic_isotropic",
+        "authority": "engineer_entered",
+        "E_MPa": 210000.0,
+        "nu": 0.3,
+        "density_tonne_per_mm3": 7.85e-9,
+    }]
     supported["regions"] = [
         {
             "id": "support_face",
@@ -1109,11 +1129,13 @@ def test_repeated_gravity_is_one_whole_model_load_and_exports_once(tmp_path, cas
         f"/session/{model_id}/export",
         json={"adapter": "abaqus_py"},
     )
-    assert exported.status_code == 200, exported.text
-    assert exported.text.count("model.Gravity(") == 1
-    assert exported.text.count("material.Density(") == 1
-    assert "material.Density(table=((7.85e-09,),))" in exported.text
-    assert exported.text.count("region=instance.sets['ALL_SOLID_CELLS']") == 1
+    assert exported.status_code == 409, exported.text
+    assert {
+        issue["code"] for issue in exported.json()["blocking_issues"]
+    } >= {
+        "artifact.step_meshing_required",
+        "artifact.mapping_not_verified",
+    }
 
 
 def test_frontend_displays_duplicate_notices():

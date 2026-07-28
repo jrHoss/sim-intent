@@ -17,7 +17,13 @@ from ground.engine import ClickEvidence, GroundingBatch, GroundingEngine
 from ground.semantics import (
     interpret_load,
     normalize_fixed_displacement_components,
+    normalize_quantity,
     parse_quantity,
+)
+from ir.canonical import (
+    canonical_bc_semantics,
+    canonical_load_semantics,
+    canonical_semantic_key,
 )
 from ir.schema import (
     Analysis,
@@ -33,7 +39,13 @@ from ir.schema import (
     ConcentratedForceLoad,
     Units,
 )
-from llm.interpreter import Interpretation, Interpreter, summarize_face_inventory
+from ir.schema_version import SIMULATION_INTENT_SCHEMA_VERSION
+from llm.interpreter import (
+    Interpretation,
+    Interpreter,
+    MaterialProposalPayload,
+    summarize_face_inventory,
+)
 
 
 class OrchestrationError(RuntimeError):
@@ -66,29 +78,6 @@ def proposal_analysis(units: Units | None = None) -> Analysis:
             deep=True
         ),
     )
-
-
-DEMO_MATERIAL = Material(
-    name="steel",
-    model="linear_elastic_isotropic",
-    E_MPa=210_000.0,
-    nu=0.3,
-)
-DEMO_DENSITY_TONNE_PER_MM3 = 7.85e-9
-DEMO_MATERIAL_ASSUMPTION = Assumption(
-    text="The prototype demonstration material was set to steel (E=210000 MPa, nu=0.3).",
-    criticality="noncritical",
-    status="pending",
-)
-DEMO_GRAVITY_MATERIAL_ASSUMPTION = Assumption(
-    text=(
-        "For gravity, the prototype demonstration material was set to steel "
-        "(E=210000 MPa, nu=0.3, density=7850 kg/m^3 = "
-        "7.85e-9 tonne/mm^3 internal)."
-    ),
-    criticality="unit_critical",
-    status="pending",
-)
 
 
 @dataclass(frozen=True)
@@ -154,11 +143,25 @@ def propose_from_interpretation(
     return ProposalResult(
         interpretation,
         grounding,
-        _build_intent(instruction=instruction, grounding=grounding),
+        _build_intent(
+            instruction=instruction,
+            grounding=grounding,
+            material_proposal=interpretation.material_proposal,
+        ),
     )
 
 
-def _build_intent(*, instruction: str, grounding: GroundingBatch) -> SimulationIntent:
+def _original_quantity(text: str) -> dict[str, float | str]:
+    value, unit = text.rsplit(maxsplit=1)
+    return {"value": float(value), "unit": unit}
+
+
+def _build_intent(
+    *,
+    instruction: str,
+    grounding: GroundingBatch,
+    material_proposal: MaterialProposalPayload | None,
+) -> SimulationIntent:
     regions = []
     bcs = []
     loads = []
@@ -194,9 +197,11 @@ def _build_intent(*, instruction: str, grounding: GroundingBatch) -> SimulationI
                 )
             else:
                 converted: dict[str, float] = {}
+                originals: dict[str, dict[str, float | str]] = {}
                 for axis, quantity_text in result.bc.components.items():
                     quantity = parse_quantity(quantity_text, expected_kind="length")
                     converted[axis] = quantity.value
+                    originals[axis] = _original_quantity(quantity_text)
                     assumptions.append(
                         Assumption(
                             text=(
@@ -212,6 +217,7 @@ def _build_intent(*, instruction: str, grounding: GroundingBatch) -> SimulationI
                         type="prescribed_displacement",
                         region_ref=region_ref,
                         components=converted,
+                        components_original=originals,
                     )
                 )
             continue
@@ -255,20 +261,62 @@ def _build_intent(*, instruction: str, grounding: GroundingBatch) -> SimulationI
             assert semantic.vector is not None
             loads.append(ConcentratedForceLoad(type=payload.type, region_ref=region_ref, vector=list(semantic.vector)))
 
-    has_gravity = any(load.type == "gravity" for load in loads)
-    if has_gravity:
-        material = DEMO_MATERIAL.model_copy(
-            update={"density_tonne_per_mm3": DEMO_DENSITY_TONNE_PER_MM3},
-            deep=True,
+    materials: list[Material] = []
+    if material_proposal is not None:
+        proposal_text = (
+            f"Proposed isotropic material '{material_proposal.name}' from the "
+            f"numeric request: E={material_proposal.youngs_modulus}, "
+            f"nu={material_proposal.poisson_ratio:g}"
+            + (
+                ""
+                if material_proposal.density is None
+                else f", density={material_proposal.density}"
+            )
+            + "."
         )
-        assumptions.insert(0, DEMO_GRAVITY_MATERIAL_ASSUMPTION.model_copy(deep=True))
-    else:
-        material = DEMO_MATERIAL.model_copy(deep=True)
-        assumptions.insert(0, DEMO_MATERIAL_ASSUMPTION.model_copy(deep=True))
+        decision = Assumption(
+            text=proposal_text,
+            criticality="unit_critical",
+            status="pending",
+        )
+        youngs = parse_quantity(
+            material_proposal.youngs_modulus, expected_kind="stress"
+        )
+        density = (
+            None
+            if material_proposal.density is None
+            else normalize_quantity(
+                float(material_proposal.density.rsplit(maxsplit=1)[0]),
+                material_proposal.density.rsplit(maxsplit=1)[1],
+                kind="density",
+            )
+        )
+        materials.append(
+            Material(
+                name=material_proposal.name,
+                model="linear_elastic_isotropic",
+                authority="system_proposed",
+                proposal_assumption_ref=decision.id,
+                E_MPa=youngs.value,
+                nu=material_proposal.poisson_ratio,
+                density_tonne_per_mm3=None if density is None else density.value,
+                youngs_modulus_original=_original_quantity(
+                    material_proposal.youngs_modulus
+                ),
+                density_original=(
+                    None
+                    if material_proposal.density is None
+                    else _original_quantity(material_proposal.density)
+                ),
+            )
+        )
+        assumptions.append(decision)
     unique_assumptions = {assumption.id: assumption for assumption in assumptions}
     return SimulationIntent(
+        schema_version=SIMULATION_INTENT_SCHEMA_VERSION,
         analysis=proposal_analysis(),
-        materials=[material],
+        # Natural-language orchestration never assigns an unstated material.
+        materials=materials,
         regions=regions,
         bcs=bcs,
         loads=loads,
@@ -368,39 +416,18 @@ def merge_session_intents(
     current_materials = [] if current is None else current.materials
     current_assumptions = [] if current is None else current.assumptions
     materials = {item.name: item.model_copy(deep=True) for item in current_materials}
-    default_density_applied = current is None
     for item in proposal.materials:
         existing = materials.get(item.name)
         if existing is None:
             materials[item.name] = item.model_copy(deep=True)
-            default_density_applied = True
-        elif (
-            (kept_bcs or kept_loads)
-            and existing.model == item.model
-            and existing.E_MPa == item.E_MPa
-            and existing.nu == item.nu
-            and existing.density_tonne_per_mm3 is None
-            and item.density_tonne_per_mm3 is not None
-        ):
-            materials[item.name] = existing.model_copy(
-                update={"density_tonne_per_mm3": item.density_tonne_per_mm3},
-                deep=True,
-            )
-            default_density_applied = True
     assumptions = {item.id: item.model_copy(deep=True) for item in current_assumptions}
-    # A duplicate-only submission must not create new blocking assumptions.
-    if kept_bcs or kept_loads:
-        for item in proposal.assumptions:
-            if (
-                item.id == DEMO_GRAVITY_MATERIAL_ASSUMPTION.id
-                and not default_density_applied
-            ):
-                continue
-            assumptions.setdefault(item.id, item.model_copy(deep=True))
+    for item in proposal.assumptions:
+        assumptions.setdefault(item.id, item.model_copy(deep=True))
     # The existing setup keeps authority over its own engineering configuration;
     # only a setup that has none yet inherits the proposal's.
     source = current if current is not None else proposal
     merged = SimulationIntent(
+        schema_version=SIMULATION_INTENT_SCHEMA_VERSION,
         analysis=source.analysis.model_copy(deep=True),
         mesh_settings=(
             source.mesh_settings.model_copy(deep=True)
@@ -426,7 +453,11 @@ def merge_session_intents(
 
 
 def _condition_signature(item: Any, regions: Mapping[str, Any]) -> str:
-    payload = item.model_dump(mode="json")
+    payload = (
+        canonical_bc_semantics(item)
+        if item.type in {"fixed_displacement", "prescribed_displacement"}
+        else canonical_load_semantics(item)
+    )
     region_ref = payload.pop("region_ref", None)
     if item.type == "gravity" and region_ref is None:
         target: dict[str, Any] = {"scope": "whole_model"}
@@ -441,8 +472,6 @@ def _condition_signature(item: Any, regions: Mapping[str, Any]) -> str:
             "entity_type": region.entity_type,
             "entity_ids": entity_ids,
         }
-    if item.type == "fixed_displacement":
-        payload["components"] = sorted(payload["components"])
     internal_unit = {
         "fixed_displacement": "none",
         "prescribed_displacement": "mm",
@@ -452,10 +481,8 @@ def _condition_signature(item: Any, regions: Mapping[str, Any]) -> str:
         "pressure": "MPa",
         "gravity": "mm/s^2",
     }[item.type]
-    return json.dumps(
+    return canonical_semantic_key(
         {"target": target, "condition": payload, "internal_unit": internal_unit},
-        sort_keys=True,
-        separators=(",", ":"),
     )
 
 

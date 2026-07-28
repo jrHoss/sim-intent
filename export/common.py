@@ -25,6 +25,93 @@ from ir.validate import ValidationIssue, ValidationReport, validate_intent
 AdapterName = Literal["abaqus_py", "ccx_inp"]
 
 
+class ArtifactCapability(StrictModel):
+    """Selected-target capability, separate from engineering readiness."""
+
+    target: Literal["calculix"] | None
+    adapter: Literal["ccx_inp"] | None
+    supported: bool
+    # Additive compatibility alias retained for R3.2a clients.
+    capable: bool
+    blocking_issue_codes: list[str]
+
+
+def assess_artifact_capability(
+    intent: SimulationIntent,
+    *,
+    model_kind: str,
+    model: MeshModelMetadata | None = None,
+    source_is_stale: bool = False,
+) -> ArtifactCapability:
+    """Conservative shared preflight before any artifact is generated.
+
+    The exporters retain their complete metadata checks. This API-safe check
+    reports combinations already known to be unsupported or still awaiting
+    mesh/topology mapping.
+    """
+
+    selected_target = intent.analysis.solver_target
+    codes: set[str] = set()
+    if selected_target is None:
+        codes.add("artifact.target_not_selected")
+    if selected_target == "calculix":
+        if model_kind == "step":
+            codes.update(
+                {
+                    "artifact.step_meshing_required",
+                    "artifact.mapping_not_verified",
+                }
+            )
+        elif model_kind != "inp":
+            codes.add("artifact.mapping_not_verified")
+        elif model is None:
+            # A model-kind string alone cannot prove a single native set,
+            # facet group, node membership, or element membership.
+            codes.add("artifact.mapping_not_verified")
+        else:
+            try:
+                # This is the exporter's own read-only resolver/preflight.
+                # Import lazily because ccx_inp itself imports this contract.
+                from export.ccx_inp import _preflight
+
+                _preflight(intent, model)
+            except MissingNativeRegionError:
+                codes.add("artifact.native_region_missing")
+            except InvalidRegionReferenceError:
+                codes.add("artifact.native_region_missing")
+            except MissingMeshTopologyError:
+                codes.add("artifact.mapping_not_verified")
+            except MissingRegionMappingError:
+                codes.add("artifact.mapping_not_verified")
+            except (UnsupportedEntityTypeError, UnsupportedLoadTypeError):
+                codes.add("artifact.adapter_condition_unsupported")
+            except MissingMaterialAssignmentError:
+                codes.add("artifact.adapter_condition_unsupported")
+            except UnsupportedModelTypeError:
+                codes.add("artifact.mapping_not_verified")
+            except ExportAdapterError:
+                codes.add("artifact.mapping_not_verified")
+
+        # Preserve the more specific R3.2a diagnostics as additive detail.
+        for load in intent.loads:
+            if load.type == "surface_traction":
+                codes.add("artifact.calculix.surface_traction_unsupported")
+            elif (
+                load.type == "pressure"
+                and model_kind == "inp"
+                and model is None
+            ):
+                codes.add("artifact.calculix.pressure_mapping_required")
+    supported = not codes
+    return ArtifactCapability(
+        target=selected_target,
+        adapter="ccx_inp" if selected_target == "calculix" else None,
+        supported=supported,
+        capable=supported,
+        blocking_issue_codes=sorted(codes),
+    )
+
+
 class ExportResult(StrictModel):
     """A generated text artifact; it never claims a solver was executed."""
 
@@ -100,6 +187,10 @@ class MissingRegionMappingError(ExportAdapterError):
 
 class InvalidRegionReferenceError(ExportAdapterError):
     code = "invalid_region_reference"
+
+
+class MissingNativeRegionError(InvalidRegionReferenceError):
+    code = "artifact.native_region_missing"
 
 
 class MissingMeshTopologyError(ExportAdapterError):

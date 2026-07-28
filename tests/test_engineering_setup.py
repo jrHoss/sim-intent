@@ -6,7 +6,7 @@ Covers the five things the independent review asked for in one place:
    stores both forms, through the single ``ground.semantics`` unit path;
 2. the controlled schema-version-1 -> 2 migration, which must leave a legacy
    payload structurally incomplete rather than granting it new approvals;
-3. the zero-only prescribed-displacement envelope;
+3. the finite translational prescribed-displacement envelope;
 4. the authoritative load/constraint-to-region compatibility table and the
    deterministic readiness precedence;
 5. that natural-language interpretation approves no engineering configuration:
@@ -650,7 +650,7 @@ def test_canonical_hash_is_deterministic_across_reload():
 
 
 # --------------------------------------------------------------------------
-# 3. Zero-only prescribed displacement
+# 3. Finite translational prescribed displacement
 # --------------------------------------------------------------------------
 
 
@@ -664,14 +664,15 @@ def test_canonical_hash_is_deterministic_across_reload():
         {"x": 1e-12}, {"z": -1e-12},
     ],
 )
-def test_nonzero_prescribed_displacement_is_rejected(components):
+def test_finite_nonzero_prescribed_displacement_is_accepted(components):
     body = payload()
     body["bcs"] = [{
         "type": "prescribed_displacement",
         "region_ref": "fixed",
         "components": components,
     }]
-    assert rejection_code(body) == "bc.prescribed_displacement_nonzero"
+    intent = SimulationIntent.model_validate(body)
+    assert intent.bcs[0].components == components
 
 
 @pytest.mark.parametrize(
@@ -691,8 +692,15 @@ def test_zero_prescribed_displacement_is_accepted_component_wise(components):
     intent = SimulationIntent.model_validate(body)
     assert intent.bcs[0].components == components
     report = validate_intent(intent)
-    assert report.readiness_status == "ready"
-    assert report.export_eligible is True
+    missing = {"x", "y", "z"} - set(components)
+    if missing:
+        assert report.readiness_status == "semantically_invalid"
+        assert {
+            f"constraint.rigid_body_translation_{axis}" for axis in missing
+        } <= {issue.code for issue in report.issues}
+    else:
+        assert report.readiness_status == "ready"
+        assert report.export_eligible is True
 
 
 @pytest.mark.parametrize("value", [math.inf, math.nan])
@@ -706,8 +714,7 @@ def test_nonfinite_prescribed_displacement_is_rejected(value):
     assert rejection_code(body) == "bc.prescribed_displacement_nonfinite"
 
 
-def test_nonzero_prescribed_displacement_is_also_a_validation_issue():
-    """Objects built below the schema still report the same stable code."""
+def test_finite_nonzero_prescribed_displacement_is_not_a_validation_issue():
 
     intent = SimulationIntent.model_validate(payload())
     unsupported = PrescribedDisplacementBC.model_construct(
@@ -718,7 +725,10 @@ def test_nonzero_prescribed_displacement_is_also_a_validation_issue():
     )
     candidate = intent.model_copy(update={"bcs": [unsupported]}, deep=True)
     report = validate_intent(candidate)
-    assert "bc.prescribed_displacement_nonzero" in {
+    assert "bc.prescribed_displacement_nonzero" not in {
+        issue.code for issue in report.issues
+    }
+    assert "constraint.rigid_body_translation_x" in {
         issue.code for issue in report.issues
     }
     assert report.export_eligible is False
@@ -1060,14 +1070,14 @@ def test_proposal_records_no_mesh_provenance_that_could_read_as_acceptance():
 
 
 def engineering_revision(intent: dict) -> dict:
-    """Return *intent* plus the engineering configuration, changing nothing else.
+    """Return *intent* plus explicit configuration and engineer material.
 
     Every server-managed region and assumption status is round-tripped exactly
     as the server reported it, so this is a configuration revision rather than
     an approval.
     """
 
-    return {
+    revised = {
         **copy.deepcopy(intent),
         "analysis": {
             **copy.deepcopy(intent["analysis"]),
@@ -1076,6 +1086,15 @@ def engineering_revision(intent: dict) -> dict:
         "mesh_settings": dict(EXPLICIT_MESH_SETTINGS),
         "solver_settings": dict(EXPLICIT_SOLVER_SETTINGS),
     }
+    if not revised["materials"]:
+        revised["materials"] = [{
+            "name": "engineer_steel",
+            "model": "linear_elastic_isotropic",
+            "authority": "engineer_entered",
+            "E_MPa": 210_000.0,
+            "nu": 0.3,
+        }]
+    return revised
 
 
 def test_confirming_and_accepting_everything_never_supplies_configuration(tmp_path):
@@ -1176,13 +1195,19 @@ def test_confirming_and_accepting_everything_never_supplies_configuration(tmp_pa
         assert response.status_code == 201, response.text
         configured = response.json()
 
-        # 7. only now is the setup ready and export-eligible.
+        # 7. only now is the engineering setup ready. The selected CalculiX
+        # fragment adapter still requires a mesh for this STEP source.
         assert configured["validation"]["readiness_status"] == "ready"
-        assert configured["export_eligible"] is True
+        assert configured["engineering_ready"] is True
+        assert configured["export_eligible"] is False
+        assert configured["artifact_capability"]["blocking_issue_codes"] == [
+            "artifact.mapping_not_verified",
+            "artifact.step_meshing_required",
+        ]
         assert configured["intent"]["mesh_settings"] == EXPLICIT_MESH_SETTINGS
         assert configured["intent"]["solver_settings"] == EXPLICIT_SOLVER_SETTINGS
-        # The revision changed configuration only.
-        for key in ("regions", "bcs", "loads", "assumptions", "materials"):
+        assert configured["intent"]["materials"][0]["authority"] == "engineer_entered"
+        for key in ("regions", "bcs", "loads", "assumptions"):
             assert configured["intent"][key] == current["intent"][key], key
 
 

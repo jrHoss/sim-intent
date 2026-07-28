@@ -38,7 +38,7 @@ from fastapi.exception_handlers import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.record_versions import load_fallback_record
 from app.blob_store import (
@@ -94,11 +94,13 @@ from app.orchestration import (
 from export.abaqus_py import export_abaqus_py
 from export.ccx_inp import export_ccx_inp
 from export.common import (
+    ArtifactCapability,
     CadModelMetadata,
     ExportAdapterError,
     ExportNotReadyError,
     MeshModelMetadata,
     UnsupportedModelTypeError,
+    assess_artifact_capability,
     blocking_issues,
 )
 from geom.cylinders import analyze_cylinders
@@ -107,14 +109,17 @@ from ground.engine import ClickEvidence, GroundingBatch
 from geom.meshes import MeshInventory, _scan_inp_native_ids, load_mesh
 from ir.schema import (
     Assumption,
+    EngineeringConsistencyError,
     EntityType,
+    LegacySimulationIntent,
     RegionStatus,
     SelectionMethod,
     SimulationIntent,
     StrictModel,
     ValidationStatus,
+    material_proposal_fingerprint,
 )
-from ir.schema_version import API_CONTRACT_VERSION
+from ir.schema_version import API_CONTRACT_VERSION, SIMULATION_INTENT_SCHEMA_VERSION
 from ir.validate import ValidationIssue, ValidationReport, validate_intent
 from ir.versioning import SchemaVersionError, load_simulation_intent
 from llm.interpreter import (
@@ -123,6 +128,7 @@ from llm.interpreter import (
     Interpreter,
     InterpreterError,
     InterpreterProviderError,
+    UnsupportedCapabilityError,
     UnsupportedMaterialInputError,
 )
 
@@ -316,17 +322,127 @@ class ModelUploadResponse(StrictModel):
     model_version: ModelVersionResponse
 
 
+def _require_current_intent_version(value: object) -> object:
+    """Enforce the durable-write version boundary before nested defaults."""
+
+    if not isinstance(value, dict):
+        return value
+    intent = value.get("intent")
+    if not isinstance(intent, dict):
+        return value
+    if "schema_version" not in intent:
+        raise EngineeringConsistencyError(
+            "simulation_intent.schema_version_required",
+            "durable setup writes require an explicit schema version",
+        )
+    declared = intent["schema_version"]
+    if (
+        isinstance(declared, bool)
+        or not isinstance(declared, int)
+        or declared < 1
+    ):
+        raise EngineeringConsistencyError(
+            "simulation_intent.schema_version_invalid",
+            "the schema version must be a positive integer",
+        )
+    if declared < SIMULATION_INTENT_SCHEMA_VERSION:
+        raise EngineeringConsistencyError(
+            "simulation_intent.schema_version_unsupported_legacy",
+            "legacy schema versions are read-only and cannot be written",
+        )
+    if declared > SIMULATION_INTENT_SCHEMA_VERSION:
+        raise EngineeringConsistencyError(
+            "simulation_intent.schema_version_unsupported_future",
+            "the schema version is newer than this server",
+        )
+    analysis = intent.get("analysis")
+    if isinstance(analysis, dict):
+        analysis_type = str(analysis.get("type", "")).lower()
+        dimensionality = str(analysis.get("dimensionality", "")).lower()
+        coordinates = str(analysis.get("coordinate_system", "")).lower()
+        for token, code in (
+            ("nonlinear", "analysis.nonlinear_unsupported"),
+            ("thermal", "analysis.thermal_unsupported"),
+            ("dynamic", "analysis.dynamics_unsupported"),
+        ):
+            if token in analysis_type:
+                raise EngineeringConsistencyError(code, "the requested analysis mode is unsupported")
+        for token, code in (
+            ("shell", "analysis.shell_unsupported"),
+            ("beam", "analysis.beam_unsupported"),
+        ):
+            if token in dimensionality:
+                raise EngineeringConsistencyError(code, "the requested dimensionality is unsupported")
+        if "local" in coordinates or "cylindrical" in coordinates:
+            raise EngineeringConsistencyError(
+                "coordinate_system.local_unsupported",
+                "only the global Cartesian coordinate system is supported",
+            )
+    materials = intent.get("materials")
+    for material in materials if isinstance(materials, list) else []:
+        if not isinstance(material, dict):
+            continue
+        model = str(material.get("model", "")).lower()
+        if "plastic" in model:
+            raise EngineeringConsistencyError(
+                "material.plastic_unsupported",
+                "plastic material behavior is unsupported",
+            )
+        if "orthotropic" in model or "anisotropic" in model:
+            raise EngineeringConsistencyError(
+                "material.orthotropic_unsupported",
+                "orthotropic material behavior is unsupported",
+            )
+    bcs = intent.get("bcs")
+    for bc in bcs if isinstance(bcs, list) else []:
+        if not isinstance(bc, dict):
+            continue
+        bc_type = str(bc.get("type", "")).lower()
+        if "rotation" in bc_type or any(
+            key in bc for key in ("rotations", "rx", "ry", "rz")
+        ):
+            raise EngineeringConsistencyError(
+                "constraint.rotation_unsupported",
+                "rotational prescribed constraints are unsupported",
+            )
+        if any(key in bc for key in ("coordinate_system_ref", "time_history", "amplitude")):
+            code = (
+                "coordinate_system.local_unsupported"
+                if "coordinate_system_ref" in bc
+                else "constraint.time_dependent_unsupported"
+            )
+            raise EngineeringConsistencyError(code, "the requested constraint mode is unsupported")
+    if any(key in intent for key in ("contact", "contacts", "contact_pairs")):
+        raise EngineeringConsistencyError(
+            "interaction.contact_unsupported", "contact is unsupported"
+        )
+    if any(key in intent for key in ("assembly", "assemblies", "parts", "solids")):
+        raise EngineeringConsistencyError(
+            "geometry.multiple_solids_unsupported",
+            "assemblies and multiple solids are unsupported",
+        )
+    return value
+
+
 class SetupCreate(StrictModel):
     model_id: uuid.UUID
     model_version_id: uuid.UUID
     request_id: str = Field(min_length=1, max_length=200)
     intent: SimulationIntent
 
+    _current_intent_version = model_validator(mode="before")(
+        _require_current_intent_version
+    )
+
 
 class SetupMutation(StrictModel):
     expected_revision: int = Field(ge=1)
     request_id: str = Field(min_length=1, max_length=200)
     intent: SimulationIntent
+
+    _current_intent_version = model_validator(mode="before")(
+        _require_current_intent_version
+    )
 
 
 class SetupDecision(StrictModel):
@@ -364,6 +480,8 @@ class SetupRevisionResponse(StrictModel):
     validation: ValidationReport
     selected_entities: dict[str, list[int] | list[str]]
     highlight_state: dict[str, SessionHighlight]
+    engineering_ready: bool
+    artifact_capability: ArtifactCapability
     export_eligible: bool
 
 
@@ -632,6 +750,103 @@ def create_app(
     def persistence() -> Persistence:
         return app.state.persistence
 
+    def mesh_metadata(
+        record: ModelRecord, inventory: MeshInventory
+    ) -> MeshModelMetadata:
+        node_ids, element_blocks = _scan_inp_native_ids(record.path)
+        return MeshModelMetadata(
+            source_path=record.path,
+            inventory=inventory,
+            node_ids=tuple(node_ids),
+            element_ids=tuple(
+                element_id
+                for block in element_blocks
+                for element_id in block
+            ),
+        )
+
+    def model_capability(
+        intent: SimulationIntent,
+        record: ModelRecord,
+        *,
+        source_is_stale: bool = False,
+    ) -> ArtifactCapability:
+        metadata = None
+        if record.kind == "inp":
+            inventory = app.state.model_store.inventory(record)
+            if isinstance(inventory, MeshInventory):
+                metadata = mesh_metadata(record, inventory)
+        return assess_artifact_capability(
+            intent,
+            model_kind=record.kind,
+            model=metadata,
+            source_is_stale=source_is_stale,
+        )
+
+    def capability_issues(
+        capability: ArtifactCapability,
+    ) -> list[ValidationIssue]:
+        return [
+            ValidationIssue(
+                code=code,
+                severity="error",
+                message="The selected artifact target cannot generate this setup.",
+                blocks_export=True,
+                object_type="artifact",
+                field="solver_target",
+            )
+            for code in capability.blocking_issue_codes
+        ]
+
+    def project_report(
+        report: ValidationReport,
+        capability: ArtifactCapability,
+    ) -> ValidationReport:
+        combined_issues = [
+            *report.issues,
+            *capability_issues(capability),
+        ]
+        combined_issues.sort(
+            key=lambda issue: (
+                0 if issue.severity == "error" else 1,
+                issue.code,
+                issue.object_type or "",
+                issue.object_id or "",
+                issue.field or "",
+                issue.message,
+            )
+        )
+        return report.model_copy(
+            update={
+                "export_eligible": (
+                    report.engineering_ready and capability.supported
+                ),
+                "issues": combined_issues,
+            },
+            deep=True,
+        )
+
+    def legacy_snapshot(
+        session_id: str, snapshot: SessionSnapshot
+    ) -> SessionSnapshot:
+        if snapshot.intent is None:
+            return snapshot.model_copy(update={"export_eligible": False}, deep=True)
+        record = app.state.model_store.get(session_id)
+        report = validate_intent(snapshot.intent)
+        capability = model_capability(snapshot.intent, record)
+        return snapshot.model_copy(
+            update={
+                "intent": snapshot.intent.model_copy(
+                    update={"validation_status": report.validation_status},
+                    deep=True,
+                ),
+                "export_eligible": (
+                    report.engineering_ready and capability.supported
+                ),
+            },
+            deep=True,
+        )
+
     @app.get("/", include_in_schema=False)
     async def viewer_frontend() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
@@ -820,7 +1035,31 @@ def create_app(
         setup = persistence().get_setup(revision.setup_id)
         if setup is None:
             raise RuntimeError("setup is missing")
-        report = validate_intent(intent, source_is_stale=setup.is_stale)
+        version = persistence().get_version(setup.model_version_id)
+        if version is None:
+            raise RuntimeError("setup model version is missing")
+        engineering_report = validate_intent(
+            intent, source_is_stale=setup.is_stale
+        )
+        try:
+            content = persistence().read_version_bytes(version)
+        except (BlobIntegrityError, OSError):
+            # Historical/inconsistent metadata projections remain readable.
+            # Without verified source bytes no native mapping can be claimed.
+            capability = assess_artifact_capability(
+                intent,
+                model_kind=version.model_kind,
+                model=None,
+                source_is_stale=setup.is_stale,
+            )
+        else:
+            with _materialized_model(
+                version.source_name, version.model_kind, content
+            ) as record:
+                capability = model_capability(
+                    intent, record, source_is_stale=setup.is_stale
+                )
+        report = project_report(engineering_report, capability)
         intent = intent.model_copy(update={"validation_status": report.validation_status}, deep=True)
         selected = {
             region.id: list(region.entity_ids) for region in intent.regions
@@ -841,7 +1080,11 @@ def create_app(
             created_at=_utc_isoformat(revision.created_at), intent=intent,
             validation=report, selected_entities=selected,
             highlight_state=highlights,
-            export_eligible=report.export_eligible and not setup.is_stale,
+            engineering_ready=engineering_report.engineering_ready,
+            artifact_capability=capability,
+            # Compatibility field now reflects the selected target rather than
+            # overstating generic engineering readiness.
+            export_eligible=report.export_eligible,
         )
 
     def setup_conflict(exc: PersistenceConflictError) -> ApiProblem:
@@ -993,9 +1236,30 @@ def create_app(
                 raise ApiProblem(status=409, code="setup_transition_invalid",
                                  title="Invalid setup transition",
                                  detail=f"Only {expected} {kind}s may be changed.")
+            decision_update: dict[str, Any] = {"status": target}
+            if kind == "assumption" and target == "accepted":
+                linked_materials = [
+                    material
+                    for material in intent.materials
+                    if material.authority == "system_proposed"
+                    and material.proposal_assumption_ref == object_id
+                ]
+                if len(linked_materials) > 1:
+                    raise ApiProblem(
+                        status=409,
+                        code="material_proposal_decision_ambiguous",
+                        title="Invalid material proposal decision",
+                        detail="A proposal decision must identify exactly one material.",
+                    )
+                if linked_materials:
+                    decision_update["material_proposal_fingerprint_sha256"] = (
+                        material_proposal_fingerprint(linked_materials[0])
+                    )
             changed = [
-                value.model_copy(update={"status": target}) if value.id == object_id
-                else value.model_copy(deep=True) for value in items
+                value.model_copy(update=decision_update)
+                if value.id == object_id
+                else value.model_copy(deep=True)
+                for value in items
             ]
             body = intent.model_dump(mode="python")
             body["regions" if kind == "region" else "assumptions"] = [
@@ -1210,7 +1474,16 @@ def create_app(
                     "code": exc.code,
                     "message": exc.safe_message,
                     "mode": "LIVE",
-                    "supported_mechanism": "reviewed_default_density_for_gravity",
+                    "supported_mechanism": "explicit_numeric_isotropic_properties",
+                },
+            ) from exc
+        except UnsupportedCapabilityError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": exc.code,
+                    "message": exc.safe_message,
+                    "mode": "LIVE",
                 },
             ) from exc
         except InterpreterProviderError as exc:
@@ -1386,11 +1659,13 @@ def create_app(
     @app.get("/session/{session_id}/intent", response_model=SessionSnapshot)
     async def get_session_intent(session_id: str) -> SessionSnapshot:
         ensure_uploaded_model(session_id)
-        return app.state.session_store.get_or_create(session_id)
+        return legacy_snapshot(
+            session_id, app.state.session_store.get_or_create(session_id)
+        )
 
     @app.put("/session/{session_id}/intent", response_model=SessionSnapshot)
     async def put_session_intent(
-        session_id: str, intent: SimulationIntent, request: Request
+        session_id: str, intent: LegacySimulationIntent, request: Request
     ) -> SessionSnapshot:
         ensure_uploaded_model(session_id)
         # Task 19 decision D-2: this frozen legacy route is the sole
@@ -1412,7 +1687,10 @@ def create_app(
                 detail={"code": exc.code, "message": exc.safe_message},
             ) from exc
         try:
-            return app.state.session_store.save_intent(session_id, intent)
+            return legacy_snapshot(
+                session_id,
+                app.state.session_store.save_intent(session_id, intent),
+            )
         except (InvalidRegionTransitionError, InvalidAssumptionTransitionError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -1424,11 +1702,17 @@ def create_app(
         ensure_uploaded_model(session_id)
         try:
             if target == "confirmed":
-                return app.state.session_store.confirm_region(
-                    session_id, transition.region_id
+                return legacy_snapshot(
+                    session_id,
+                    app.state.session_store.confirm_region(
+                        session_id, transition.region_id
+                    ),
                 )
-            return app.state.session_store.reject_region(
-                session_id, transition.region_id
+            return legacy_snapshot(
+                session_id,
+                app.state.session_store.reject_region(
+                    session_id, transition.region_id
+                ),
             )
         except SessionIntentMissingError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1463,11 +1747,17 @@ def create_app(
         ensure_uploaded_model(session_id)
         try:
             if target == "accepted":
-                return app.state.session_store.accept_assumption(
-                    session_id, assumption_id
+                return legacy_snapshot(
+                    session_id,
+                    app.state.session_store.accept_assumption(
+                        session_id, assumption_id
+                    ),
                 )
-            return app.state.session_store.reject_assumption(
-                session_id, assumption_id
+            return legacy_snapshot(
+                session_id,
+                app.state.session_store.reject_assumption(
+                    session_id, assumption_id
+                ),
             )
         except SessionIntentMissingError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1497,11 +1787,15 @@ def create_app(
         return await transition_assumption(session_id, assumption_id, "rejected")
 
     def audit_response(session_id: str) -> AuditResponse:
-        ensure_uploaded_model(session_id)
+        record = app.state.model_store.get(session_id)
         try:
-            intent, report = app.state.session_store.intent_and_report(session_id)
+            intent, engineering_report = (
+                app.state.session_store.intent_and_report(session_id)
+            )
         except SessionIntentMissingError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        capability = model_capability(intent, record)
+        report = project_report(engineering_report, capability)
         regions = []
         for region in intent.regions:
             regions.append(
@@ -1582,10 +1876,14 @@ def create_app(
 
         record = app.state.model_store.get(session_id)
         try:
-            intent, report = app.state.session_store.intent_and_report(session_id)
+            intent, engineering_report = (
+                app.state.session_store.intent_and_report(session_id)
+            )
         except SessionIntentMissingError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+        capability = model_capability(intent, record)
+        report = project_report(engineering_report, capability)
         blockers = [issue for issue in report.issues if issue.blocks_export]
         if not report.export_eligible:
             return JSONResponse(
@@ -1631,17 +1929,7 @@ def create_app(
                     raise UnsupportedModelTypeError(
                         "The ccx_inp adapter requires an existing Abaqus INP mesh model."
                     )
-                node_ids, element_blocks = _scan_inp_native_ids(record.path)
-                metadata = MeshModelMetadata(
-                    source_path=record.path,
-                    inventory=inventory,
-                    node_ids=tuple(node_ids),
-                    element_ids=tuple(
-                        element_id
-                        for block in element_blocks
-                        for element_id in block
-                    ),
-                )
+                metadata = mesh_metadata(record, inventory)
                 result = export_ccx_inp(intent, metadata)
         except ExportNotReadyError as exc:
             # The adapter independently recomputes Task 13 validation and the

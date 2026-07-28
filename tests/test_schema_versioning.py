@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import pytest
+from pydantic import ValidationError
 
 from ir.schema import SimulationIntent
 from ir.schema_version import (
@@ -311,17 +312,13 @@ def test_unsupported_future_version_rejected_without_partial_parsing():
     assert exc.value.details["declared"] == SIMULATION_INTENT_SCHEMA_VERSION + 1
 
 
-def test_missing_version_rejected_even_though_the_model_has_a_default(
+def test_missing_version_rejected_by_model_and_authoritative_loader(
     intent_payload,
 ):
     payload = dict(intent_payload)
     payload.pop(SCHEMA_VERSION_FIELD)
-    # The model itself would happily default the field ...
-    assert (
-        SimulationIntent.model_validate(payload).schema_version
-        == SIMULATION_INTENT_SCHEMA_VERSION
-    )
-    # ... but the authoritative loader must not accept an undeclared version.
+    with pytest.raises(ValidationError):
+        SimulationIntent.model_validate(payload)
     with pytest.raises(MissingSchemaVersionError) as exc:
         load_simulation_intent(payload, source="unversioned.json")
     assert exc.value.code == "schema_version_missing"

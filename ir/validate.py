@@ -14,6 +14,11 @@ from typing import Literal
 
 from pydantic import Field
 
+from ir.canonical import (
+    canonical_bc_semantics,
+    canonical_load_semantics,
+    canonical_semantic_key,
+)
 from ir.schema import (
     BC_REGION_COMPATIBILITY,
     LOAD_REGION_COMPATIBILITY,
@@ -22,6 +27,7 @@ from ir.schema import (
     RegionTargetRule,
     SimulationIntent,
     StrictModel,
+    material_proposal_fingerprint,
 )
 
 
@@ -61,6 +67,32 @@ class ValidationIssue(StrictModel):
     field: str | None = None
 
 
+class UnresolvedLoadResultant(StrictModel):
+    load_index: int = Field(ge=0)
+    load_type: Literal["pressure", "surface_traction"]
+    region_ref: str
+    reason_code: Literal["geometry.surface_area_required"]
+
+
+class LoadSummary(StrictModel):
+    """Canonical load totals that require no geometry inference."""
+
+    explicit_force_vector_sum_N: list[float] = Field(min_length=3, max_length=3)
+    concentrated_force_total_N: list[float] = Field(min_length=3, max_length=3)
+    resultant_surface_force_total_N: list[float] = Field(min_length=3, max_length=3)
+    gravity_accelerations_mm_per_s2: list[list[float]]
+    gravity_density_required: bool
+    gravity_density_available: bool
+    concentrated_force_count: int = Field(ge=0)
+    resultant_surface_force_count: int = Field(ge=0)
+    pressure_load_count: int = Field(ge=0)
+    traction_load_count: int = Field(ge=0)
+    gravity_load_count: int = Field(ge=0)
+    distributed_load_count: int = Field(ge=0)
+    distributed_load_types: dict[str, int]
+    unresolved_resultants: list[UnresolvedLoadResultant]
+
+
 class ValidationReport(StrictModel):
     """Computed validation state; client-supplied status is never consulted."""
 
@@ -74,7 +106,9 @@ class ValidationReport(StrictModel):
         "awaiting_assumption_acceptance",
         "ready",
     ]
+    engineering_ready: bool
     export_eligible: bool
+    load_summary: LoadSummary
     issues: list[ValidationIssue]
 
 
@@ -110,6 +144,116 @@ def _finite(value: object) -> bool:
         return math.isfinite(float(value))
     except (TypeError, ValueError, OverflowError):
         return False
+
+
+def _canonical_material_scalar(value: object) -> str:
+    """Canonicalize one normalized material scalar for semantic comparison.
+
+    Fifteen significant decimal digits preserve meaningful submitted
+    engineering values while collapsing the one-ULP noise that can result when
+    equivalent supported units are converted through different power-of-ten
+    factors (for example kg/m^3 versus tonne/mm^3).  Signed zero has no
+    material meaning.
+    """
+
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return f"invalid:{type(value).__name__}:{value!s}"
+    if numeric == 0.0:
+        numeric = 0.0
+    return format(numeric, ".15g")
+
+
+def _material_semantic_key(material: object) -> tuple[str, str, str, str, str | None]:
+    """Return material engineering identity without authority/provenance."""
+
+    density = getattr(material, "density_tonne_per_mm3", None)
+    return (
+        str(getattr(material, "name", "<missing-material-name>")),
+        str(getattr(material, "model", "<missing-material-model>")),
+        _canonical_material_scalar(getattr(material, "E_MPa", None)),
+        _canonical_material_scalar(getattr(material, "nu", None)),
+        None if density is None else _canonical_material_scalar(density),
+    )
+
+
+def summarize_loads(intent: SimulationIntent) -> LoadSummary:
+    """Compute only resultants explicitly present in the durable intent."""
+
+    concentrated_components: list[list[float]] = [[], [], []]
+    surface_components: list[list[float]] = [[], [], []]
+    gravity: list[list[float]] = []
+    distributed: dict[str, int] = {}
+    unresolved_inputs: list[tuple[str, str, str]] = []
+    counts = {
+        "concentrated_force": 0,
+        "resultant_surface_force": 0,
+        "pressure": 0,
+        "surface_traction": 0,
+        "gravity": 0,
+    }
+    for load in intent.loads:
+        load_type = load.type
+        counts[load_type] += 1
+        if load_type == "concentrated_force":
+            for axis in range(3):
+                concentrated_components[axis].append(float(load.vector[axis]))
+        elif load_type == "resultant_surface_force":
+            for axis in range(3):
+                surface_components[axis].append(float(load.vector[axis]))
+        if load_type != "concentrated_force":
+            distributed[load_type] = distributed.get(load_type, 0) + 1
+        if load_type == "gravity":
+            gravity.append([float(value) for value in load.vector])
+        elif load_type in {"pressure", "surface_traction"}:
+            unresolved_inputs.append(
+                (
+                    canonical_semantic_key(canonical_load_semantics(load)),
+                    load_type,
+                    load.region_ref,
+                )
+            )
+    concentrated = [math.fsum(values) for values in concentrated_components]
+    surface_resultant = [math.fsum(values) for values in surface_components]
+    explicit = [
+        math.fsum(
+            [*concentrated_components[axis], *surface_components[axis]]
+        )
+        for axis in range(3)
+    ]
+    gravity.sort(key=lambda vector: tuple(float(value).hex() for value in vector))
+    unresolved = [
+        UnresolvedLoadResultant(
+            load_index=index,
+            load_type=load_type,
+            region_ref=region_ref,
+            reason_code="geometry.surface_area_required",
+        )
+        for index, (_key, load_type, region_ref) in enumerate(
+            sorted(unresolved_inputs)
+        )
+    ]
+    density_available = (
+        len(intent.materials) == 1
+        and intent.materials[0].density_tonne_per_mm3 is not None
+    )
+    return LoadSummary(
+        explicit_force_vector_sum_N=explicit,
+        concentrated_force_total_N=concentrated,
+        resultant_surface_force_total_N=surface_resultant,
+        gravity_accelerations_mm_per_s2=gravity,
+        gravity_density_required=bool(gravity),
+        gravity_density_available=density_available,
+        concentrated_force_count=counts["concentrated_force"],
+        resultant_surface_force_count=counts["resultant_surface_force"],
+        pressure_load_count=counts["pressure"],
+        traction_load_count=counts["surface_traction"],
+        gravity_load_count=counts["gravity"],
+        distributed_load_count=sum(distributed.values()),
+        distributed_load_types=dict(sorted(distributed.items())),
+        unresolved_resultants=unresolved,
+    )
 
 
 def _validate_vector(
@@ -414,6 +558,32 @@ def validate_intent(
                 field="density_tonne_per_mm3",
             )
     if len(materials) > 1:
+        material_names = sorted(
+            {
+                str(getattr(material, "name", "<missing-material-name>"))
+                for material in materials
+            }
+        )
+        canonical = {_material_semantic_key(material) for material in materials}
+        duplicate = len(material_names) == 1 and len(canonical) == 1
+        assignment_id = ", ".join(material_names)
+        _issue(
+            issues,
+            (
+                "material.assignment_duplicate"
+                if duplicate
+                else "material.assignment_conflict"
+            ),
+            "error",
+            (
+                f"Material assignment '{assignment_id}' is repeated with equivalent properties."
+                if duplicate
+                else f"Material assignments '{assignment_id}' conflict for the single solid."
+            ),
+            blocks_export=True,
+            object_type="material",
+            object_id=assignment_id,
+        )
         _issue(
             issues, "material.count_unsupported", "error",
             "Exactly one material is supported for the single solid.",
@@ -488,6 +658,45 @@ def validate_intent(
                 object_id=str(material_id),
                 field="density_tonne_per_mm3",
             )
+        if getattr(material, "authority", "engineer_entered") == "system_proposed":
+            proposal_ref = getattr(material, "proposal_assumption_ref", None)
+            proposal_decisions = [
+                item
+                for item in getattr(intent, "assumptions", [])
+                if getattr(item, "id", None) == proposal_ref
+            ]
+            proposal_decision = (
+                proposal_decisions[0] if len(proposal_decisions) == 1 else None
+            )
+            if proposal_decision is None:
+                _issue(
+                    issues,
+                    "material.proposal_decision_missing",
+                    "error",
+                    "A system-proposed material must retain its linked decision.",
+                    blocks_export=True,
+                    object_type="material",
+                    object_id=str(material_id),
+                    field="proposal_assumption_ref",
+                )
+            elif getattr(proposal_decision, "status", None) == "accepted":
+                accepted_fingerprint = getattr(
+                    proposal_decision,
+                    "material_proposal_fingerprint_sha256",
+                    None,
+                )
+                expected_fingerprint = material_proposal_fingerprint(material)
+                if accepted_fingerprint != expected_fingerprint:
+                    _issue(
+                        issues,
+                        "material.proposal_decision_stale",
+                        "error",
+                        "The accepted material decision does not match the current proposal snapshot.",
+                        blocks_export=True,
+                        object_type="material",
+                        object_id=str(material_id),
+                        field="proposal_assumption_ref",
+                    )
 
     regions = getattr(intent, "regions", None)
     if not isinstance(regions, list):
@@ -592,9 +801,32 @@ def validate_intent(
             "At least one displacement constraint is required.",
             blocks_export=True, object_type="bc",
         )
+    bc_signatures: dict[str, int] = {}
+    restraint_axes: set[str] = set()
+    fully_fixed_region = False
+    fixed_components: dict[tuple[str, str], list[int]] = {}
+    prescribed_components: dict[tuple[str, str], list[tuple[int, float]]] = {}
     for index, bc in enumerate(bcs):
         object_id = f"bc[{index}]"
         bc_type = getattr(bc, "type", None)
+        restraint_region = regions_by_id.get(str(getattr(bc, "region_ref", "")))
+        counts_as_restraint = (
+            restraint_region is not None
+            and getattr(restraint_region, "status", None) != "rejected"
+        )
+        signature = canonical_semantic_key(canonical_bc_semantics(bc))
+        if signature in bc_signatures:
+            _issue(
+                issues,
+                "bc.duplicate",
+                "error",
+                "An exact duplicate boundary condition is present.",
+                blocks_export=True,
+                object_type="bc",
+                object_id=object_id,
+            )
+        else:
+            bc_signatures[signature] = index
         bc_rule = BC_REGION_COMPATIBILITY.get(str(bc_type))
         if bc_rule is None:
             _issue(
@@ -633,6 +865,68 @@ def validate_intent(
                 _check_engineering_consistency(
                     issues, bc, object_type="bc", object_id=object_id
                 )
+                for axis, value in sorted(components.items()):
+                    if counts_as_restraint:
+                        restraint_axes.add(axis)
+                    prescribed_components.setdefault(
+                        (str(getattr(bc, "region_ref", "")), axis), []
+                    ).append((index, float(value)))
+        elif bc_type == "fixed_displacement":
+            if counts_as_restraint and set(getattr(bc, "components", [])) == {
+                "x", "y", "z"
+            }:
+                fully_fixed_region = True
+            for axis in sorted(getattr(bc, "components", [])):
+                if counts_as_restraint:
+                    restraint_axes.add(axis)
+                fixed_components.setdefault(
+                    (str(getattr(bc, "region_ref", "")), axis), []
+                ).append(index)
+
+    for key, values in sorted(prescribed_components.items()):
+        unique_values = {value for _, value in values}
+        if len(unique_values) > 1:
+            _issue(
+                issues,
+                "bc.prescribed_displacement_conflict",
+                "error",
+                f"Region '{key[0]}' has conflicting prescribed {key[1].upper()} displacements.",
+                blocks_export=True,
+                object_type="bc",
+                object_id=key[0],
+                field=f"components.{key[1]}",
+            )
+        if key in fixed_components and any(value != 0.0 for _, value in values):
+            _issue(
+                issues,
+                "bc.fixed_prescribed_conflict",
+                "error",
+                f"Region '{key[0]}' is fixed and has a nonzero prescribed {key[1].upper()} displacement.",
+                blocks_export=True,
+                object_type="bc",
+                object_id=key[0],
+                field=f"components.{key[1]}",
+            )
+    for axis in ("x", "y", "z"):
+        if axis not in restraint_axes:
+            _issue(
+                issues,
+                f"constraint.rigid_body_translation_{axis}",
+                "error",
+                f"No confirmed {axis.upper()} translational restraint is present.",
+                blocks_export=True,
+                object_type="constraint",
+                field=axis,
+            )
+    if restraint_axes == {"x", "y", "z"} and not fully_fixed_region:
+        _issue(
+            issues,
+            "constraint.rotational_restraint_unverified",
+            "warning",
+            "Translational restraint is covered, but rotational restraint cannot be proven without geometry and stiffness-rank analysis.",
+            blocks_export=False,
+            object_type="constraint",
+        )
 
     if not loads:
         _issue(
@@ -640,9 +934,23 @@ def validate_intent(
             "At least one supported load is required.",
             blocks_export=True, object_type="load",
         )
+    load_signatures: dict[str, int] = {}
     for index, load in enumerate(loads):
         object_id = f"load[{index}]"
         load_type = getattr(load, "type", None)
+        signature = canonical_semantic_key(canonical_load_semantics(load))
+        if signature in load_signatures:
+            _issue(
+                issues,
+                "load.duplicate",
+                "error",
+                "An exact duplicate load is present.",
+                blocks_export=True,
+                object_type="load",
+                object_id=object_id,
+            )
+        else:
+            load_signatures[signature] = index
         load_rule = LOAD_REGION_COMPATIBILITY.get(str(load_type))
         if load_rule is None:
             _issue(
@@ -838,7 +1146,9 @@ def validate_intent(
     if codes & STRUCTURALLY_INCOMPLETE_CODES:
         readiness_status = "structurally_incomplete"
     elif any(
-        issue.severity == "error" and issue.code != "source.stale"
+        issue.severity == "error"
+        and issue.code != "source.stale"
+        and not issue.code.endswith("_pending")
         for issue in issues
     ):
         readiness_status = "semantically_invalid"
@@ -853,9 +1163,12 @@ def validate_intent(
         readiness_status = "awaiting_assumption_acceptance"
     else:
         readiness_status = "ready"
+    engineering_ready = readiness_status == "ready" and export_eligible
     return ValidationReport(
         validation_status=validation_status,
         readiness_status=readiness_status,
+        engineering_ready=engineering_ready,
         export_eligible=export_eligible,
+        load_summary=summarize_loads(intent),
         issues=issues,
     )

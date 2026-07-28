@@ -1938,3 +1938,177 @@ subprocess; only `.venv` reproduces the supported environment.
   not on PATH on this host; `pyproject.toml`, `uv.lock` and `requirements.txt`
   are unchanged.
 - No commit, merge, tag, or push was performed.
+
+### R3.2a deterministic engineering rules and durable API (working tree, 2026-07-28)
+
+R3.2a extends the merged R3.1 schema and immutable revision owner; it adds no
+browser editor, mesh, mapping, deck-completion, solve, or results behavior.
+
+- Durable `/api/v1` setup creation and full-intent revision requests validate
+  the raw nested version before model defaults or persistence. Missing,
+  malformed, v1, and future declarations return the server-owned
+  `simulation_intent.schema_version_required`, `.schema_version_invalid`,
+  `.schema_version_unsupported_legacy`, and
+  `.schema_version_unsupported_future` codes. `SimulationIntent.schema_version`
+  is required in JSON Schema/OpenAPI/TypeScript. The frozen legacy session PUT
+  alone uses `LegacySimulationIntent`; persisted v1 documents continue through
+  the controlled `1 -> 2` loader migration.
+- Prescribed displacement now accepts finite global X/Y/Z translations,
+  positive and negative values, and signed zero. Original `mm`/`m` quantities
+  are retained and checked against canonical millimetres. The existing Abaqus
+  and CalculiX fragment adapters emit finite component values; rotations, local
+  coordinates, time histories, nonlinear behavior, unsupported units, and
+  contradictory original/normalized values remain rejected.
+- Production orchestration no longer inserts demo steel or density. Direct
+  durable material is serialized with `authority=engineer_entered`. A narrow
+  deterministic material-only language path accepts numeric Young's modulus,
+  Poisson's ratio, and optional density, creates
+  `authority=system_proposed`, and links it to a pending unit-critical
+  assumption. Normal assumption accept/reject endpoints create immutable
+  successor revisions. Names without properties return
+  `material.properties_required`; combined material/condition requests request
+  separation, and no database lookup exists.
+- Validation reports exact duplicate BC/load assignments, repeated material
+  duplicates or contradictions, conflicting prescribed components, and
+  incompatible fixed/nonzero-prescribed pairs with stable codes and sorted
+  findings. Region identity is used exactly; no geometric-overlap inference is
+  attempted.
+- The conservative restraint heuristic reports missing X/Y/Z coverage as
+  `constraint.rigid_body_translation_{axis}`. A confirmed fully fixed region
+  satisfies the preview heuristic; component-wise translation coverage carries
+  `constraint.rotational_restraint_unverified` because no stiffness-rank proof
+  is claimed.
+- `ValidationReport.load_summary` contains component-wise totals for explicit
+  concentrated and resultant-surface force vectors, their combined total,
+  gravity acceleration/density dependency, distributed-load counts by type, and
+  explicit unresolved pressure/traction resultants with
+  `geometry.surface_area_required`. No surface resultant is invented.
+- Explicit natural-language requests for nonlinear, thermal, contact, dynamic,
+  plastic, orthotropic, multiple-solid/assembly, shell, beam, rotational-
+  constraint, and local-coordinate modes fail before provider calls with stable
+  capability codes and without session mutation. Durable raw writes publish
+  the corresponding stable codes before strict schema parsing where applicable.
+- Durable revision responses now expose `engineering_ready` separately from
+  selected-target `artifact_capability`. CalculiX capability reports its
+  target-specific blocking codes, including missing mesh/mapping and the
+  current fragment adapter's unsupported surface traction, while exporters
+  retain defense-in-depth preflight. The compatibility `export_eligible` field
+  now reflects selected-target capability rather than generic engineering
+  completeness.
+- Every new persisted material authority/link field participates in canonical
+  dumps, request fingerprints, revision hashes, replay/conflict checks, and
+  restart/reopen behavior. Load summary and capability are deterministic
+  derived reports over the immutable snapshot. No state is dual-written to
+  `SelectionSessionStore`.
+
+#### R3.2a validation evidence (2026-07-28)
+
+- Focused R3.2a rules/API tests: **30 passed**.
+- R3.1 engineering plus interpreter tests: **204 passed**.
+- Export and validation tests: **73 passed, 1 skipped**; the skip is the
+  optional local CalculiX executable check.
+- Evaluation module: **60 passed**; frozen REPLAY corpus remains 15/15 and no
+  corpus file changed.
+- Schema/versioning/migration/OpenAPI tests with
+  `SIM_INTENT_REQUIRE_BASELINE_EVIDENCE=1`: **235 passed**; baseline accounting
+  `executed=49 skipped=0 failed=0 required=yes`.
+- Full suite: **900 passed, 1 skipped** in 319.77 seconds. Baseline accounting
+  was `executed=49 skipped=0 failed=0`; the skip is the optional CalculiX check.
+- `scripts/export_schema.py --check`, 35-target schema stamping,
+  TypeScript regeneration with openapi-typescript 7.13.0, `compileall`,
+  `scripts/check_env.py`, and `git diff --check` are clean. Environment check
+  truthfully reports optional CCX unavailable.
+- `scripts/export_requirements.py --check` could not run because `uv` is not on
+  PATH; `pyproject.toml`, `uv.lock`, and `requirements.txt` are unchanged.
+- No commit, merge, tag, or push was performed.
+
+### R3.2a independent-review remediation (working tree, 2026-07-28)
+
+All High and Medium review findings were remediated without starting R3.2b,
+changing `app/static/*`, or implementing meshing, CAD-to-mesh mapping, deck
+completion, solver execution, or results.
+
+- Selected-target capability now consumes the exact stored model version. For
+  native INP sources it calls the CalculiX exporter's read-only preflight and
+  native resolver over verified NSET, ELSET, facet-group, node, and element
+  inventories. Unknown native references publish
+  `artifact.native_region_missing` before generation and direct exporter
+  bypasses still fail. STEP publishes `artifact.step_meshing_required` plus
+  `artifact.mapping_not_verified`; adapter-incompatible conditions publish
+  `artifact.adapter_condition_unsupported` and the existing specific
+  CalculiX diagnostic where applicable.
+- `engineering_ready` remains the solver-neutral engineering result.
+  `artifact_capability.supported` is the selected-target result, and every
+  durable, legacy-session, audit, export-gate, and compatibility
+  `export_eligible` projection is their conjunction. A valid STEP setup can
+  therefore be engineering-ready and export-ineligible, while a native INP
+  setup is eligible only when all required native regions resolve.
+- Material acceptance now stores a server-owned SHA-256 fingerprint on the
+  accepted proposal decision. Its versioned canonical input includes the
+  proposal reference/material identifier, name, model, authority, normalized
+  E/nu/density, original E/density value-unit provenance, and proposal
+  reference. A changed system proposal must use a new pending decision; an
+  explicit engineer-entered replacement must remove the proposal link.
+  Clients cannot create terminal decisions or forge pending fingerprints.
+- Natural-language material parsing now fails closed. Explicit E, nu/Unicode
+  nu, and density are either preserved through the central quantity owner or
+  rejected with stable codes including `quantity.unsupported_unit`,
+  `material.poissons_ratio_invalid`, `material.properties_incomplete`, and
+  `material.property_parse_failed`. `kg/m^3`, `kg/m3`, and `kg/m³` are
+  deliberately supported density spellings.
+- Durable raw-write scanning iterates only actual lists. Nulls, scalars,
+  objects, malformed lists, and malformed entries in materials, regions, BCs,
+  loads, and assumptions return sanitized RFC 9457 HTTP 422 responses without
+  setup, revision, or idempotency records.
+- Load summaries collect each force axis and call `math.fsum` once, sort
+  unresolved distributed resultants and gravity vectors canonically, and
+  publish explicit counts for concentrated force, resultant surface force,
+  pressure, traction, and gravity. Durable intent hashing sorts semantically
+  unordered loads while retaining full provenance.
+- One canonical semantic owner now drives duplicate detection and session
+  merge identity. Fixed-axis order, prescribed-displacement original units,
+  and load provenance/field order cannot hide duplicates; normalized meaning
+  and target region remain authoritative, so distinct regions and axes remain
+  legitimate.
+- Unsupported-mode detection now requires narrow engineering context. Dynamic
+  pressure, steel/aluminium part names, and shell/beam geometry names proceed
+  normally; explicit dynamic/modal/transient, contact, nonlinear/plastic/
+  orthotropic, shell/beam analysis, rotational constraints, and local
+  coordinate authoring stop before provider invocation.
+- Frozen evaluation scoring now asserts `materials == []` on the production
+  interpretation proposal. A regression instrumentally injects a production
+  material and proves the case fails; frozen cases, fallback records, replay
+  bodies, and golden artifacts were not changed.
+
+#### Independent-review remediation evidence (2026-07-28)
+
+- Focused remediation matrix: **68 passed**. This includes valid/missing
+  NSET/ELSET/facet resolution, every supported native BC/load adapter path,
+  STEP/INP capability, material fingerprint mutation/replay/restart behavior,
+  supported and unsupported material units, 50 malformed create/revision
+  collection cases, all **5,040** permutations of the seven-load summary
+  fixture, semantic duplicates, contextual unsupported-mode positives and
+  negatives, and truthful durable projections.
+- Focused R3.2a plus R3.1 engineering suites: **201 passed**.
+- Export, validation, legacy session, and durable revision suites:
+  **95 passed, 1 skipped**; the skip is the optional local CalculiX executable
+  check.
+- Interpreter and evaluation suites: **94 passed**; the frozen REPLAY corpus
+  remains 15/15 and the material-injection regression fails when instrumented
+  as intended.
+- Schema/versioning/migration/OpenAPI group: **235 passed**; baseline evidence
+  `executed=49 skipped=0 failed=0`.
+- Final full suite with `SIM_INTENT_REQUIRE_BASELINE_EVIDENCE=1`:
+  **969 passed, 1 skipped** in 389.25 seconds; baseline evidence
+  `executed=49 skipped=0 failed=0 required=yes`. The skip is the optional local
+  CalculiX executable check.
+- `scripts/export_schema.py --check`, all 35 schema-stamping targets,
+  `compileall`, `scripts/check_env.py`, TypeScript regeneration with
+  openapi-typescript 7.13.0 and SHA-256 byte comparison
+  `4b2fb29f9db3948c8f61ffa8c337f744acea93fc33e521fd9623c499a004fb67`,
+  scope scans, and `git diff --check` passed. `scripts/check_env.py` truthfully
+  reports optional CCX unavailable.
+- `scripts/export_requirements.py --check` could not execute because `uv` is
+  not on PATH; `pyproject.toml`, `uv.lock`, and `requirements.txt` are
+  unchanged.
+- No commit, merge, tag, or push was performed.

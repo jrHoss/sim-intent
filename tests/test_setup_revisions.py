@@ -460,14 +460,15 @@ def test_durable_api_rejects_contradictory_and_unsupported_quantities(tmp_path):
             "components": {"z": 2.5},
         }]
         response = submit(nonzero, "nonzero-displacement")
-        assert response.status_code == 422
-        assert "bc.prescribed_displacement_nonzero" in response.text
+        assert response.status_code == 201, response.text
+        assert response.json()["current"]["intent"]["bcs"][0]["components"]["z"] == 2.5
 
-        # Nothing was persisted by any rejected submission.
+        # The contradictory quantity submissions persisted nothing; the finite
+        # translational displacement is the sole accepted setup so far.
         with app.state.persistence.sessions() as session:
             assert session.scalar(
                 select(func.count()).select_from(SimulationSetup)
-            ) == 0
+            ) == 1
 
         # A zero prescribed displacement is inside the supported envelope.
         supported = intent_payload()
