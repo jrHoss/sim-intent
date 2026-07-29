@@ -73,7 +73,15 @@ def get_inventory(
     cache_file = cache_dir / f"{sha}.json"
 
     if cache_file.is_file():
-        return FaceInventory.from_json(cache_file.read_text(encoding="utf-8")), True
+        cached_data = json.loads(cache_file.read_text(encoding="utf-8"))
+        # R4a added boundary-loop evidence to FaceRecord.  Pre-R4a cache
+        # entries are readable for compatibility, but cannot truthfully feed
+        # geometry identity, so refresh them from their still hash-bound source.
+        if all(
+            isinstance(face, dict) and "boundary_loop_count" in face
+            for face in cached_data.get("faces", [])
+        ):
+            return FaceInventory.from_dict(cached_data), True
 
     inventory = FaceInventory(
         source_name=path.name, file_sha256=sha, faces=parse_step(path)

@@ -24,6 +24,7 @@ class FaceRecord:
     bbox_max: list[float]
     normal: list[float]  # outward normal sampled at the parametric midpoint
     edge_tags: list[int]  # unique perimeter edge tags, sorted
+    boundary_loop_count: int = 1
 
     def to_dict(self) -> dict:
         return {
@@ -35,6 +36,7 @@ class FaceRecord:
             "bbox_max": self.bbox_max,
             "normal": self.normal,
             "edge_tags": self.edge_tags,
+            "boundary_loop_count": self.boundary_loop_count,
         }
 
     @classmethod
@@ -77,6 +79,43 @@ def parse_step(path: str | Path) -> list[FaceRecord]:
             )
             # A cylinder's seam edge shows up twice; keep unique tags.
             edge_tags = sorted({abs(etag) for _, etag in edges})
+            # Count connected boundary wires without relying on edge traversal
+            # order.  Periodic seam edges occur more than once and are not
+            # actual boundary-wire members, so exclude them from loop counting.
+            edge_occurrences: dict[int, int] = {}
+            for _, edge_tag in edges:
+                absolute_tag = abs(edge_tag)
+                edge_occurrences[absolute_tag] = edge_occurrences.get(absolute_tag, 0) + 1
+            loop_edge_tags = sorted(
+                edge_tag
+                for edge_tag, count in edge_occurrences.items()
+                if count == 1
+            )
+            vertices_by_edge: dict[int, set[int]] = {}
+            for edge_tag in loop_edge_tags:
+                vertices = gmsh.model.getBoundary(
+                    [(1, edge_tag)],
+                    combined=False,
+                    oriented=False,
+                    recursive=False,
+                )
+                vertices_by_edge[edge_tag] = {abs(vtag) for _, vtag in vertices}
+            unseen = set(loop_edge_tags)
+            boundary_loop_count = 0
+            while unseen:
+                boundary_loop_count += 1
+                stack = [min(unseen)]
+                while stack:
+                    current = stack.pop()
+                    if current not in unseen:
+                        continue
+                    unseen.remove(current)
+                    current_vertices = vertices_by_edge[current]
+                    stack.extend(
+                        other
+                        for other in sorted(unseen)
+                        if current_vertices & vertices_by_edge[other]
+                    )
             records.append(
                 FaceRecord(
                     tag=tag,
@@ -87,6 +126,7 @@ def parse_step(path: str | Path) -> list[FaceRecord]:
                     bbox_max=list(bbox[3:]),
                     normal=normal,
                     edge_tags=edge_tags,
+                    boundary_loop_count=boundary_loop_count,
                 )
             )
         return records
