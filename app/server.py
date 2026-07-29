@@ -49,8 +49,10 @@ from app.ingestion import IngestionService, QuarantinedUpload
 from app.data_root_lock import DataRootLock
 from app.migrations import upgrade_database
 from app.persistence import (
+    GeometryIdentityArtifactError,
     ModelVersion,
     Persistence,
+    PersistenceDatabaseError,
     PersistenceConflictError,
     PersistenceNotFoundError,
     Project,
@@ -103,7 +105,14 @@ from export.common import (
     assess_artifact_capability,
     blocking_issues,
 )
+from geom.analytic import AnalyticSurfaceEvidence
 from geom.cylinders import analyze_cylinders
+from geom.identity import (
+    GeometryIdentityError,
+    build_geometry_identity,
+    deserialize_geometry_identity,
+    faces_from_inventory,
+)
 from geom.inventory import FaceInventory, get_inventory
 from ground.engine import ClickEvidence, GroundingBatch
 from geom.meshes import MeshInventory, _scan_inp_native_ids, load_mesh
@@ -320,6 +329,65 @@ class ModelUploadResponse(StrictModel):
     schema_version: int = API_CONTRACT_VERSION
     model_id: str
     model_version: ModelVersionResponse
+
+
+class GeometryIdentityFaceResponse(StrictModel):
+    source_ref: int | str
+    surface_type: str
+    canonical_geometry: dict[str, Any]
+    topology: dict[str, Any]
+    local_semantic_signature: str
+    connected_topology_signature: str
+    identity_candidate: str
+    stable_identity: str | None
+    collision_group_id: str | None
+    ambiguous: bool
+    identity_quality: str
+    evidence: dict[str, Any]
+
+
+class GeometryIdentityToleranceResponse(StrictModel):
+    linear_mm: float
+    area_mm2: float
+    angle_rad: float
+
+
+class GeometryIdentityCanonicalQuantaResponse(StrictModel):
+    position_mm: float
+    length_mm: float
+    area_mm2: float
+    angle_rad: float
+    direction: float
+    dimensionless_scalar: float
+
+
+class GeometryIdentityTolerancePolicyResponse(StrictModel):
+    policy_id: str
+    semantic_tolerances: GeometryIdentityToleranceResponse
+    ambiguity_tolerances: GeometryIdentityToleranceResponse
+    canonical_quanta: GeometryIdentityCanonicalQuantaResponse
+
+
+class GeometryIdentityCollisionGroupResponse(StrictModel):
+    collision_group_id: str
+    identity_candidates: list[str]
+    member_source_refs: list[int | str]
+    reason: str
+
+
+class GeometryIdentityArtifactResponse(StrictModel):
+    schema_version: int = API_CONTRACT_VERSION
+    artifact_type: Literal["geometry_identity"]
+    artifact_version: int
+    hash_domain: str
+    model_id: str
+    model_version_id: str
+    source_sha256: str
+    artifact_sha256: str
+    created_at: str
+    tolerance_policy: GeometryIdentityTolerancePolicyResponse
+    faces: list[GeometryIdentityFaceResponse]
+    collision_groups: list[GeometryIdentityCollisionGroupResponse]
 
 
 def _require_current_intent_version(value: object) -> object:
@@ -750,6 +818,116 @@ def create_app(
     def persistence() -> Persistence:
         return app.state.persistence
 
+    def geometry_identity_problem(
+        error: GeometryIdentityArtifactError,
+    ) -> ApiProblem:
+        messages = {
+            "geometry_identity_missing": (
+                "Geometry identity unavailable",
+                "The required geometry identity artifact is missing.",
+            ),
+            "geometry_identity_integrity_failed": (
+                "Geometry identity unavailable",
+                "The stored geometry identity artifact failed integrity verification.",
+            ),
+            "geometry_identity_binding_mismatch": (
+                "Geometry identity unavailable",
+                "The stored geometry identity artifact does not match its source version.",
+            ),
+            "geometry_identity_version_unsupported": (
+                "Geometry identity unsupported",
+                "The stored geometry identity artifact version is not supported.",
+            ),
+            "geometry_identity_schema_invalid": (
+                "Geometry identity unavailable",
+                "The stored geometry identity artifact does not match the required schema.",
+            ),
+            "geometry_identity_not_applicable": (
+                "Geometry identity not applicable",
+                "Geometry identity is not applicable to INP model versions.",
+            ),
+        }
+        title, detail = messages.get(
+            error.code,
+            (
+                "Geometry identity unavailable",
+                "The geometry identity artifact could not be verified.",
+            ),
+        )
+        return ApiProblem(
+            status=(
+                422
+                if error.code == "geometry_identity_not_applicable"
+                else 500
+            ),
+            code=error.code,
+            title=title,
+            detail=detail,
+        )
+
+    def build_upload_geometry_identity(
+        upload: QuarantinedUpload,
+        inventory_data: dict[str, Any],
+        version_id: str,
+    ) -> bytes | None:
+        if upload.kind != "step":
+            return None
+        try:
+            inventory_payload = dict(inventory_data)
+            raw_surfaces = inventory_payload.pop(
+                "_geometry_identity_surfaces", None
+            )
+            if not isinstance(raw_surfaces, dict):
+                raise ValueError("missing isolated analytic evidence")
+            analytic_surfaces = {
+                int(tag): AnalyticSurfaceEvidence.from_dict(record)
+                for tag, record in raw_surfaces.items()
+                if isinstance(record, dict)
+            }
+            if len(analytic_surfaces) != len(raw_surfaces):
+                raise ValueError("invalid isolated analytic evidence")
+            inventory = FaceInventory.from_dict(inventory_payload)
+            if inventory.file_sha256 != upload.sha256:
+                raise GeometryIdentityArtifactError(
+                    "geometry_identity_binding_mismatch"
+                )
+            return build_geometry_identity(
+                model_version_id=version_id,
+                source_sha256=upload.sha256,
+                faces=faces_from_inventory(
+                    inventory, analytic_surfaces=analytic_surfaces
+                ),
+            ).canonical_bytes()
+        except GeometryIdentityArtifactError:
+            raise
+        except (GeometryIdentityError, KeyError, TypeError, ValueError) as exc:
+            APPLICATION_LOGGER.exception(
+                "geometry identity construction failed"
+            )
+            raise ApiProblem(
+                status=422,
+                code=(
+                    exc.code
+                    if isinstance(exc, GeometryIdentityError)
+                    else "geometry.identity_construction_failed"
+                ),
+                title="Geometry identity unavailable",
+                detail=(
+                    exc.message
+                    if isinstance(exc, GeometryIdentityError)
+                    else "The STEP geometry identity artifact could not be constructed."
+                ),
+            ) from exc
+
+    def database_write_problem() -> ApiProblem:
+        return ApiProblem(
+            status=500,
+            code="database_write_failed",
+            title="Model publication failed",
+            detail="The model version could not be published.",
+            retryable=True,
+        )
+
     def mesh_metadata(
         record: ModelRecord, inventory: MeshInventory
     ) -> MeshModelMetadata:
@@ -914,8 +1092,12 @@ def create_app(
     ) -> ModelUploadResponse:
         upload = await app.state.ingestion.receive(request, filename)
         try:
-            await app.state.ingestion.parse(
+            inventory_data = await app.state.ingestion.parse(
                 upload, request.state.correlation_id
+            )
+            version_id = str(uuid.uuid4())
+            identity_bytes = build_upload_geometry_identity(
+                upload, inventory_data, version_id
             )
             model, version = persistence().create_model_version_from_file(
                 project_id=str(project_id),
@@ -924,11 +1106,17 @@ def create_app(
                 source_sha256=upload.sha256,
                 size_bytes=upload.size,
                 model_kind=upload.kind,
+                version_id=version_id,
+                geometry_identity_bytes=identity_bytes,
             )
         except PersistenceNotFoundError as exc:
             raise _not_found_problem(exc.resource) from exc
         except SourceStorageLimitExceededError as exc:
             raise source_storage_problem() from exc
+        except GeometryIdentityArtifactError as exc:
+            raise geometry_identity_problem(exc) from exc
+        except PersistenceDatabaseError as exc:
+            raise database_write_problem() from exc
         finally:
             upload.path.unlink(missing_ok=True)
         return ModelUploadResponse(
@@ -950,8 +1138,12 @@ def create_app(
     ) -> ModelUploadResponse:
         upload = await app.state.ingestion.receive(request, filename)
         try:
-            await app.state.ingestion.parse(
+            inventory_data = await app.state.ingestion.parse(
                 upload, request.state.correlation_id
+            )
+            version_id = str(uuid.uuid4())
+            identity_bytes = build_upload_geometry_identity(
+                upload, inventory_data, version_id
             )
             model, version = persistence().create_model_version_from_file(
                 project_id=str(project_id),
@@ -961,6 +1153,8 @@ def create_app(
                 source_sha256=upload.sha256,
                 size_bytes=upload.size,
                 model_kind=upload.kind,
+                version_id=version_id,
+                geometry_identity_bytes=identity_bytes,
             )
         except PersistenceNotFoundError as exc:
             raise _not_found_problem(exc.resource) from exc
@@ -973,6 +1167,10 @@ def create_app(
                 title="Model conflict",
                 detail="The model does not belong to the requested project.",
             ) from exc
+        except GeometryIdentityArtifactError as exc:
+            raise geometry_identity_problem(exc) from exc
+        except PersistenceDatabaseError as exc:
+            raise database_write_problem() from exc
         finally:
             upload.path.unlink(missing_ok=True)
         return ModelUploadResponse(
@@ -1008,6 +1206,40 @@ def create_app(
         if model is None:
             raise _not_found_problem("model")
         return _version_response(version, model.current_version_id)
+
+    @app.get(
+        "/api/v1/model-versions/{version_id}/geometry-identity",
+        response_model=GeometryIdentityArtifactResponse,
+        responses=PROBLEM_RESPONSES,
+    )
+    async def read_geometry_identity(
+        version_id: uuid.UUID,
+    ) -> GeometryIdentityArtifactResponse:
+        try:
+            record, canonical_bytes, _payload = (
+                persistence().read_geometry_identity(str(version_id))
+            )
+        except PersistenceNotFoundError as exc:
+            raise _not_found_problem(exc.resource) from exc
+        except GeometryIdentityArtifactError as exc:
+            raise geometry_identity_problem(exc) from exc
+        # The response boundary deliberately invokes the same authoritative
+        # deserializer as insertion and persistence reads.
+        payload = deserialize_geometry_identity(canonical_bytes).to_dict()
+        binding = payload["model_binding"]
+        return GeometryIdentityArtifactResponse(
+            artifact_type="geometry_identity",
+            artifact_version=record.artifact_version,
+            hash_domain=record.hash_domain,
+            model_id=record.model_id,
+            model_version_id=binding["model_version_id"],
+            source_sha256=binding["source_sha256"],
+            artifact_sha256=record.integrity_sha256,
+            created_at=_utc_isoformat(record.created_at),
+            tolerance_policy=payload["tolerance_policy"],
+            faces=payload["faces"],
+            collision_groups=payload["collision_groups"],
+        )
 
     def setup_summary(setup: SimulationSetup) -> SetupSummary:
         if setup.current_revision is None:
@@ -1326,9 +1558,14 @@ def create_app(
                 record.path, version.source_name, version.model_kind,
                 version.size_bytes, version.source_sha256,
             )
+            inventory_data = await app.state.ingestion.parse(
+                upload, request.state.correlation_id
+            )
             return JSONResponse(
-                await app.state.ingestion.parse(
-                    upload, request.state.correlation_id
+                (
+                    FaceInventory.from_dict(inventory_data).to_dict()
+                    if version.model_kind == "step"
+                    else inventory_data
                 )
             )
 

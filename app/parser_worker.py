@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 
+from geom.analytic import analyze_identity_surfaces
 from geom.inventory import FaceInventory, file_sha256
 from geom.meshes import parse_inp
 from geom.parser import parse_step
@@ -22,13 +23,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if kind == "step":
             inventory = FaceInventory(path.name, file_sha256(path), parse_step(path))
+            analytic_surfaces = {
+                str(tag): record.to_dict()
+                for tag, record in analyze_identity_surfaces(path).items()
+            }
         else:
             inventory = parse_inp(path)
+            analytic_surfaces = None
         payload = {
             "protocol_version": PROTOCOL_VERSION,
             "status": "valid",
             "kind": kind,
             "inventory": inventory.to_dict(),
+            "geometry_identity_surfaces": analytic_surfaces,
         }
     except Exception:
         payload = {

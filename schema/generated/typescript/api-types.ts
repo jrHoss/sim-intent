@@ -21,6 +21,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/model-versions/{version_id}/geometry-identity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Geometry Identity */
+        get: operations["read_geometry_identity_api_v1_model_versions__version_id__geometry_identity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/model-versions/{version_id}/gltf": {
         parameters: {
             query?: never;
@@ -942,6 +959,114 @@ export interface components {
             unit: "N" | "kN" | "MN";
             /** Value */
             value: number;
+        };
+        /** GeometryIdentityArtifactResponse */
+        GeometryIdentityArtifactResponse: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Artifact Type
+             * @constant
+             */
+            artifact_type: "geometry_identity";
+            /** Artifact Version */
+            artifact_version: number;
+            /** Collision Groups */
+            collision_groups: components["schemas"]["GeometryIdentityCollisionGroupResponse"][];
+            /** Created At */
+            created_at: string;
+            /** Faces */
+            faces: components["schemas"]["GeometryIdentityFaceResponse"][];
+            /** Hash Domain */
+            hash_domain: string;
+            /** Model Id */
+            model_id: string;
+            /** Model Version Id */
+            model_version_id: string;
+            /**
+             * Schema Version
+             * @default 1
+             */
+            schema_version: number;
+            /** Source Sha256 */
+            source_sha256: string;
+            tolerance_policy: components["schemas"]["GeometryIdentityTolerancePolicyResponse"];
+        };
+        /** GeometryIdentityCanonicalQuantaResponse */
+        GeometryIdentityCanonicalQuantaResponse: {
+            /** Angle Rad */
+            angle_rad: number;
+            /** Area Mm2 */
+            area_mm2: number;
+            /** Dimensionless Scalar */
+            dimensionless_scalar: number;
+            /** Direction */
+            direction: number;
+            /** Length Mm */
+            length_mm: number;
+            /** Position Mm */
+            position_mm: number;
+        };
+        /** GeometryIdentityCollisionGroupResponse */
+        GeometryIdentityCollisionGroupResponse: {
+            /** Collision Group Id */
+            collision_group_id: string;
+            /** Identity Candidates */
+            identity_candidates: string[];
+            /** Member Source Refs */
+            member_source_refs: (number | string)[];
+            /** Reason */
+            reason: string;
+        };
+        /** GeometryIdentityFaceResponse */
+        GeometryIdentityFaceResponse: {
+            /** Ambiguous */
+            ambiguous: boolean;
+            /** Canonical Geometry */
+            canonical_geometry: {
+                [key: string]: unknown;
+            };
+            /** Collision Group Id */
+            collision_group_id: string | null;
+            /** Connected Topology Signature */
+            connected_topology_signature: string;
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            };
+            /** Identity Candidate */
+            identity_candidate: string;
+            /** Identity Quality */
+            identity_quality: string;
+            /** Local Semantic Signature */
+            local_semantic_signature: string;
+            /** Source Ref */
+            source_ref: number | string;
+            /** Stable Identity */
+            stable_identity: string | null;
+            /** Surface Type */
+            surface_type: string;
+            /** Topology */
+            topology: {
+                [key: string]: unknown;
+            };
+        };
+        /** GeometryIdentityTolerancePolicyResponse */
+        GeometryIdentityTolerancePolicyResponse: {
+            ambiguity_tolerances: components["schemas"]["GeometryIdentityToleranceResponse"];
+            canonical_quanta: components["schemas"]["GeometryIdentityCanonicalQuantaResponse"];
+            /** Policy Id */
+            policy_id: string;
+            semantic_tolerances: components["schemas"]["GeometryIdentityToleranceResponse"];
+        };
+        /** GeometryIdentityToleranceResponse */
+        GeometryIdentityToleranceResponse: {
+            /** Angle Rad */
+            angle_rad: number;
+            /** Area Mm2 */
+            area_mm2: number;
+            /** Linear Mm */
+            linear_mm: number;
         };
         /**
          * GravityLoad
@@ -1876,7 +2001,101 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Insufficient storage */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    read_geometry_identity_api_v1_model_versions__version_id__geometry_identity_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeometryIdentityArtifactResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Upload too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unsupported media type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Invalid request */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -1970,7 +2189,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -2068,7 +2287,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -2162,7 +2381,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -2256,7 +2475,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -2348,7 +2567,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -2444,7 +2663,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -2538,7 +2757,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -2634,7 +2853,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -2731,7 +2950,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -2825,7 +3044,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -2923,7 +3142,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -3017,7 +3236,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -3116,7 +3335,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -3215,7 +3434,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -3314,7 +3533,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -3413,7 +3632,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -3507,7 +3726,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -3605,7 +3824,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -3700,7 +3919,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Stored data integrity failure */
+            /** @description Persistence or stored-data integrity failure */
             500: {
                 headers: {
                     [name: string]: unknown;

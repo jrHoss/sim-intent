@@ -326,6 +326,12 @@ class IngestionService:
             if not isinstance(inventory, dict) or inventory.get("file_sha256") != upload.sha256:
                 _log_parser_diagnostic(trace_id, stderr, stderr_truncated)
                 raise _problem(422, "parser_crash", "Parser failed", "The isolated source parser returned an invalid response.")
+            if upload.kind == "step":
+                analytic_surfaces = result.get("geometry_identity_surfaces")
+                if not isinstance(analytic_surfaces, dict):
+                    _log_parser_diagnostic(trace_id, stderr, stderr_truncated)
+                    raise _problem(422, "parser_crash", "Parser failed", "The isolated source parser returned an invalid response.")
+                inventory["_geometry_identity_surfaces"] = analytic_surfaces
             inventory["source_name"] = upload.source_name
             return inventory
         except ApiProblem:

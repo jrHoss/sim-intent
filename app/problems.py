@@ -128,7 +128,7 @@ PROBLEM_RESPONSES = {
         413: "Upload too large",
         415: "Unsupported media type",
         422: "Invalid request",
-        500: "Stored data integrity failure",
+        500: "Persistence or stored-data integrity failure",
         507: "Insufficient storage",
     }.items()
 }

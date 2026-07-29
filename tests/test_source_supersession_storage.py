@@ -428,25 +428,52 @@ def test_storage_accounting_ignores_malformed_and_symlink_entries(tmp_path):
 
 
 def test_orphan_blob_is_reclaimed_before_next_quota_check(tmp_path):
-    first, second = minimal_inp(7), minimal_inp(8)
+    shared, orphan, publication = (
+        minimal_inp(6), minimal_inp(7), minimal_inp(8)
+    )
     config = LocalDataConfig(
-        tmp_path / "data", max_source_storage_bytes=len(second)
+        tmp_path / "data",
+        max_source_storage_bytes=len(shared) + len(publication),
     )
     with TestClient(create_app(tmp_path / "legacy", mode=RuntimeMode.TEST, data_config=config)) as client:
         persistence = client.app.state.persistence
-        with pytest.raises(LookupError):
-            persistence.create_model_version(
-                project_id=str(uuid.uuid4()), source_name="orphan.inp",
-                content=first, model_kind="inp",
-            )
-        assert persistence.blobs.source_bytes() == len(first)
         project = persistence.create_project("valid")
-        _, version = persistence.create_model_version(
-            project_id=project.id, source_name="valid.inp",
-            content=second, model_kind="inp",
+        model, shared_version = persistence.create_model_version(
+            project_id=project.id,
+            source_name="shared.inp",
+            content=shared,
+            model_kind="inp",
         )
-        assert version.source_sha256 == persistence.blobs.digest(second)
-        assert persistence.blobs.source_bytes() == len(second)
+        _, shared_duplicate = persistence.create_model_version(
+            project_id=project.id,
+            model_id=model.id,
+            source_name="shared-again.inp",
+            content=shared,
+            model_kind="inp",
+        )
+        assert shared_duplicate.blob_key == shared_version.blob_key
+        shared_path = persistence.blobs.path_for_key(shared_version.blob_key)
+
+        orphan_key = persistence.blobs.publish(
+            orphan, persistence.blobs.digest(orphan)
+        )
+        orphan_path = persistence.blobs.path_for_key(orphan_key)
+        assert persistence.blobs.source_bytes() == len(shared) + len(orphan)
+
+        _, version = persistence.create_model_version(
+            project_id=project.id,
+            model_id=model.id,
+            source_name="valid.inp",
+            content=publication,
+            model_kind="inp",
+        )
+        assert version.source_sha256 == persistence.blobs.digest(publication)
+        assert not orphan_path.exists()
+        assert shared_path.is_file()
+        assert persistence.read_version_bytes(shared_version) == shared
+        assert persistence.read_version_bytes(shared_duplicate) == shared
+        assert persistence.read_version_bytes(version) == publication
+        assert persistence.blobs.source_bytes() == len(shared) + len(publication)
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "1.5", "false"])
