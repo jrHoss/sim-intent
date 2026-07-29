@@ -11,6 +11,7 @@ import shutil
 import subprocess
 
 from fastapi.testclient import TestClient
+import pytest
 from sqlalchemy import func, select
 
 from app.config import LocalDataConfig
@@ -256,6 +257,10 @@ def test_durable_interpretation_unsupported_source_is_stable_and_side_effect_fre
         ).json() == []
 
 
+@pytest.mark.skipif(
+    shutil.which("node") is None and shutil.which("node.exe") is None,
+    reason="Node.js is unavailable in this Python-only test environment",
+)
 def test_executable_javascript_dom_state_harness():
     env = os.environ.copy()
     env["SIM_INTENT_ROOT"] = str(ROOT)
