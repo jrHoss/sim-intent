@@ -1360,6 +1360,130 @@ def create_app(
             )
             return response
 
+    @app.post(
+        "/api/v1/model-versions/{version_id}/interpret",
+        response_model=InterpretResponse,
+        responses=PROBLEM_RESPONSES,
+    )
+    async def interpret_durable_model_version(
+        version_id: uuid.UUID,
+        payload: InterpretRequest,
+        request: Request,
+    ) -> InterpretResponse:
+        """Return a grounded proposal without creating volatile session state.
+
+        The proposal is intentionally read-only.  A browser that accepts it
+        persists it through ``POST /api/v1/projects/{project_id}/setups``, so
+        the durable setup aggregate remains the sole owner of engineering
+        state and no ``SelectionSessionStore`` record is created or updated.
+        """
+
+        version, content = await durable_record(version_id)
+        if version.model_kind != "step":
+            raise ApiProblem(
+                status=422,
+                code="interpretation.step_required",
+                title="Interpretation unavailable",
+                detail=(
+                    "Natural-language geometry interpretation currently "
+                    "requires a STEP model. Use the engineering editor for "
+                    "native INP regions."
+                ),
+            )
+        with _materialized_model(
+            version.source_name, version.model_kind, content
+        ) as record:
+            upload = QuarantinedUpload(
+                record.path,
+                version.source_name,
+                version.model_kind,
+                version.size_bytes,
+                version.source_sha256,
+            )
+            inventory = FaceInventory.from_dict(
+                await app.state.ingestion.parse(
+                    upload, request.state.correlation_id
+                )
+            )
+            clicks = (
+                {
+                    0: ClickEvidence.for_inventory(
+                        inventory, payload.clicked_entity_ids
+                    )
+                }
+                if payload.clicked_entity_ids
+                else {}
+            )
+            try:
+                proposal = interpret_and_propose(
+                    instruction=payload.instruction,
+                    inventory=inventory,
+                    cylinders=analyze_cylinders(record.path),
+                    interpreter=app.state.interpreter,
+                    click_evidence_by_intent=clicks,
+                )
+            except UnsupportedMaterialInputError as exc:
+                raise ApiProblem(
+                    status=422,
+                    code=exc.code,
+                    title="Unsupported material request",
+                    detail=exc.safe_message,
+                    supported_mechanism=(
+                        "explicit_numeric_isotropic_properties"
+                    ),
+                ) from exc
+            except UnsupportedCapabilityError as exc:
+                raise ApiProblem(
+                    status=422,
+                    code=exc.code,
+                    title="Unsupported capability",
+                    detail=exc.safe_message,
+                ) from exc
+            except InterpreterProviderError as exc:
+                raise ApiProblem(
+                    status=503,
+                    code=exc.code,
+                    title="Interpretation provider unavailable",
+                    detail=exc.safe_message,
+                    retryable=True,
+                ) from exc
+            except InterpreterError as exc:
+                raise ApiProblem(
+                    status=422,
+                    code="llm_parse",
+                    title="Instruction could not be interpreted",
+                    detail=(
+                        "The instruction did not produce a supported typed "
+                        "engineering proposal."
+                    ),
+                    attempts=exc.attempts,
+                ) from exc
+            except (OrchestrationError, ValueError) as exc:
+                raise ApiProblem(
+                    status=422,
+                    code="interpretation.invalid",
+                    title="Instruction could not be grounded",
+                    detail=(
+                        "The instruction could not be grounded to the selected "
+                        "model within the supported engineering envelope."
+                    ),
+                ) from exc
+        return InterpretResponse(
+            mode="LIVE",
+            fallback=False,
+            state=(
+                "clarification" if proposal.clarifications else "proposed"
+            ),
+            instruction=payload.instruction,
+            interpretation=proposal.interpretation.model_dump(mode="json"),
+            grounding=proposal.grounding,
+            intent=proposal.intent,
+            clarification_count=0,
+            model_name=getattr(
+                app.state.interpreter.transport, "model", DEFAULT_MODEL
+            ),
+        )
+
     async def inventory_response(model_id: str) -> JSONResponse:
         record = app.state.model_store.get(model_id)
         inventory = app.state.model_store.inventory(record)
