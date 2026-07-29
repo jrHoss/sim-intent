@@ -28,6 +28,25 @@ from geom.parser import parse_step
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 SOURCE_HASH = "a" * 64
 MODEL_VERSION = "model-version-r4a"
+POLICY_NUMERIC_FIELDS = (
+    "semantic_linear_mm",
+    "semantic_area_mm2",
+    "semantic_angle_rad",
+    "ambiguity_linear_mm",
+    "ambiguity_area_mm2",
+    "ambiguity_angle_rad",
+    "position_quantum_mm",
+    "length_quantum_mm",
+    "area_quantum_mm2",
+    "angle_quantum_rad",
+    "direction_quantum",
+    "scalar_quantum",
+)
+SEMANTIC_TO_AMBIGUITY_FIELD = {
+    "semantic_linear_mm": "ambiguity_linear_mm",
+    "semantic_area_mm2": "ambiguity_area_mm2",
+    "semantic_angle_rad": "ambiguity_angle_rad",
+}
 
 
 def plane(
@@ -77,6 +96,63 @@ def cylinder(
             "full_circle": True,
         },
     )
+
+
+def partial_cylinder(ref, *, loops=1, axis=(0.0, 0.0, 1.0)):
+    face = cylinder(ref)
+    descriptors = dict(face.descriptors)
+    descriptors.update(
+        {
+            "axis": axis,
+            "angular_extent": math.pi,
+            "classification": "fillet_partial",
+            "full_circle": False,
+        }
+    )
+    return replace(
+        face,
+        boundary_loop_count=loops,
+        descriptors=descriptors,
+    )
+
+
+def cone(ref, *, loops=1, axis=(0.0, 0.0, 1.0)):
+    return GeometryFaceInput(
+        source_ref=ref,
+        surface_type="Cone",
+        area=12.0,
+        centroid=(0.0, 0.0, 0.0),
+        boundary_loop_count=loops,
+        descriptors={
+            "axis": axis,
+            "apex": (0.0, 0.0, 0.0),
+            "semi_angle": 0.25,
+        },
+    )
+
+
+def torus(ref, *, loops=0, axis=(0.0, 0.0, 1.0)):
+    return GeometryFaceInput(
+        source_ref=ref,
+        surface_type="Torus",
+        area=12.0,
+        centroid=(0.0, 0.0, 0.0),
+        boundary_loop_count=loops,
+        descriptors={
+            "center": (0.0, 0.0, 0.0),
+            "axis": axis,
+            "major_radius": 6.0,
+            "minor_radius": 2.0,
+        },
+    )
+
+
+def policy_with_numeric_field(field_name, value):
+    values = {field_name: value}
+    ambiguity_field = SEMANTIC_TO_AMBIGUITY_FIELD.get(field_name)
+    if ambiguity_field is not None:
+        values[ambiguity_field] = value
+    return TolerancePolicy(**values)
 
 
 def artifact(faces, **overrides):
@@ -205,7 +281,11 @@ def test_every_supported_surface_has_a_versioned_canonical_descriptor(
         area=12.0,
         centroid=[0.0, 0.0, 0.0],
         normal=normal,
-        boundary_loop_count=0 if surface_type in {"Sphere", "Torus"} else 1,
+        boundary_loop_count=(
+            0
+            if surface_type in {"Sphere", "Torus"}
+            else (2 if surface_type == "Cylinder" else 1)
+        ),
         descriptors=descriptors,
         bbox_min=None if bbox is None else bbox[0],
         bbox_max=None if bbox is None else bbox[1],
@@ -414,6 +494,496 @@ def test_values_safely_inside_quantum_match_and_outside_semantic_tolerance_do_no
 
     assert base.identity_candidate == inside.identity_candidate
     assert base.identity_candidate != outside.identity_candidate
+
+
+@pytest.mark.parametrize("boundary", [0.5e-6, -0.5e-6])
+def test_r4a_001_nextafter_quantum_boundary_noise_has_bounded_identity(boundary):
+    immediately_below = artifact(
+        [
+            plane(
+                1,
+                centroid=(math.nextafter(boundary, -math.inf), 0.0, 0.0),
+            )
+        ]
+    )
+    immediately_above = artifact(
+        [
+            plane(
+                1,
+                centroid=(math.nextafter(boundary, math.inf), 0.0, 0.0),
+            )
+        ]
+    )
+
+    below_face = immediately_below.faces[0]
+    above_face = immediately_above.faces[0]
+    assert below_face.canonical_geometry == above_face.canonical_geometry
+    assert below_face.identity_candidate == above_face.identity_candidate
+    assert below_face.stable_identity is None
+    assert above_face.stable_identity is None
+    assert below_face.identity_quality == "bounded_representation_guard"
+    assert above_face.identity_quality == "bounded_representation_guard"
+    assert below_face.evidence["representation_noise_guard"] == {
+        "policy": "two_input_ulps_at_half_quantum",
+        "stable_identity_withheld": True,
+    }
+    assert (
+        below_face.evidence["representation_noise_guard"]
+        == above_face.evidence["representation_noise_guard"]
+    )
+    assert (
+        immediately_below.collision_groups[0]["reason"]
+        == immediately_above.collision_groups[0]["reason"]
+        == "representation_noise_guard_requires_confirmation"
+    )
+
+
+@pytest.mark.parametrize("boundary", [0.5e-6, -0.5e-6])
+def test_r4a_001_values_outside_representation_guard_remain_distinguishable(boundary):
+    lower = boundary
+    upper = boundary
+    for _ in range(4):
+        lower = math.nextafter(lower, -math.inf)
+        upper = math.nextafter(upper, math.inf)
+
+    lower_face = artifact([plane(1, centroid=(lower, 0.0, 0.0))]).faces[0]
+    upper_face = artifact([plane(1, centroid=(upper, 0.0, 0.0))]).faces[0]
+
+    assert lower_face.identity_candidate != upper_face.identity_candidate
+    assert lower_face.stable_identity is not None
+    assert upper_face.stable_identity is not None
+    assert "representation_noise_guard" not in lower_face.evidence
+    assert "representation_noise_guard" not in upper_face.evidence
+
+
+def test_r4a_002_oversized_integer_has_sanitized_numeric_failure():
+    failures = []
+    for _ in range(2):
+        with pytest.raises(GeometryIdentityError) as caught:
+            artifact([plane(1, area=10**400)])
+        failures.append((caught.value.code, str(caught.value)))
+
+    assert failures == [
+        (
+            "geometry.numeric_invalid",
+            "geometry.numeric_invalid: area must be representable as a finite number",
+        ),
+    ] * 2
+
+
+@pytest.mark.parametrize(
+    ("normal", "expected"),
+    [
+        ((1.0e308, 1.0e308, 0.0), [707106781, 707106781, 0]),
+        ((5.0e-324, 0.0, 0.0), [1000000000, 0, 0]),
+    ],
+)
+def test_r4a_002_extreme_finite_nonzero_vectors_normalize_safely(normal, expected):
+    result = artifact([plane(1, normal=normal)]).faces[0]
+
+    assert result.canonical_geometry["normal_q"] == expected
+    assert any(result.canonical_geometry["normal_q"])
+
+
+@pytest.mark.parametrize(
+    ("normal", "code", "message"),
+    [
+        (
+            (float("inf"), 0.0, 0.0),
+            "geometry.numeric_non_finite",
+            "normal must be finite",
+        ),
+        (
+            (float("nan"), 0.0, 0.0),
+            "geometry.numeric_non_finite",
+            "normal must be finite",
+        ),
+        (
+            (0.0, 0.0, 0.0),
+            "geometry.vector_zero",
+            "normal cannot be a zero vector",
+        ),
+    ],
+)
+def test_r4a_002_invalid_directions_have_stable_sanitized_failures(
+    normal, code, message
+):
+    with pytest.raises(GeometryIdentityError) as caught:
+        artifact([plane(1, normal=normal)])
+
+    assert caught.value.code == code
+    assert str(caught.value) == f"{code}: {message}"
+    assert "0x" not in str(caught.value)
+    assert "C:\\" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("surface_type", "field_name"),
+    [
+        ("plane", "normal"),
+        ("cylinder", "axis"),
+        ("cone", "axis"),
+        ("torus", "axis"),
+    ],
+)
+def test_r4a_002_every_directional_surface_rejects_quantized_zero(
+    surface_type, field_name
+):
+    direction = (1.0, 1.0, 1.0)
+    if surface_type == "plane":
+        face = plane(1, normal=direction)
+    elif surface_type == "cylinder":
+        face = cylinder(1)
+        face = replace(
+            face,
+            descriptors={**face.descriptors, "axis": direction},
+        )
+    elif surface_type == "cone":
+        face = cone(1, axis=direction)
+    else:
+        face = torus(1, axis=direction)
+
+    policy = TolerancePolicy(direction_quantum=3.0)
+    failures = []
+    for _ in range(2):
+        with pytest.raises(GeometryIdentityError) as caught:
+            build_geometry_identity(
+                model_version_id=MODEL_VERSION,
+                source_sha256=SOURCE_HASH,
+                faces=[face],
+                tolerance_policy=policy,
+            )
+        failures.append((caught.value.code, str(caught.value)))
+
+    expected = (
+        "geometry.vector_quantized_zero",
+        "geometry.vector_quantized_zero: "
+        f"{field_name} cannot become zero during canonicalization",
+    )
+    assert failures == [expected, expected]
+    assert "0x" not in failures[0][1]
+    assert "C:\\" not in failures[0][1]
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        (1.7e308, -1.7e308),
+        (-1.7e308, 1.7e308),
+    ],
+)
+def test_r4a_002_extreme_finite_scalar_comparisons_are_not_equal(left, right):
+    assert not semantically_equivalent(left, right)
+
+
+def test_r4a_002_extreme_area_ambiguity_comparison_is_overflow_safe():
+    faces = [
+        plane("larger", area=1.7e308, adjacent=("smaller",)),
+        plane("smaller", area=1.6e308, adjacent=("larger",)),
+    ]
+
+    first = artifact(faces)
+    reordered = artifact(list(reversed(faces)))
+    identities = by_ref(first)
+
+    assert first.canonical_bytes() == reordered.canonical_bytes()
+    assert (
+        identities["larger"].identity_candidate
+        != identities["smaller"].identity_candidate
+    )
+    assert (
+        identities["larger"].collision_group_id
+        != identities["smaller"].collision_group_id
+    )
+
+
+def test_r4a_002_extreme_centroid_ambiguity_is_reordering_deterministic():
+    positive = plane(
+        "positive",
+        centroid=(1.7e308, 0.0, 0.0),
+        adjacent=("center",),
+    )
+    negative = plane(
+        "negative",
+        centroid=(-1.7e308, 0.0, 0.0),
+        adjacent=("center",),
+    )
+    center = plane(
+        "center",
+        centroid=(0.0, 1.0, 0.0),
+        normal=(0.0, 1.0, 0.0),
+        adjacent=("positive", "negative"),
+    )
+
+    first = artifact([positive, center, negative])
+    reordered = artifact(
+        [
+            negative,
+            replace(center, adjacent_refs=("negative", "positive")),
+            positive,
+        ]
+    )
+    identities = by_ref(first)
+
+    assert first.canonical_bytes() == reordered.canonical_bytes()
+    assert (
+        identities["positive"].identity_candidate
+        != identities["negative"].identity_candidate
+    )
+    assert (
+        identities["positive"].collision_group_id
+        != identities["negative"].collision_group_id
+    )
+
+
+def test_r4a_002_finite_axis_point_overflow_has_sanitized_failure():
+    face = cylinder(1)
+    face = replace(
+        face,
+        descriptors={
+            **face.descriptors,
+            "axis": (1.0, 1.0, 0.0),
+            "axis_point": (1.7e308, 1.7e308, 0.0),
+        },
+    )
+
+    with pytest.raises(GeometryIdentityError) as caught:
+        artifact([face])
+
+    assert caught.value.code == "geometry.numeric_non_finite"
+    assert str(caught.value) == (
+        "geometry.numeric_non_finite: "
+        "axis-point canonicalization must remain finite"
+    )
+    assert "1.7e+308" not in str(caught.value)
+    assert "C:\\" not in str(caught.value)
+
+
+def test_r4a_003_zero_loop_finite_plane_is_rejected():
+    with pytest.raises(GeometryIdentityError) as caught:
+        artifact([plane(1, loops=0)])
+
+    assert caught.value.code == "geometry.surface_topology_inconsistent"
+    assert str(caught.value) == (
+        "geometry.surface_topology_inconsistent: "
+        "a finite positive-area plane requires at least one boundary loop"
+    )
+
+
+def test_r4a_003_zero_loop_partial_cylinder_is_rejected():
+    with pytest.raises(GeometryIdentityError) as caught:
+        artifact([partial_cylinder(1, loops=0)])
+
+    assert caught.value.code == "geometry.surface_topology_inconsistent"
+    assert str(caught.value) == (
+        "geometry.surface_topology_inconsistent: "
+        "a finite non-full cylindrical patch requires at least one boundary loop"
+    )
+
+
+@pytest.mark.parametrize("loops", [1, 3])
+def test_r4a_003_partial_cylinder_with_boundary_loops_is_supported(loops):
+    result = artifact([partial_cylinder(1, loops=loops)]).faces[0]
+
+    assert result.canonical_geometry["boundary_loop_count"] == loops
+    assert result.stable_identity is not None
+
+
+def test_r4a_003_zero_loop_finite_cone_is_rejected():
+    with pytest.raises(GeometryIdentityError) as caught:
+        artifact([cone(1, loops=0)])
+
+    assert caught.value.code == "geometry.surface_topology_inconsistent"
+    assert str(caught.value) == (
+        "geometry.surface_topology_inconsistent: "
+        "a finite conical patch requires at least one boundary loop"
+    )
+
+
+@pytest.mark.parametrize("loops", [1, 2])
+def test_r4a_003_finite_cone_with_boundary_loops_is_supported(loops):
+    result = artifact([cone(1, loops=loops)]).faces[0]
+
+    assert result.canonical_geometry["boundary_loop_count"] == loops
+    assert result.stable_identity is not None
+
+
+@pytest.mark.parametrize("loops", [0, 1, 3])
+def test_r4a_003_full_finite_cylinder_requires_two_loops(loops):
+    with pytest.raises(GeometryIdentityError) as caught:
+        artifact([replace(cylinder(1), boundary_loop_count=loops)])
+
+    assert caught.value.code == "geometry.surface_topology_inconsistent"
+    assert str(caught.value) == (
+        "geometry.surface_topology_inconsistent: "
+        "a full finite cylindrical lateral surface requires two boundary loops"
+    )
+
+
+def test_r4a_003_valid_plane_and_full_finite_cylinder_remain_supported():
+    assert artifact([plane(1, loops=1)]).faces[0].stable_identity is not None
+    result = artifact([cylinder(1)]).faces[0]
+
+    assert result.canonical_geometry["boundary_loop_count"] == 2
+    assert result.stable_identity is not None
+
+
+@pytest.mark.parametrize(
+    ("surface_type", "descriptors"),
+    [
+        ("Sphere", {"center": [0, 0, 0], "radius": 4}),
+        (
+            "Torus",
+            {
+                "center": [0, 0, 0],
+                "axis": [0, 0, 1],
+                "major_radius": 6,
+                "minor_radius": 2,
+            },
+        ),
+    ],
+)
+def test_r4a_003_valid_closed_surfaces_allow_zero_boundary_loops(
+    surface_type, descriptors
+):
+    face = GeometryFaceInput(
+        source_ref=1,
+        surface_type=surface_type,
+        area=10.0,
+        centroid=(0.0, 0.0, 0.0),
+        boundary_loop_count=0,
+        descriptors=descriptors,
+    )
+
+    result = artifact([face]).faces[0]
+    assert result.identity_quality == "analytic"
+    assert result.stable_identity is not None
+
+
+def test_r4a_004_equivalent_policy_number_spellings_are_byte_and_hash_identical():
+    integer = TolerancePolicy(position_quantum_mm=1)
+    floating = TolerancePolicy(position_quantum_mm=1.0)
+    scientific = TolerancePolicy(length_quantum_mm=1e-6)
+    decimal = TolerancePolicy(length_quantum_mm=0.000001)
+
+    assert canonical_json_bytes(integer.to_dict()) == canonical_json_bytes(
+        floating.to_dict()
+    )
+    assert canonical_json_bytes(scientific.to_dict()) == canonical_json_bytes(
+        decimal.to_dict()
+    )
+
+    integer_artifact = build_geometry_identity(
+        model_version_id=MODEL_VERSION,
+        source_sha256=SOURCE_HASH,
+        faces=[plane(1)],
+        tolerance_policy=integer,
+    )
+    floating_artifact = build_geometry_identity(
+        model_version_id=MODEL_VERSION,
+        source_sha256=SOURCE_HASH,
+        faces=[plane(1)],
+        tolerance_policy=floating,
+    )
+    assert integer_artifact.canonical_bytes() == floating_artifact.canonical_bytes()
+    assert integer_artifact.artifact_sha256 == floating_artifact.artifact_sha256
+
+
+@pytest.mark.parametrize("field_name", POLICY_NUMERIC_FIELDS)
+@pytest.mark.parametrize(
+    "value",
+    [1, 1.0, 2**53, 2**53 + 2],
+    ids=["integer", "float", "large-exact", "large-exact-above-boundary"],
+)
+def test_r4a_004_lossless_numbers_are_accepted_for_every_policy_field(
+    field_name, value
+):
+    policy = policy_with_numeric_field(field_name, value)
+
+    assert getattr(policy, field_name) == float(value)
+    assert isinstance(getattr(policy, field_name), float)
+
+
+@pytest.mark.parametrize("field_name", POLICY_NUMERIC_FIELDS)
+@pytest.mark.parametrize(
+    "value",
+    [2**53 + 1, True, False, float("inf"), float("-inf"), float("nan")],
+    ids=["lossy-integer", "true", "false", "positive-inf", "negative-inf", "nan"],
+)
+def test_r4a_004_lossy_boolean_and_nonfinite_values_are_rejected_for_every_field(
+    field_name, value
+):
+    with pytest.raises(GeometryIdentityError) as caught:
+        policy_with_numeric_field(field_name, value)
+
+    assert caught.value.code == "geometry.tolerance_policy_invalid"
+    assert str(caught.value) == (
+        "geometry.tolerance_policy_invalid: "
+        "all tolerance values must be finite positive numbers"
+    )
+    assert "0x" not in str(caught.value)
+    assert "C:\\" not in str(caught.value)
+
+
+@pytest.mark.parametrize("value", [0, -1, 10**400, "1e-6", None])
+def test_r4a_004_other_invalid_policy_values_have_one_sanitized_failure(value):
+    with pytest.raises(GeometryIdentityError) as caught:
+        TolerancePolicy(position_quantum_mm=value)
+
+    assert caught.value.code == "geometry.tolerance_policy_invalid"
+    assert str(caught.value) == (
+        "geometry.tolerance_policy_invalid: "
+        "all tolerance values must be finite positive numbers"
+    )
+    assert "0x" not in str(caught.value)
+    assert "C:\\" not in str(caught.value)
+
+
+def test_r4a_004_lossy_integer_is_rejected_before_artifact_hashing(monkeypatch):
+    def forbidden_hash(*_args, **_kwargs):
+        raise AssertionError("artifact hashing must not run")
+
+    monkeypatch.setattr("geom.identity.hashlib.sha256", forbidden_hash)
+
+    with pytest.raises(GeometryIdentityError) as caught:
+        build_geometry_identity(
+            model_version_id=MODEL_VERSION,
+            source_sha256=SOURCE_HASH,
+            faces=[plane(1)],
+            tolerance_policy=TolerancePolicy(position_quantum_mm=2**53 + 1),
+        )
+
+    assert caught.value.code == "geometry.tolerance_policy_invalid"
+    assert str(caught.value) == (
+        "geometry.tolerance_policy_invalid: "
+        "all tolerance values must be finite positive numbers"
+    )
+    assert "0x" not in str(caught.value)
+    assert "C:\\" not in str(caught.value)
+
+
+def test_r4a_004_distinct_exact_policies_remain_byte_and_hash_distinguishable():
+    lower = TolerancePolicy(position_quantum_mm=2**53)
+    upper = TolerancePolicy(position_quantum_mm=2**53 + 2)
+
+    assert canonical_json_bytes(lower.to_dict()) != canonical_json_bytes(
+        upper.to_dict()
+    )
+
+    lower_artifact = build_geometry_identity(
+        model_version_id=MODEL_VERSION,
+        source_sha256=SOURCE_HASH,
+        faces=[plane(1)],
+        tolerance_policy=lower,
+    )
+    upper_artifact = build_geometry_identity(
+        model_version_id=MODEL_VERSION,
+        source_sha256=SOURCE_HASH,
+        faces=[plane(1)],
+        tolerance_policy=upper,
+    )
+    assert lower_artifact.canonical_bytes() != upper_artifact.canonical_bytes()
+    assert lower_artifact.artifact_sha256 != upper_artifact.artifact_sha256
 
 
 def test_stable_hash_has_explicit_domain_separation():

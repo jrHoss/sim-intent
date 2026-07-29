@@ -1,8 +1,10 @@
 """Deterministic, versioned face identity within one model version.
 
-The core deliberately separates three numerical concepts:
+The core deliberately separates four numerical concepts:
 
 * semantic tolerances answer engineering comparison questions;
+* representation-noise guards withhold uniqueness at unresolved float
+  boundaries;
 * canonical quanta turn validated numbers into platform-stable integers;
 * ambiguity tolerances conservatively decide whether evidence can distinguish
   two candidates.
@@ -23,7 +25,7 @@ import math
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from decimal import Decimal, ROUND_HALF_EVEN
+from fractions import Fraction
 from typing import Any, Mapping, Sequence
 
 from geom.cylinders import CylinderRecord
@@ -69,6 +71,47 @@ class TolerancePolicy:
     angle_quantum_rad: float = 1.0e-8
     direction_quantum: float = 1.0e-9
     scalar_quantum: float = 1.0e-9
+
+    def __post_init__(self) -> None:
+        numeric_fields = (
+            "semantic_linear_mm",
+            "semantic_area_mm2",
+            "semantic_angle_rad",
+            "ambiguity_linear_mm",
+            "ambiguity_area_mm2",
+            "ambiguity_angle_rad",
+            "position_quantum_mm",
+            "length_quantum_mm",
+            "area_quantum_mm2",
+            "angle_quantum_rad",
+            "direction_quantum",
+            "scalar_quantum",
+        )
+        for name in numeric_fields:
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise GeometryIdentityError(
+                    "geometry.tolerance_policy_invalid",
+                    "all tolerance values must be finite positive numbers",
+                )
+            try:
+                normalized = float(value)
+            except (OverflowError, TypeError, ValueError) as exc:
+                raise GeometryIdentityError(
+                    "geometry.tolerance_policy_invalid",
+                    "all tolerance values must be finite positive numbers",
+                ) from exc
+            if not math.isfinite(normalized) or normalized <= 0:
+                raise GeometryIdentityError(
+                    "geometry.tolerance_policy_invalid",
+                    "all tolerance values must be finite positive numbers",
+                )
+            if isinstance(value, int) and int(normalized) != value:
+                raise GeometryIdentityError(
+                    "geometry.tolerance_policy_invalid",
+                    "all tolerance values must be finite positive numbers",
+                )
+            object.__setattr__(self, name, normalized)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -219,7 +262,9 @@ def semantically_equivalent(
             "geometry.tolerance_quantity_invalid",
             "quantity must be linear, area, or angle",
         ) from exc
-    return abs(a - b) <= tolerance
+    return abs(Fraction.from_float(a) - Fraction.from_float(b)) <= (
+        Fraction.from_float(tolerance)
+    )
 
 
 def build_geometry_identity(
@@ -398,7 +443,7 @@ def build_geometry_identity(
     collision_groups: list[dict[str, Any]] = []
     group_ids: dict[tuple[str, str], str] = {}
     for ambiguity_label, members in sorted(members_by_ambiguity.items()):
-        bounded = any(quality[key] == "bounded_fallback" for key in members)
+        bounded = any(quality[key] != "analytic" for key in members)
         if len(members) > 1 or bounded:
             group_id = stable_hash(
                 {
@@ -421,7 +466,11 @@ def build_geometry_identity(
                         original_by_key[key] for key in sorted(members)
                     ],
                     "reason": (
-                        "bounded_fallback_requires_confirmation"
+                        (
+                            "representation_noise_guard_requires_confirmation"
+                            if quality[members[0]] == "bounded_representation_guard"
+                            else "bounded_fallback_requires_confirmation"
+                        )
                         if len(members) == 1
                         else (
                             "geometrically_and_topologically_indistinguishable"
@@ -445,6 +494,16 @@ def build_geometry_identity(
             "neighbor_semantic_signatures": sorted(colors[n] for n in adjacency[key]),
         }
         ambiguous = key in group_ids
+        evidence = {
+            "source_local_only": True,
+            "repeated_feature_signature": repeated_key,
+            "repeated_feature_group_size": repeated_group_size,
+        }
+        if quality[key] == "bounded_representation_guard":
+            evidence["representation_noise_guard"] = {
+                "policy": "two_input_ulps_at_half_quantum",
+                "stable_identity_withheld": True,
+            }
         face_identities.append(
             FaceIdentity(
                 source_ref=original_by_key[key],
@@ -458,11 +517,7 @@ def build_geometry_identity(
                 collision_group_id=group_ids.get(key),
                 ambiguous=ambiguous,
                 identity_quality=quality[key],
-                evidence={
-                    "source_local_only": True,
-                    "repeated_feature_signature": repeated_key,
-                    "repeated_feature_group_size": repeated_group_size,
-                },
+                evidence=evidence,
             )
         )
 
@@ -540,18 +595,21 @@ def _validate_binding(model_version_id: str, source_sha256: str) -> None:
 
 
 def _validate_policy(policy: TolerancePolicy) -> None:
-    for value in policy.to_dict()["semantic_tolerances"].values():
-        if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
-            raise GeometryIdentityError(
-                "geometry.tolerance_policy_invalid",
-                "all tolerance values must be finite and positive",
-            )
-    for section in ("ambiguity_tolerances", "canonical_quanta"):
+    for section in (
+        "semantic_tolerances",
+        "ambiguity_tolerances",
+        "canonical_quanta",
+    ):
         for value in policy.to_dict()[section].values():
-            if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, float)
+                or not math.isfinite(value)
+                or value <= 0
+            ):
                 raise GeometryIdentityError(
                     "geometry.tolerance_policy_invalid",
-                    "all tolerance values must be finite and positive",
+                    "all tolerance values must be finite positive numbers",
                 )
     if (
         policy.ambiguity_linear_mm < policy.semantic_linear_mm
@@ -578,12 +636,89 @@ def _source_key(value: int | str) -> tuple[str, str]:
     return ("integer", str(value)) if isinstance(value, int) else ("string", value)
 
 
+class _QuantizedInteger(int):
+    """Canonical integer carrying non-serialized boundary-guard evidence."""
+
+    representation_guarded: bool
+
+    def __new__(cls, value: int, *, representation_guarded: bool = False):
+        instance = super().__new__(cls, value)
+        instance.representation_guarded = representation_guarded
+        return instance
+
+
+def _round_half_even(value: Fraction) -> int:
+    lower, remainder = divmod(value.numerator, value.denominator)
+    comparison = 2 * remainder - value.denominator
+    if comparison < 0:
+        return lower
+    if comparison > 0:
+        return lower + 1
+    return lower if lower % 2 == 0 else lower + 1
+
+
+def _contains_representation_guard(value: Any) -> bool:
+    if isinstance(value, _QuantizedInteger):
+        return value.representation_guarded
+    if isinstance(value, Mapping):
+        return any(_contains_representation_guard(item) for item in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return any(_contains_representation_guard(item) for item in value)
+    return False
+
+
+def _plain_canonical_numbers(value: Any) -> Any:
+    if isinstance(value, _QuantizedInteger):
+        return int(value)
+    if isinstance(value, Mapping):
+        return {
+            name: _plain_canonical_numbers(item) for name, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_plain_canonical_numbers(item) for item in value]
+    return value
+
+
+def _normalized_vector(
+    values: Sequence[float], *, field_name: str, unoriented: bool
+) -> list[float]:
+    scale = max(abs(component) for component in values)
+    if scale == 0:
+        raise GeometryIdentityError(
+            "geometry.vector_zero", f"{field_name} cannot be a zero vector"
+        )
+    scaled = [component / scale for component in values]
+    scaled_norm = math.hypot(*scaled)
+    if not math.isfinite(scaled_norm) or scaled_norm == 0:
+        raise GeometryIdentityError(
+            "geometry.numeric_non_finite",
+            f"{field_name} normalization must remain finite",
+        )
+    normalized = [component / scaled_norm for component in scaled]
+    if not all(math.isfinite(component) for component in normalized):
+        raise GeometryIdentityError(
+            "geometry.numeric_non_finite",
+            f"{field_name} normalization must remain finite",
+        )
+    if unoriented:
+        dominant = max(range(3), key=lambda index: abs(normalized[index]))
+        if normalized[dominant] < 0:
+            normalized = [-component for component in normalized]
+    return normalized
+
+
 def _finite_number(value: Any, field_name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise GeometryIdentityError(
             "geometry.descriptor_invalid", f"{field_name} must be numeric"
         )
-    result = float(value)
+    try:
+        result = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise GeometryIdentityError(
+            "geometry.numeric_invalid",
+            f"{field_name} must be representable as a finite number",
+        ) from exc
     if not math.isfinite(result):
         raise GeometryIdentityError(
             "geometry.numeric_non_finite", f"{field_name} must be finite"
@@ -592,12 +727,28 @@ def _finite_number(value: Any, field_name: str) -> float:
 
 
 def _quantize(value: Any, quantum: float, field_name: str) -> int:
+    """Quantize exactly, guarding one-input-ULP noise at half-quantum boundaries.
+
+    Comparison tolerances remain independent of this representation policy.
+    Inputs within two ULPs of a rounding boundary use that boundary's
+    half-even bucket and carry bounded-instability evidence, preventing a
+    unique stable identity. Values outside the guard use exact rational
+    half-even rounding and remain distinguishable.
+    """
+
     number = _finite_number(value, field_name)
-    return int(
-        (Decimal(str(number)) / Decimal(str(quantum))).to_integral_value(
-            rounding=ROUND_HALF_EVEN
-        )
-    )
+    exact_number = Fraction.from_float(number)
+    exact_quantum = Fraction.from_float(quantum)
+    scaled = exact_number / exact_quantum
+    lower = scaled.numerator // scaled.denominator
+    boundary = exact_quantum * Fraction(2 * lower + 1, 2)
+    guard_radius = 2 * Fraction.from_float(math.ulp(number))
+    guarded = abs(exact_number - boundary) <= guard_radius
+    if guarded:
+        quantized = lower if lower % 2 == 0 else lower + 1
+    else:
+        quantized = _round_half_even(scaled)
+    return _QuantizedInteger(quantized, representation_guarded=guarded)
 
 
 def _vector(
@@ -608,6 +759,14 @@ def _vector(
     unit: bool = False,
     unoriented: bool = False,
 ) -> list[int]:
+    if unit:
+        _, quantized = _canonical_direction(
+            value,
+            field_name=field_name,
+            quantum=quantum,
+            unoriented=unoriented,
+        )
+        return quantized
     if (
         not isinstance(value, Sequence)
         or isinstance(value, (str, bytes))
@@ -618,21 +777,18 @@ def _vector(
             f"{field_name} must contain exactly three numeric components",
         )
     values = [_finite_number(component, field_name) for component in value]
-    if unit:
-        norm = math.sqrt(math.fsum(component * component for component in values))
-        if norm == 0:
-            raise GeometryIdentityError(
-                "geometry.vector_zero", f"{field_name} cannot be a zero vector"
-            )
-        values = [component / norm for component in values]
-        if unoriented:
-            dominant = max(range(3), key=lambda index: abs(values[index]))
-            if values[dominant] < 0:
-                values = [-component for component in values]
     return [_quantize(component, quantum, field_name) for component in values]
 
 
-def _unit_values(value: Any, *, field_name: str, unoriented: bool) -> list[float]:
+def _canonical_direction(
+    value: Any,
+    *,
+    field_name: str,
+    quantum: float,
+    unoriented: bool,
+) -> tuple[list[float], list[int]]:
+    """Validate, normalize, and safely quantize one orientation descriptor."""
+
     if (
         not isinstance(value, Sequence)
         or isinstance(value, (str, bytes))
@@ -643,17 +799,48 @@ def _unit_values(value: Any, *, field_name: str, unoriented: bool) -> list[float
             f"{field_name} must contain exactly three numeric components",
         )
     values = [_finite_number(component, field_name) for component in value]
-    norm = math.sqrt(math.fsum(component * component for component in values))
-    if norm == 0:
+    normalized = _normalized_vector(
+        values, field_name=field_name, unoriented=unoriented
+    )
+    quantized = [
+        _quantize(component, quantum, field_name) for component in normalized
+    ]
+    if all(component == 0 for component in quantized):
         raise GeometryIdentityError(
-            "geometry.vector_zero", f"{field_name} cannot be a zero vector"
+            "geometry.vector_quantized_zero",
+            f"{field_name} cannot become zero during canonicalization",
         )
-    values = [component / norm for component in values]
-    if unoriented:
-        dominant = max(range(3), key=lambda index: abs(values[index]))
-        if values[dominant] < 0:
-            values = [-component for component in values]
-    return values
+    return normalized, quantized
+
+
+def _validate_analytic_boundary_topology(
+    surface_type: str,
+    boundary_loop_count: int,
+    *,
+    full_cylinder: bool | None,
+) -> None:
+    if surface_type == "plane" and boundary_loop_count == 0:
+        raise GeometryIdentityError(
+            "geometry.surface_topology_inconsistent",
+            "a finite positive-area plane requires at least one boundary loop",
+        )
+    if surface_type == "cone" and boundary_loop_count == 0:
+        raise GeometryIdentityError(
+            "geometry.surface_topology_inconsistent",
+            "a finite conical patch requires at least one boundary loop",
+        )
+    if surface_type != "cylinder":
+        return
+    if full_cylinder is True and boundary_loop_count != 2:
+        raise GeometryIdentityError(
+            "geometry.surface_topology_inconsistent",
+            "a full finite cylindrical lateral surface requires two boundary loops",
+        )
+    if full_cylinder is False and boundary_loop_count == 0:
+        raise GeometryIdentityError(
+            "geometry.surface_topology_inconsistent",
+            "a finite non-full cylindrical patch requires at least one boundary loop",
+        )
 
 
 def _positive(value: Any, field_name: str) -> float:
@@ -747,6 +934,7 @@ def _canonicalize_face(
 
     shape: dict[str, Any]
     repeated_key: str | None = None
+    full_cylinder: bool | None = None
     if surface_type == "plane":
         _reject_unknown_descriptors(descriptors, set())
         shape = {}
@@ -773,9 +961,10 @@ def _canonicalize_face(
             "full_circle",
         ):
             _required_descriptor(descriptors, required_name, surface_type)
-        axis_values = _unit_values(
+        axis_values, axis_q = _canonical_direction(
             descriptors["axis"],
             field_name="axis",
+            quantum=policy.direction_quantum,
             unoriented=True,
         )
         axis_point_value = descriptors["axis_point"]
@@ -791,19 +980,29 @@ def _canonicalize_face(
         axis_point_values = [
             _finite_number(component, "axis_point") for component in axis_point_value
         ]
-        axial_offset = math.fsum(
-            component * direction
-            for component, direction in zip(axis_point_values, axis_values)
-        )
-        canonical_axis_point = [
-            component - axial_offset * direction
-            for component, direction in zip(axis_point_values, axis_values)
-        ]
+        try:
+            axial_offset = math.fsum(
+                component * direction
+                for component, direction in zip(axis_point_values, axis_values)
+            )
+            canonical_axis_point = [
+                component - axial_offset * direction
+                for component, direction in zip(axis_point_values, axis_values)
+            ]
+        except OverflowError as exc:
+            raise GeometryIdentityError(
+                "geometry.numeric_non_finite",
+                "axis-point canonicalization must remain finite",
+            ) from exc
+        if not math.isfinite(axial_offset) or not all(
+            math.isfinite(component) for component in canonical_axis_point
+        ):
+            raise GeometryIdentityError(
+                "geometry.numeric_non_finite",
+                "axis-point canonicalization must remain finite",
+            )
         shape = {
-            "axis_q": [
-                _quantize(component, policy.direction_quantum, "axis")
-                for component in axis_values
-            ],
+            "axis_q": axis_q,
             "axis_point_q": _vector(
                 canonical_axis_point,
                 field_name="axis_point",
@@ -864,6 +1063,7 @@ def _canonicalize_face(
                 "geometry.descriptor_inconsistent",
                 "fillet_partial classification requires a partial patch",
             )
+        full_cylinder = full_circle
         shape["classification"] = classification
         shape["full_circle"] = full_circle
         if shape.get("classification") == "hole":
@@ -1010,11 +1210,23 @@ def _canonicalize_face(
                     "geometry.descriptor_invalid", "rational must be boolean"
                 )
             shape["rational"] = descriptors["rational"]
+    _validate_analytic_boundary_topology(
+        surface_type,
+        face.boundary_loop_count,
+        full_cylinder=full_cylinder,
+    )
     common["surface"] = shape
+    analytic = surface_type in _ANALYTIC_SURFACES
+    guarded = _contains_representation_guard(common)
+    common = _plain_canonical_numbers(common)
     return (
         common,
         surface_type,
-        "analytic" if surface_type in _ANALYTIC_SURFACES else "bounded_fallback",
+        (
+            "bounded_representation_guard"
+            if guarded
+            else ("analytic" if analytic else "bounded_fallback")
+        ),
         repeated_key,
     )
 
@@ -1130,9 +1342,11 @@ def _geometry_within_ambiguity(
         or left["boundary_loop_count"] != right["boundary_loop_count"]
     ):
         return False
-    if (
-        abs(left["area_q"] - right["area_q"]) * policy.area_quantum_mm2
-        > policy.ambiguity_area_mm2
+    if not _quantized_scalar_close(
+        left["area_q"],
+        right["area_q"],
+        quantum=policy.area_quantum_mm2,
+        tolerance=policy.ambiguity_area_mm2,
     ):
         return False
     if not _quantized_vector_close(
@@ -1178,20 +1392,38 @@ def _geometry_within_ambiguity(
             ):
                 return False
         elif name.endswith("angle_q") or name == "angular_extent_q":
-            if (
-                abs(left_value - right_value) * policy.angle_quantum_rad
-                > policy.ambiguity_angle_rad
+            if not _quantized_scalar_close(
+                left_value,
+                right_value,
+                quantum=policy.angle_quantum_rad,
+                tolerance=policy.ambiguity_angle_rad,
             ):
                 return False
         elif name.endswith("radius_q") or name == "length_q":
-            if (
-                abs(left_value - right_value) * policy.length_quantum_mm
-                > policy.ambiguity_linear_mm
+            if not _quantized_scalar_close(
+                left_value,
+                right_value,
+                quantum=policy.length_quantum_mm,
+                tolerance=policy.ambiguity_linear_mm,
             ):
                 return False
         elif left_value != right_value:
             return False
     return True
+
+
+def _quantized_scalar_close(
+    left: int,
+    right: int,
+    *,
+    quantum: float,
+    tolerance: float,
+) -> bool:
+    difference = abs(left - right)
+    return (
+        difference * Fraction.from_float(quantum)
+        <= Fraction.from_float(tolerance)
+    )
 
 
 def _quantized_vector_close(
@@ -1201,10 +1433,13 @@ def _quantized_vector_close(
     quantum: float,
     tolerance: float,
 ) -> bool:
-    distance = math.sqrt(
-        math.fsum(((a - b) * quantum) ** 2 for a, b in zip(left, right))
+    squared_distance = sum((a - b) ** 2 for a, b in zip(left, right))
+    exact_quantum = Fraction.from_float(quantum)
+    exact_tolerance = Fraction.from_float(tolerance)
+    return (
+        squared_distance * exact_quantum * exact_quantum
+        <= exact_tolerance * exact_tolerance
     )
-    return distance <= tolerance
 
 
 def _quantized_direction_close(
@@ -1214,17 +1449,47 @@ def _quantized_direction_close(
     policy: TolerancePolicy,
     unoriented: bool,
 ) -> bool:
-    left_values = [value * policy.direction_quantum for value in left]
-    right_values = [value * policy.direction_quantum for value in right]
-    left_norm = math.sqrt(math.fsum(value * value for value in left_values))
-    right_norm = math.sqrt(math.fsum(value * value for value in right_values))
-    cosine = math.fsum(
-        a * b for a, b in zip(left_values, right_values)
-    ) / (left_norm * right_norm)
+    left_norm_squared = sum(value * value for value in left)
+    right_norm_squared = sum(value * value for value in right)
+    if left_norm_squared == 0 or right_norm_squared == 0:
+        raise GeometryIdentityError(
+            "geometry.vector_quantized_zero",
+            "canonical direction cannot be zero during ambiguity comparison",
+        )
+    dot_product = sum(a * b for a, b in zip(left, right))
     if unoriented:
-        cosine = abs(cosine)
-    cosine = min(1.0, max(-1.0, cosine))
-    return math.acos(cosine) <= policy.ambiguity_angle_rad
+        dot_product = abs(dot_product)
+        maximum_angle = math.pi / 2.0
+    else:
+        maximum_angle = math.pi
+    if policy.ambiguity_angle_rad >= maximum_angle:
+        return True
+
+    cosine_threshold = Fraction.from_float(
+        math.cos(policy.ambiguity_angle_rad)
+    )
+    if cosine_threshold == 0:
+        return dot_product >= 0
+    if cosine_threshold > 0 and dot_product <= 0:
+        return False
+    if cosine_threshold < 0 and dot_product >= 0:
+        return True
+
+    left_side = (
+        dot_product
+        * dot_product
+        * cosine_threshold.denominator
+        * cosine_threshold.denominator
+    )
+    right_side = (
+        left_norm_squared
+        * right_norm_squared
+        * cosine_threshold.numerator
+        * cosine_threshold.numerator
+    )
+    if cosine_threshold > 0:
+        return left_side >= right_side
+    return left_side <= right_side
 
 
 def _multiset(values: Sequence[str]) -> list[dict[str, Any]]:
