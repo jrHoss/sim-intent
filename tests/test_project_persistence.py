@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from app.blob_store import BlobIntegrityError, BlobStore
 from app.config import LocalDataConfig
 from app.persistence import (
+    GeometryIdentityArtifactRecord,
     Model,
     ModelVersion,
     Persistence,
@@ -202,7 +203,7 @@ def test_transaction_rollback_and_foreign_key_rejection(durable):
             )
 
 
-def test_failed_database_write_creates_no_version_and_cleanup_is_bounded(durable):
+def test_failed_database_write_immediately_cleans_new_blob_and_retries(durable):
     app, config = durable
     persistence: Persistence = app.state.persistence
     content = minimal_inp()
@@ -215,12 +216,23 @@ def test_failed_database_write_creates_no_version_and_cleanup_is_bounded(durable
         )
     with persistence.sessions() as session:
         assert session.scalar(select(ModelVersion)) is None
+        assert session.scalar(select(GeometryIdentityArtifactRecord)) is None
+    assert list(config.blob_root.glob("sha256/*/*/*")) == []
+
+    project = persistence.create_project("clean retry")
+    _, version = persistence.create_model_version(
+        project_id=project.id,
+        source_name="retry.inp",
+        content=content,
+        model_kind="inp",
+    )
+    assert persistence.read_version_bytes(version) == content
     assert len(list(config.blob_root.glob("sha256/*/*/*"))) == 1
-    unexpected = config.blob_root / "sha256" / "aa" / "bb" / "unexpected"
-    unexpected.parent.mkdir(parents=True)
-    unexpected.write_bytes(b"do not remove")
-    assert persistence.cleanup_unreferenced_blobs(limit=1) == 1
-    assert unexpected.read_bytes() == b"do not remove"
+    with persistence.sessions() as session:
+        assert [row.id for row in session.scalars(select(ModelVersion))] == [
+            version.id
+        ]
+        assert session.scalar(select(GeometryIdentityArtifactRecord)) is None
 
 
 def test_blob_atomicity_hash_verification_and_path_defense(tmp_path):
@@ -531,22 +543,31 @@ def test_temporary_cleanup_tolerates_disappearing_entry(tmp_path, monkeypatch):
 def test_orphan_cleanup_tolerates_disappearing_entry(durable, monkeypatch):
     app, _ = durable
     persistence: Persistence = app.state.persistence
-    for scale in (7, 8):
-        with pytest.raises(LookupError):
-            persistence.create_model_version(
-                project_id=str(uuid.uuid4()),
-                source_name=f"orphan-{scale}.inp",
-                content=minimal_inp(scale),
-                model_kind="inp",
-            )
-    candidates = list(persistence.blobs.iter_final_blobs())
-    # R2.2 reclaims the first orphan before the second unique publication.
-    assert len(candidates) == 1
-    extra = minimal_inp(9)
-    persistence.blobs.publish(extra, persistence.blobs.digest(extra))
-    candidates = list(persistence.blobs.iter_final_blobs())
-    assert len(candidates) == 2
-    disappearing = candidates[0]
+    project = persistence.create_project("referenced")
+    _, version = persistence.create_model_version(
+        project_id=project.id,
+        source_name="referenced.inp",
+        content=minimal_inp(6),
+        model_kind="inp",
+    )
+    referenced = persistence.blobs.path_for_key(version.blob_key)
+
+    orphan_paths = []
+    for scale in (7, 8, 9):
+        content = minimal_inp(scale)
+        key = persistence.blobs.publish(content, persistence.blobs.digest(content))
+        orphan_paths.append(persistence.blobs.path_for_key(key))
+    assert set(persistence.blobs.iter_final_blobs()) == {
+        referenced,
+        *orphan_paths,
+    }
+    cleanup_order = [
+        path
+        for path in persistence.blobs.iter_final_blobs()
+        if path != referenced
+    ]
+    disappearing = cleanup_order[0]
+    deferred = cleanup_order[2]
     original_unlink = Path.unlink
     raced = False
 
@@ -559,9 +580,12 @@ def test_orphan_cleanup_tolerates_disappearing_entry(durable, monkeypatch):
         return original_unlink(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "unlink", racing_unlink)
-    assert persistence.cleanup_unreferenced_blobs(limit=10) == 1
+    assert persistence.cleanup_unreferenced_blobs(limit=2) == 1
     assert raced
-    assert not list(persistence.blobs.iter_final_blobs())
+    assert set(persistence.blobs.iter_final_blobs()) == {referenced, deferred}
+    assert persistence.cleanup_unreferenced_blobs(limit=10) == 1
+    assert list(persistence.blobs.iter_final_blobs()) == [referenced]
+    assert persistence.read_version_bytes(version) == minimal_inp(6)
 
 
 def test_default_data_root_is_cwd_independent_and_engine_is_disposed(

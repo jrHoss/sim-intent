@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import mimetypes
 import threading
@@ -17,6 +18,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    LargeBinary,
     Text,
     String,
     UniqueConstraint,
@@ -28,6 +30,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
@@ -41,6 +44,12 @@ from app.blob_store import BlobStore, SourceStorageLimitExceededError
 from ir.schema import SimulationIntent
 from ir.canonical import canonical_intent_document
 from ir.versioning import load_simulation_intent
+from geom.identity import (
+    GEOMETRY_IDENTITY_SCHEMA_VERSION,
+    HASH_DOMAIN as GEOMETRY_IDENTITY_HASH_DOMAIN,
+    deserialize_geometry_identity,
+    GeometryIdentityError,
+)
 
 
 def uuid4_string() -> str:
@@ -71,6 +80,18 @@ class SetupRequestConflictError(PersistenceConflictError):
 
 class SetupSourceSupersededError(PersistenceConflictError):
     pass
+
+
+class GeometryIdentityArtifactError(RuntimeError):
+    """Stable safe failure while writing or reading a durable identity artifact."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+class PersistenceDatabaseError(RuntimeError):
+    """Sanitized retryable failure at the model-version write boundary."""
 
 
 class Project(Base):
@@ -114,6 +135,32 @@ class ModelVersion(Base):
     superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     superseded_by_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     model: Mapped[Model] = relationship(back_populates="versions")
+    geometry_identity: Mapped["GeometryIdentityArtifactRecord | None"] = relationship(
+        back_populates="model_version",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+
+class GeometryIdentityArtifactRecord(Base):
+    """Immutable one-to-one durable ownership record for a STEP ModelVersion."""
+
+    __tablename__ = "geometry_identity_artifacts"
+    model_version_id: Mapped[str] = mapped_column(
+        ForeignKey("model_versions.id", ondelete="CASCADE"), primary_key=True
+    )
+    model_id: Mapped[str] = mapped_column(
+        ForeignKey("models.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    artifact_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    hash_domain: Mapped[str] = mapped_column(String(100), nullable=False)
+    canonical_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    integrity_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    model_version: Mapped[ModelVersion] = relationship(
+        back_populates="geometry_identity"
+    )
 
 
 class SimulationSetup(Base):
@@ -171,6 +218,11 @@ def _immutable_setup_revision(*_args) -> None:
     raise ValueError("SetupRevision records are immutable")
 
 
+@event.listens_for(GeometryIdentityArtifactRecord, "before_update")
+def _immutable_geometry_identity_artifact(*_args) -> None:
+    raise ValueError("GeometryIdentityArtifact records are immutable")
+
+
 def canonical_intent(intent: SimulationIntent) -> tuple[str, str]:
     canonical = json.dumps(
         canonical_intent_document(intent),
@@ -224,6 +276,47 @@ class Persistence:
         with self.sessions() as session, session.begin():
             yield session
 
+    @contextmanager
+    def _database_write(self) -> Iterator[None]:
+        try:
+            yield
+        except SQLAlchemyError as exc:
+            raise PersistenceDatabaseError("database write failed") from exc
+
+    def _cleanup_failed_publication(
+        self, *, blob_key: str, final_path: Path, created_by_operation: bool
+    ) -> None:
+        """Remove only this operation's unreferenced CAS publication."""
+
+        if not created_by_operation:
+            return
+        with self.sessions() as session:
+            referenced = session.scalar(
+                select(ModelVersion.id)
+                .where(ModelVersion.blob_key == blob_key)
+                .limit(1)
+            )
+        if (
+            referenced is None
+            and final_path.is_file()
+            and not final_path.is_symlink()
+        ):
+            final_path.unlink()
+
+    def _best_effort_cleanup_failed_publication(
+        self, *, blob_key: str, final_path: Path, created_by_operation: bool
+    ) -> None:
+        try:
+            self._cleanup_failed_publication(
+                blob_key=blob_key,
+                final_path=final_path,
+                created_by_operation=created_by_operation,
+            )
+        except Exception:
+            # Cleanup is deliberately isolated from the authoritative failure.
+            # Do not log exception text because it may contain SQL or paths.
+            return
+
     def create_project(self, name: str) -> Project:
         project = Project(name=name)
         with self.transaction() as session:
@@ -250,61 +343,89 @@ class Persistence:
         content: bytes,
         model_kind: str,
         model_id: str | None = None,
+        version_id: str | None = None,
+        geometry_identity_bytes: bytes | None = None,
     ) -> tuple[Model, ModelVersion]:
         # One process-wide lock is shared by every BlobStore for this canonical
         # root. It serializes publication + commit with version allocation and
         # orphan cleanup, including across separate application/engine instances.
         with self.blobs.coordination_lock:
             digest = self.blobs.digest(content)
+            allocated_version_id = version_id or uuid4_string()
+            identity_payload = self._prepare_geometry_identity(
+                model_kind=model_kind,
+                canonical_bytes=geometry_identity_bytes,
+                model_version_id=allocated_version_id,
+                source_sha256=digest,
+            )
             final = self.blobs.path_for_key(self.blobs.key(digest))
             if not final.exists():
                 self.cleanup_unreferenced_blobs(limit=100)
                 if len(content) > self.max_source_storage_bytes - self.blobs.source_bytes():
                     raise SourceStorageLimitExceededError("source storage capacity exceeded")
-            blob_key = self.blobs.publish(content, digest)
-            if self._after_blob_publish is not None:
-                self._after_blob_publish()
-            media_type = (
-                mimetypes.guess_type(source_name)[0]
-                or "application/octet-stream"
-            )
-            model = Model(project_id=project_id) if model_id is None else None
-            version_record: ModelVersion
-            with self.transaction() as session:
-                project = session.get(Project, project_id)
-                if project is None:
-                    raise PersistenceNotFoundError("project")
-                if model is None:
-                    model = session.get(Model, model_id)
-                    if model is None:
-                        raise PersistenceNotFoundError("model")
-                    if model.project_id != project_id:
-                        raise PersistenceConflictError(
-                            "model does not belong to project"
+            existed_before = final.exists()
+            blob_key = self.blobs.key(digest)
+            try:
+                with self._database_write():
+                    blob_key = self.blobs.publish(content, digest)
+                    if self._after_blob_publish is not None:
+                        self._after_blob_publish()
+                    media_type = (
+                        mimetypes.guess_type(source_name)[0]
+                        or "application/octet-stream"
+                    )
+                    model = Model(project_id=project_id) if model_id is None else None
+                    version_record: ModelVersion
+                    with self.transaction() as session:
+                        project = session.get(Project, project_id)
+                        if project is None:
+                            raise PersistenceNotFoundError("project")
+                        if model is None:
+                            model = session.get(Model, model_id)
+                            if model is None:
+                                raise PersistenceNotFoundError("model")
+                            if model.project_id != project_id:
+                                raise PersistenceConflictError(
+                                    "model does not belong to project"
+                                )
+                        else:
+                            session.add(model)
+                            session.flush()
+                        next_version = session.scalar(
+                            select(
+                                func.coalesce(func.max(ModelVersion.version), 0) + 1
+                            ).where(ModelVersion.model_id == model.id)
                         )
-                else:
-                    session.add(model)
-                    session.flush()
-                next_version = session.scalar(
-                    select(
-                        func.coalesce(func.max(ModelVersion.version), 0) + 1
-                    ).where(ModelVersion.model_id == model.id)
-                )
-                version_record = ModelVersion(
-                    id=uuid4_string(),
-                    model_id=model.id,
-                    version=int(next_version),
-                    source_sha256=digest,
-                    source_name=source_name,
-                    size_bytes=len(content),
-                    media_type=media_type,
-                    model_kind=model_kind,
+                        version_record = ModelVersion(
+                            id=allocated_version_id,
+                            model_id=model.id,
+                            version=int(next_version),
+                            source_sha256=digest,
+                            source_name=source_name,
+                            size_bytes=len(content),
+                            media_type=media_type,
+                            model_kind=model_kind,
+                            blob_key=blob_key,
+                            created_at=datetime.now(timezone.utc),
+                            is_superseded=False,
+                        )
+                        self._insert_model_version(session, version_record)
+                        if identity_payload is not None:
+                            session.add(
+                                self._geometry_identity_record(
+                                    model=model,
+                                    version=version_record,
+                                    canonical_bytes=identity_payload,
+                                )
+                            )
+                        self._supersede_current(session, model, version_record)
+            except Exception:
+                self._best_effort_cleanup_failed_publication(
                     blob_key=blob_key,
-                    created_at=datetime.now(timezone.utc),
-                    is_superseded=False,
+                    final_path=final,
+                    created_by_operation=not existed_before,
                 )
-                self._insert_model_version(session, version_record)
-                self._supersede_current(session, model, version_record)
+                raise
             return model, version_record
 
     def create_model_version_from_file(
@@ -317,46 +438,151 @@ class Persistence:
         size_bytes: int,
         model_kind: str,
         model_id: str | None = None,
+        version_id: str | None = None,
+        geometry_identity_bytes: bytes | None = None,
     ) -> tuple[Model, ModelVersion]:
         with self.blobs.coordination_lock:
+            allocated_version_id = version_id or uuid4_string()
+            identity_payload = self._prepare_geometry_identity(
+                model_kind=model_kind,
+                canonical_bytes=geometry_identity_bytes,
+                model_version_id=allocated_version_id,
+                source_sha256=source_sha256,
+            )
             final = self.blobs.path_for_key(self.blobs.key(source_sha256))
             if not final.exists():
                 self.cleanup_unreferenced_blobs(limit=100)
-            blob_key = self.blobs.publish_file_with_limit(
-                source_path, source_sha256, size_bytes,
-                self.max_source_storage_bytes,
-            )
-            if self._after_blob_publish is not None:
-                self._after_blob_publish()
-            media_type = mimetypes.guess_type(source_name)[0] or "application/octet-stream"
-            model = Model(project_id=project_id) if model_id is None else None
-            with self.transaction() as session:
-                project = session.get(Project, project_id)
-                if project is None:
-                    raise PersistenceNotFoundError("project")
-                if model is None:
-                    model = session.get(Model, model_id)
-                    if model is None:
-                        raise PersistenceNotFoundError("model")
-                    if model.project_id != project_id:
-                        raise PersistenceConflictError("model does not belong to project")
-                else:
-                    session.add(model)
-                    session.flush()
-                next_version = session.scalar(
-                    select(func.coalesce(func.max(ModelVersion.version), 0) + 1)
-                    .where(ModelVersion.model_id == model.id)
+            existed_before = final.exists()
+            blob_key = self.blobs.key(source_sha256)
+            try:
+                with self._database_write():
+                    blob_key = self.blobs.publish_file_with_limit(
+                        source_path, source_sha256, size_bytes,
+                        self.max_source_storage_bytes,
+                    )
+                    if self._after_blob_publish is not None:
+                        self._after_blob_publish()
+                    media_type = (
+                        mimetypes.guess_type(source_name)[0]
+                        or "application/octet-stream"
+                    )
+                    model = Model(project_id=project_id) if model_id is None else None
+                    with self.transaction() as session:
+                        project = session.get(Project, project_id)
+                        if project is None:
+                            raise PersistenceNotFoundError("project")
+                        if model is None:
+                            model = session.get(Model, model_id)
+                            if model is None:
+                                raise PersistenceNotFoundError("model")
+                            if model.project_id != project_id:
+                                raise PersistenceConflictError("model does not belong to project")
+                        else:
+                            session.add(model)
+                            session.flush()
+                        next_version = session.scalar(
+                            select(func.coalesce(func.max(ModelVersion.version), 0) + 1)
+                            .where(ModelVersion.model_id == model.id)
+                        )
+                        version_record = ModelVersion(
+                            id=allocated_version_id, model_id=model.id, version=int(next_version),
+                            source_sha256=source_sha256, source_name=source_name,
+                            size_bytes=size_bytes, media_type=media_type,
+                            model_kind=model_kind, blob_key=blob_key,
+                            created_at=datetime.now(timezone.utc), is_superseded=False,
+                        )
+                        self._insert_model_version(session, version_record)
+                        if identity_payload is not None:
+                            session.add(
+                                self._geometry_identity_record(
+                                    model=model,
+                                    version=version_record,
+                                    canonical_bytes=identity_payload,
+                                )
+                            )
+                        self._supersede_current(session, model, version_record)
+            except Exception:
+                self._best_effort_cleanup_failed_publication(
+                    blob_key=blob_key,
+                    final_path=final,
+                    created_by_operation=not existed_before,
                 )
-                version_record = ModelVersion(
-                    id=uuid4_string(), model_id=model.id, version=int(next_version),
-                    source_sha256=source_sha256, source_name=source_name,
-                    size_bytes=size_bytes, media_type=media_type,
-                    model_kind=model_kind, blob_key=blob_key,
-                    created_at=datetime.now(timezone.utc), is_superseded=False,
-                )
-                self._insert_model_version(session, version_record)
-                self._supersede_current(session, model, version_record)
+                raise
             return model, version_record
+
+    @staticmethod
+    def _prepare_geometry_identity(
+        *,
+        model_kind: str,
+        canonical_bytes: bytes | None,
+        model_version_id: str,
+        source_sha256: str,
+    ) -> bytes | None:
+        if model_kind != "step":
+            if canonical_bytes is not None:
+                raise GeometryIdentityArtifactError(
+                    "geometry_identity_not_applicable"
+                )
+            return None
+        if canonical_bytes is None:
+            raise GeometryIdentityArtifactError("geometry_identity_missing")
+        try:
+            raw = bytes(canonical_bytes)
+        except (TypeError, ValueError) as exc:
+            raise GeometryIdentityArtifactError(
+                "geometry_identity_integrity_failed"
+            ) from exc
+        artifact = Persistence._deserialize_geometry_identity(raw)
+        if {
+            "model_version_id": artifact.model_version_id,
+            "source_sha256": artifact.source_sha256,
+        } != {
+            "model_version_id": model_version_id,
+            "source_sha256": source_sha256.lower(),
+        }:
+            raise GeometryIdentityArtifactError(
+                "geometry_identity_binding_mismatch"
+            )
+        return raw
+
+    @staticmethod
+    def _deserialize_geometry_identity(canonical_bytes: bytes):
+        try:
+            return deserialize_geometry_identity(canonical_bytes)
+        except GeometryIdentityError as exc:
+            code = {
+                "geometry.artifact_integrity_failed": (
+                    "geometry_identity_integrity_failed"
+                ),
+                "geometry.artifact_version_unsupported": (
+                    "geometry_identity_version_unsupported"
+                ),
+                "geometry.artifact_binding_invalid": (
+                    "geometry_identity_binding_mismatch"
+                ),
+                "geometry.artifact_schema_invalid": (
+                    "geometry_identity_schema_invalid"
+                ),
+            }.get(exc.code, "geometry_identity_schema_invalid")
+            raise GeometryIdentityArtifactError(code) from exc
+
+    @staticmethod
+    def _geometry_identity_record(
+        *,
+        model: Model,
+        version: ModelVersion,
+        canonical_bytes: bytes,
+    ) -> GeometryIdentityArtifactRecord:
+        return GeometryIdentityArtifactRecord(
+            model_version_id=version.id,
+            model_id=model.id,
+            source_sha256=version.source_sha256,
+            artifact_version=GEOMETRY_IDENTITY_SCHEMA_VERSION,
+            hash_domain=GEOMETRY_IDENTITY_HASH_DOMAIN,
+            canonical_bytes=canonical_bytes,
+            integrity_sha256=hashlib.sha256(canonical_bytes).hexdigest(),
+            created_at=version.created_at,
+        )
 
     @staticmethod
     def _supersede_current(
@@ -409,6 +635,67 @@ class Persistence:
     def get_version(self, version_id: str) -> ModelVersion | None:
         with self.sessions() as session:
             return session.get(ModelVersion, version_id)
+
+    def read_geometry_identity(
+        self, version_id: str
+    ) -> tuple[GeometryIdentityArtifactRecord, bytes, dict]:
+        """Read and fully verify a durable artifact without regenerating it."""
+
+        with self.sessions() as session:
+            version = session.get(ModelVersion, version_id)
+            if version is None:
+                raise PersistenceNotFoundError("model version")
+            if version.model_kind != "step":
+                raise GeometryIdentityArtifactError(
+                    "geometry_identity_not_applicable"
+                )
+            record = session.get(GeometryIdentityArtifactRecord, version_id)
+            if record is None:
+                raise GeometryIdentityArtifactError("geometry_identity_missing")
+            if (
+                record.artifact_version != GEOMETRY_IDENTITY_SCHEMA_VERSION
+                or record.hash_domain != GEOMETRY_IDENTITY_HASH_DOMAIN
+            ):
+                raise GeometryIdentityArtifactError(
+                    "geometry_identity_version_unsupported"
+                )
+            try:
+                raw = bytes(record.canonical_bytes)
+            except (TypeError, ValueError) as exc:
+                raise GeometryIdentityArtifactError(
+                    "geometry_identity_integrity_failed"
+                ) from exc
+            actual_digest = hashlib.sha256(raw).hexdigest()
+            if not (
+                isinstance(record.integrity_sha256, str)
+                and len(record.integrity_sha256) == 64
+                and hmac.compare_digest(actual_digest, record.integrity_sha256)
+            ):
+                raise GeometryIdentityArtifactError(
+                    "geometry_identity_integrity_failed"
+                )
+            artifact = self._deserialize_geometry_identity(raw)
+            payload = artifact.to_dict()
+            if (
+                payload["schema_version"] != record.artifact_version
+                or payload["hash_domain"] != record.hash_domain
+            ):
+                raise GeometryIdentityArtifactError(
+                    "geometry_identity_version_unsupported"
+                )
+            binding = payload["model_binding"]
+            if (
+                record.model_version_id != version.id
+                or record.model_id != version.model_id
+                or record.source_sha256 != version.source_sha256
+                or not isinstance(binding, dict)
+                or binding.get("model_version_id") != version.id
+                or binding.get("source_sha256") != version.source_sha256
+            ):
+                raise GeometryIdentityArtifactError(
+                    "geometry_identity_binding_mismatch"
+                )
+            return record, raw, payload
 
     def create_setup(
         self, *, project_id: str, model_id: str, model_version_id: str,

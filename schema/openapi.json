@@ -829,6 +829,305 @@
         "title": "ForceQuantity",
         "type": "object"
       },
+      "GeometryIdentityArtifactResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_sha256": {
+            "title": "Artifact Sha256",
+            "type": "string"
+          },
+          "artifact_type": {
+            "const": "geometry_identity",
+            "title": "Artifact Type",
+            "type": "string"
+          },
+          "artifact_version": {
+            "title": "Artifact Version",
+            "type": "integer"
+          },
+          "collision_groups": {
+            "items": {
+              "$ref": "#/components/schemas/GeometryIdentityCollisionGroupResponse"
+            },
+            "title": "Collision Groups",
+            "type": "array"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "faces": {
+            "items": {
+              "$ref": "#/components/schemas/GeometryIdentityFaceResponse"
+            },
+            "title": "Faces",
+            "type": "array"
+          },
+          "hash_domain": {
+            "title": "Hash Domain",
+            "type": "string"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          },
+          "model_version_id": {
+            "title": "Model Version Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "source_sha256": {
+            "title": "Source Sha256",
+            "type": "string"
+          },
+          "tolerance_policy": {
+            "$ref": "#/components/schemas/GeometryIdentityTolerancePolicyResponse"
+          }
+        },
+        "required": [
+          "artifact_type",
+          "artifact_version",
+          "hash_domain",
+          "model_id",
+          "model_version_id",
+          "source_sha256",
+          "artifact_sha256",
+          "created_at",
+          "tolerance_policy",
+          "faces",
+          "collision_groups"
+        ],
+        "title": "GeometryIdentityArtifactResponse",
+        "type": "object"
+      },
+      "GeometryIdentityCanonicalQuantaResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "angle_rad": {
+            "title": "Angle Rad",
+            "type": "number"
+          },
+          "area_mm2": {
+            "title": "Area Mm2",
+            "type": "number"
+          },
+          "dimensionless_scalar": {
+            "title": "Dimensionless Scalar",
+            "type": "number"
+          },
+          "direction": {
+            "title": "Direction",
+            "type": "number"
+          },
+          "length_mm": {
+            "title": "Length Mm",
+            "type": "number"
+          },
+          "position_mm": {
+            "title": "Position Mm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "position_mm",
+          "length_mm",
+          "area_mm2",
+          "angle_rad",
+          "direction",
+          "dimensionless_scalar"
+        ],
+        "title": "GeometryIdentityCanonicalQuantaResponse",
+        "type": "object"
+      },
+      "GeometryIdentityCollisionGroupResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "collision_group_id": {
+            "title": "Collision Group Id",
+            "type": "string"
+          },
+          "identity_candidates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Identity Candidates",
+            "type": "array"
+          },
+          "member_source_refs": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "title": "Member Source Refs",
+            "type": "array"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "collision_group_id",
+          "identity_candidates",
+          "member_source_refs",
+          "reason"
+        ],
+        "title": "GeometryIdentityCollisionGroupResponse",
+        "type": "object"
+      },
+      "GeometryIdentityFaceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "ambiguous": {
+            "title": "Ambiguous",
+            "type": "boolean"
+          },
+          "canonical_geometry": {
+            "additionalProperties": true,
+            "title": "Canonical Geometry",
+            "type": "object"
+          },
+          "collision_group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collision Group Id"
+          },
+          "connected_topology_signature": {
+            "title": "Connected Topology Signature",
+            "type": "string"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "title": "Evidence",
+            "type": "object"
+          },
+          "identity_candidate": {
+            "title": "Identity Candidate",
+            "type": "string"
+          },
+          "identity_quality": {
+            "title": "Identity Quality",
+            "type": "string"
+          },
+          "local_semantic_signature": {
+            "title": "Local Semantic Signature",
+            "type": "string"
+          },
+          "source_ref": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Source Ref"
+          },
+          "stable_identity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stable Identity"
+          },
+          "surface_type": {
+            "title": "Surface Type",
+            "type": "string"
+          },
+          "topology": {
+            "additionalProperties": true,
+            "title": "Topology",
+            "type": "object"
+          }
+        },
+        "required": [
+          "source_ref",
+          "surface_type",
+          "canonical_geometry",
+          "topology",
+          "local_semantic_signature",
+          "connected_topology_signature",
+          "identity_candidate",
+          "stable_identity",
+          "collision_group_id",
+          "ambiguous",
+          "identity_quality",
+          "evidence"
+        ],
+        "title": "GeometryIdentityFaceResponse",
+        "type": "object"
+      },
+      "GeometryIdentityTolerancePolicyResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "ambiguity_tolerances": {
+            "$ref": "#/components/schemas/GeometryIdentityToleranceResponse"
+          },
+          "canonical_quanta": {
+            "$ref": "#/components/schemas/GeometryIdentityCanonicalQuantaResponse"
+          },
+          "policy_id": {
+            "title": "Policy Id",
+            "type": "string"
+          },
+          "semantic_tolerances": {
+            "$ref": "#/components/schemas/GeometryIdentityToleranceResponse"
+          }
+        },
+        "required": [
+          "policy_id",
+          "semantic_tolerances",
+          "ambiguity_tolerances",
+          "canonical_quanta"
+        ],
+        "title": "GeometryIdentityTolerancePolicyResponse",
+        "type": "object"
+      },
+      "GeometryIdentityToleranceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "angle_rad": {
+            "title": "Angle Rad",
+            "type": "number"
+          },
+          "area_mm2": {
+            "title": "Area Mm2",
+            "type": "number"
+          },
+          "linear_mm": {
+            "title": "Linear Mm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "linear_mm",
+          "area_mm2",
+          "angle_rad"
+        ],
+        "title": "GeometryIdentityToleranceResponse",
+        "type": "object"
+      },
       "GravityLoad": {
         "additionalProperties": false,
         "description": "Model-wide gravity acceleration in mm/s^2.\n\n``region_ref`` stays ``None`` for the whole model; the only supported\nnon-null target is an element-set material domain (see\n``LOAD_REGION_COMPATIBILITY``).  A surface target is never valid.",
@@ -3257,7 +3556,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -3271,6 +3570,116 @@
           }
         },
         "summary": "Read Model Version"
+      }
+    },
+    "/api/v1/model-versions/{version_id}/geometry-identity": {
+      "get": {
+        "operationId": "read_geometry_identity_api_v1_model_versions__version_id__geometry_identity_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeometryIdentityArtifactResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Upload too large"
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Unsupported media type"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Persistence or stored-data integrity failure"
+          },
+          "507": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Insufficient storage"
+          }
+        },
+        "summary": "Read Geometry Identity"
       }
     },
     "/api/v1/model-versions/{version_id}/gltf": {
@@ -3365,7 +3774,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -3486,7 +3895,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -3594,7 +4003,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -3708,7 +4117,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -3810,7 +4219,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -3916,7 +4325,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -4026,7 +4435,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -4152,7 +4561,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -4288,7 +4697,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -4402,7 +4811,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -4520,7 +4929,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -4630,7 +5039,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -4759,7 +5168,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -4888,7 +5297,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -5017,7 +5426,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -5146,7 +5555,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -5260,7 +5669,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -5378,7 +5787,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {
@@ -5497,7 +5906,7 @@
                 }
               }
             },
-            "description": "Stored data integrity failure"
+            "description": "Persistence or stored-data integrity failure"
           },
           "507": {
             "content": {

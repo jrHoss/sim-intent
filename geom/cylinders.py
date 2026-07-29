@@ -181,6 +181,12 @@ def _analyze_face(tag: int) -> CylinderRecord:
     )
 
 
+def analyze_cylinder_face(tag: int) -> CylinderRecord:
+    """Analyze one cylinder in the caller's active, synchronized gmsh model."""
+
+    return _analyze_face(tag)
+
+
 def analyze_cylinders(path: str | Path) -> dict[int, CylinderRecord]:
     """Analyze every cylindrical face of a STEP file, keyed by face tag.
 
