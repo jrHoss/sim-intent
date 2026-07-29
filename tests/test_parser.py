@@ -94,3 +94,30 @@ def test_cache_is_per_file_content(tmp_path):
     plate, hit = get_inventory(PLATE_HOLE, cache_dir=cache_dir)
     assert hit is False  # different file hash, no false cache hit
     assert len(plate.faces) == 7
+
+
+def test_pre_r4a_cache_without_boundary_loops_is_refreshed(tmp_path):
+    cache_dir = tmp_path / "inv_cache"
+    cache_dir.mkdir()
+    sha = file_sha256(PLATE_HOLE)
+    legacy = {
+        "source_name": PLATE_HOLE.name,
+        "file_sha256": sha,
+        "faces": [
+            {
+                key: value
+                for key, value in face.to_dict().items()
+                if key != "boundary_loop_count"
+            }
+            for face in parse_step(PLATE_HOLE)
+        ],
+    }
+    (cache_dir / f"{sha}.json").write_text(json.dumps(legacy), encoding="utf-8")
+
+    refreshed, cache_hit = get_inventory(PLATE_HOLE, cache_dir=cache_dir)
+
+    assert cache_hit is False
+    assert refreshed.face(7).boundary_loop_count == 2
+    assert "boundary_loop_count" in json.loads(
+        (cache_dir / f"{sha}.json").read_text(encoding="utf-8")
+    )["faces"][0]
