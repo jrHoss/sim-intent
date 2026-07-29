@@ -1,11 +1,17 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { createAuditPanel } from "/static/audit.js";
+import {
+  createEngineeringWorkspace,
+  runFaceSelectionOperation,
+} from "/static/engineering.js";
+import { applyReturnedGrounding } from "/static/grounding-highlights.js";
 
 const viewer = document.querySelector("#viewer");
 const fileInput = document.querySelector("#model-file");
+const versionFileInput = document.querySelector("#model-version-file");
 const uploadButton = document.querySelector("#upload-button");
+const uploadVersionButton = document.querySelector("#upload-version-button");
 const emptyLoadButton = document.querySelector("#empty-load-button");
 const emptyState = document.querySelector("#drop-zone");
 const loadingPanel = document.querySelector("#loading");
@@ -27,6 +33,7 @@ const clarificationCandidates = document.querySelector("#clarification-candidate
 const typedOutput = document.querySelector("#typed-output");
 const fallbackCase = document.querySelector("#fallback-case");
 const fallbackButton = document.querySelector("#fallback-button");
+const createProposalSetup = document.querySelector("#create-proposal-setup");
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(38, 1, 0.01, 100000);
@@ -73,9 +80,11 @@ const arrows = new Map();
 let modelRoot = null;
 let modelSize = 1;
 let pointerStart = null;
-let auditPanel = null;
+let engineeringWorkspace = null;
+const auditPanel = { async setModel() {}, refresh() {} };
 let activeModel = null;
 const selectedClicks = new Set();
+let latestProposal = null;
 
 const COLORS = {
   base: 0xaebcb8,
@@ -194,6 +203,16 @@ function addLoadArrow(entityId, vector = [0, -1, 0]) {
 }
 
 function applyHighlight(command) {
+  if (command.reset) {
+    for (const arrowId of [...arrows.keys()]) removeArrow(arrowId);
+    for (const objects of faceObjects.values()) {
+      for (const object of objects) {
+        if (object.material !== object.userData.baseMaterial) object.material.dispose();
+        object.material = object.userData.baseMaterial;
+      }
+    }
+    return;
+  }
   const style = normalizeStyle(command.style);
   for (const entityId of command.entity_ids) {
     const objects = faceObjects.get(Number(entityId));
@@ -268,7 +287,71 @@ function frameModel(root) {
   controls.update();
 }
 
-async function loadModel(file) {
+async function loadDurableVersion(model, context = null) {
+  if (context && (
+    context.modelId !== model.model_id
+    || context.modelVersionId !== model.id
+    || !context.isCurrent()
+  )) return false;
+  setLoading(true, "Loading durable model version…");
+  try {
+    const gltf = await gltfLoader.loadAsync(`/api/v1/model-versions/${model.id}/gltf`);
+    if (context && !context.isCurrent()) return false;
+    disposeModel();
+    modelRoot = gltf.scene;
+    registerFaces(modelRoot);
+    scene.add(modelRoot);
+    frameModel(modelRoot);
+    emptyState.hidden = true;
+    document.querySelector("#model-name").textContent = model.source_name;
+    document.querySelector("#panel-model-name").textContent = model.source_name;
+    document.querySelector("#model-kind").textContent = model.model_kind.toUpperCase();
+    document.querySelector("#entity-count").textContent = `${faceObjects.size} faces`;
+    selectionValue.textContent = "None";
+    activeModel = model;
+    selectedClicks.clear();
+    latestProposal = null;
+    createProposalSetup.hidden = true;
+    interpretButton.disabled = model.model_kind !== "step" || Boolean(engineeringWorkspace?.currentSetup());
+    setStatus(`${model.source_name} reopened from durable storage with ${faceObjects.size} selectable faces.`);
+    return true;
+  } finally {
+    if (!context || context.isCurrent()) setLoading(false);
+  }
+}
+
+async function uploadDurableModel(file) {
+  if (!file) return;
+  setLoading(true, "Uploading durable model…");
+  try {
+    await engineeringWorkspace.uploadModel(file);
+  } catch (error) {
+    console.error(error);
+    setStatus(error.message || "The model could not be uploaded.", true);
+  } finally {
+    setLoading(false);
+    fileInput.value = "";
+  }
+}
+
+async function uploadDurableModelVersion(file) {
+  if (!file) return;
+  setLoading(true, "Uploading new durable source version…");
+  try {
+    await engineeringWorkspace.uploadNewVersion(file);
+  } catch (error) {
+    console.error(error);
+    setStatus(error.message || "The new model version could not be uploaded.", true);
+  } finally {
+    setLoading(false);
+    versionFileInput.value = "";
+  }
+}
+
+// Frozen compatibility helper. It is intentionally not bound to the production
+// workspace; legacy /models, /session/{session_id}/clarify, and /session
+// /interpret, /clarify, and /fallback/ routes remain covered by their tests.
+async function loadLegacyModel(file) {
   if (!file) return;
   setLoading(true, "Uploading model…");
   setStatus(`Uploading ${file.name}…`);
@@ -321,22 +404,28 @@ async function responseError(response) {
 }
 
 async function selectFace(entityId) {
-  selectionValue.textContent = `face_${entityId}`;
-  setStatus(`Recording face_${entityId}…`);
-  try {
-    const response = await fetch("/select", {
+  const contextToken = engineeringWorkspace.captureViewerSelectionContext(entityId, modelRoot);
+  await runFaceSelectionOperation({
+    entityId,
+    contextToken,
+    workspace: engineeringWorkspace,
+    getViewerSourceId: () => modelRoot,
+    requestSelection: () => fetch("/select", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ entity_id: entityId }),
-    });
-    if (!response.ok) throw new Error(await responseError(response));
-    const selection = await response.json();
-    selectedClicks.add(entityId);
-    addActivity(selection.node_name);
-    setStatus(`${selection.node_name} recorded by the server.`);
-  } catch (error) {
-    setStatus(error.message || "Selection could not be recorded.", true);
-  }
+    }),
+    responseError,
+    onAccepted(selection) {
+      selectedClicks.add(entityId);
+      selectionValue.textContent = `face_${entityId}`;
+      addActivity(selection.node_name);
+      setStatus(`${selection.node_name} recorded by the server.`);
+    },
+    onError(error) {
+      setStatus(error.message || "Selection could not be recorded.", true);
+    },
+  });
 }
 
 function setInterpretMode(mode) {
@@ -345,8 +434,12 @@ function setInterpretMode(mode) {
 }
 
 function renderInterpretation(result) {
+  applyReturnedGrounding(result.grounding, applyHighlight);
   setInterpretMode(result.mode);
   typedOutput.textContent = JSON.stringify(result.interpretation, null, 2);
+  latestProposal = result.intent;
+  engineeringWorkspace.setProposal(result.intent);
+  createProposalSetup.hidden = !result.intent;
   interpretNotices.replaceChildren();
   for (const notice of result.notices || []) {
     const paragraph = document.createElement("p");
@@ -374,9 +467,8 @@ function renderInterpretation(result) {
     setStatus(
       result.notices?.length
         ? result.notices.join(" ")
-        : `${result.mode} interpretation saved as proposed. Review provenance before confirmation.`,
+        : `${result.mode} interpretation returned a proposed setup. Persist it before review.`,
     );
-    auditPanel.refresh();
   }
 }
 
@@ -391,16 +483,11 @@ async function interpretInstruction() {
   interpretNotices.replaceChildren();
   setStatus("Interpreting instruction on the serverâ€¦");
   try {
-    const response = await fetch(`/session/${activeModel.id}/interpret`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        instruction: instructionInput.value.trim(),
-        clicked_entity_ids: useCurrentClicks.checked ? [...selectedClicks].sort((a, b) => a - b) : [],
-      }),
-    });
-    if (!response.ok) throw new Error(await responseError(response));
-    renderInterpretation(await response.json());
+    const result = await engineeringWorkspace.interpret(
+      instructionInput.value.trim(),
+      useCurrentClicks.checked ? [...selectedClicks].sort((a, b) => a - b) : [],
+    );
+    renderInterpretation(result);
   } catch (error) {
     const message = error.message || "Interpretation failed.";
     interpretError.textContent = message;
@@ -410,7 +497,9 @@ async function interpretInstruction() {
   } finally {
     interpretButton.textContent = "Interpret";
     interpretButton.removeAttribute("aria-busy");
-    interpretButton.disabled = !activeModel || activeModel.kind !== "step";
+    interpretButton.disabled = !activeModel
+      || activeModel.model_kind !== "step"
+      || Boolean(engineeringWorkspace.currentSetup());
   }
 }
 
@@ -419,16 +508,15 @@ clarificationCandidates.addEventListener("click", async (event) => {
   if (!button || !activeModel) return;
   for (const candidate of clarificationCandidates.querySelectorAll("button")) candidate.disabled = true;
   try {
-    const response = await fetch(`/session/${activeModel.id}/clarify`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        intent_index: Number(button.dataset.intentIndex),
-        entity_ids: button.dataset.entityIds.split(",").map(Number),
-      }),
-    });
-    if (!response.ok) throw new Error(await responseError(response));
-    renderInterpretation(await response.json());
+    const entityIds = button.dataset.entityIds.split(",").map(Number);
+    const contextToken = engineeringWorkspace.captureViewerSelectionContext(entityIds[0], modelRoot);
+    if (!engineeringWorkspace.setViewerSelection(entityIds[0], contextToken, modelRoot)) return;
+    selectedClicks.clear();
+    for (const entityId of entityIds) selectedClicks.add(entityId);
+    renderInterpretation(await engineeringWorkspace.interpret(
+      instructionInput.value.trim(),
+      entityIds,
+    ));
   } catch (error) {
     setStatus(error.message || "Clarification failed.", true);
   }
@@ -523,7 +611,9 @@ function openFilePicker() { fileInput.click(); }
 
 uploadButton.addEventListener("click", openFilePicker);
 emptyLoadButton.addEventListener("click", openFilePicker);
-fileInput.addEventListener("change", () => loadModel(fileInput.files[0]));
+uploadVersionButton.addEventListener("click", () => versionFileInput.click());
+fileInput.addEventListener("change", () => uploadDurableModel(fileInput.files[0]));
+versionFileInput.addEventListener("change", () => uploadDurableModelVersion(versionFileInput.files[0]));
 clearActivity.addEventListener("click", () => {
   activityList.replaceChildren();
   const empty = document.createElement("li");
@@ -531,10 +621,20 @@ clearActivity.addEventListener("click", () => {
   empty.textContent = "Face clicks will appear here.";
   activityList.append(empty);
   selectedClicks.clear();
+  const contextToken = engineeringWorkspace.captureViewerSelectionContext(null, modelRoot);
+  engineeringWorkspace.setViewerSelection(null, contextToken, modelRoot);
   selectionValue.textContent = "None";
 });
 interpretButton.addEventListener("click", interpretInstruction);
-fallbackButton.addEventListener("click", loadFallback);
+createProposalSetup.addEventListener("click", async () => {
+  try {
+    await engineeringWorkspace.createSetupFromProposal(latestProposal);
+    createProposalSetup.hidden = true;
+    interpretButton.disabled = true;
+  } catch (error) {
+    setStatus(error.message || "The proposed setup could not be created.", true);
+  }
+});
 
 for (const eventName of ["dragenter", "dragover"]) {
   viewer.addEventListener(eventName, (event) => {
@@ -548,13 +648,15 @@ for (const eventName of ["dragleave", "drop"]) {
     viewer.classList.remove("dragging");
   });
 }
-viewer.addEventListener("drop", (event) => loadModel(event.dataTransfer.files[0]));
+viewer.addEventListener("drop", (event) => uploadDurableModel(event.dataTransfer.files[0]));
 
 window.addEventListener("resize", resize);
-auditPanel = createAuditPanel({
+engineeringWorkspace = createEngineeringWorkspace({
+  onLoadVersion: loadDurableVersion,
   onHighlight: (command) => applyHighlight(command),
   onStatus: (message, error = false) => setStatus(message, error),
 });
 resize();
 connectHighlightEvents();
 animate();
+engineeringWorkspace.initialize();

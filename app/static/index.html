@@ -22,10 +22,12 @@
       </a>
       <div class="model-controls">
         <input id="model-file" type="file" accept=".step,.stp,.inp" hidden>
+        <input id="model-version-file" type="file" accept=".step,.stp,.inp" hidden>
         <button id="upload-button" class="primary-button" type="button">
-          <span>Load model</span>
+          <span>Upload model</span>
           <kbd>STEP / INP</kbd>
         </button>
+        <button id="upload-version-button" class="topbar-button" type="button" disabled>New version</button>
         <span id="model-name" class="model-name">No model loaded</span>
       </div>
       <div id="connection-state" class="connection-state" data-state="connecting">
@@ -76,6 +78,54 @@
       </section>
 
       <aside class="side-panel" aria-label="Viewer details">
+        <section class="panel-section workspace-section" aria-labelledby="workspace-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Durable workspace</p>
+              <h2 id="workspace-heading">Project and setup</h2>
+            </div>
+            <button id="workspace-refresh" class="text-button" type="button">Refresh</button>
+          </div>
+          <form id="project-create-form" class="inline-form">
+            <label for="project-name">New project</label>
+            <div class="inline-row">
+              <input id="project-name" name="project_name" maxlength="200" required placeholder="Bracket study">
+              <button type="submit" class="ghost-button">Create</button>
+            </div>
+          </form>
+          <label class="field-label" for="project-select">Open project</label>
+          <select id="project-select"><option value="">No projects yet</option></select>
+          <label class="field-label" for="setup-select">Open setup</label>
+          <select id="setup-select" disabled><option value="">Upload a model to begin</option></select>
+          <button id="create-blank-setup" class="ghost-button full-button" type="button" disabled>Create blank setup</button>
+          <dl class="workspace-facts">
+            <div><dt>Revision</dt><dd id="current-revision">—</dd></div>
+            <div><dt>Source</dt><dd id="source-version">—</dd></div>
+          </dl>
+          <div id="stale-source-banner" class="notice-banner danger" role="alert" hidden>
+            <strong>Source version is stale.</strong>
+            <span>Engineering mutations are blocked. Create a setup for the current model version.</span>
+          </div>
+          <div id="revision-conflict" class="notice-banner warning" role="alert" hidden>
+            <strong>A newer revision exists.</strong>
+            <span>Your unsaved form input is preserved.</span>
+            <div class="notice-actions">
+              <button id="reload-current-revision" type="button">Reload Current Revision</button>
+              <button id="dismiss-revision-conflict" type="button">Dismiss</button>
+            </div>
+          </div>
+          <div id="retry-mutation" class="notice-banner warning" role="alert" hidden>
+            <strong>The edit was not acknowledged.</strong>
+            <span>The same request ID can be replayed safely.</span>
+            <button id="retry-mutation-button" type="button">Retry exact request</button>
+          </div>
+          <details class="revision-history">
+            <summary>Revision history</summary>
+            <ol id="revision-history-list"><li>No setup selected.</li></ol>
+          </details>
+          <p id="workspace-status" class="audit-action-status" role="status"></p>
+        </section>
+
         <section class="panel-section model-section">
           <p class="eyebrow">Active model</p>
           <h2 id="panel-model-name">Waiting for geometry</h2>
@@ -118,8 +168,8 @@
         <section class="panel-section intent-section" aria-labelledby="intent-heading">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">Task 15 orchestration</p>
-              <h2 id="intent-heading">Engineering instruction</h2>
+              <p class="eyebrow">Durable proposal</p>
+              <h2 id="intent-heading">Interpret before setup</h2>
             </div>
             <span id="interpret-mode" class="audit-badge" data-mode="LIVE">LIVE</span>
           </div>
@@ -130,6 +180,7 @@
             Use current face clicks as evidence
           </label>
           <button id="interpret-button" class="audit-export-button" type="button" disabled>Interpret</button>
+          <button id="create-proposal-setup" class="ghost-button full-button" type="button" hidden>Create durable setup from proposal</button>
           <p id="interpret-error" class="intent-error" role="alert" hidden></p>
           <div id="interpret-notices" class="intent-notices" role="status" hidden></div>
           <div id="clarification-panel" class="clarification-panel" hidden>
@@ -141,14 +192,204 @@
             <summary>Typed model output</summary>
             <pre id="typed-output">No interpretation yet.</pre>
           </details>
-          <div class="fallback-controls">
+          <div class="fallback-controls" hidden aria-hidden="true">
             <label for="fallback-case">Replay fallback</label>
             <select id="fallback-case" disabled><option value="">Load a STEP model first</option></select>
             <button id="fallback-button" class="ghost-button" type="button" disabled>Load REPLAY case</button>
           </div>
         </section>
 
-        <section id="audit-panel" class="panel-section audit-section" aria-labelledby="audit-heading">
+        <section id="engineering-panel" class="panel-section engineering-section" aria-labelledby="engineering-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">R3 engineering envelope</p>
+              <h2 id="engineering-heading">Engineering setup</h2>
+            </div>
+            <span id="engineering-readiness-badge" class="audit-badge" data-status="unvalidated">No setup</span>
+          </div>
+          <p id="engineering-empty" class="audit-empty">Create or reopen a durable setup to edit engineering intent.</p>
+          <div id="engineering-content" hidden>
+            <details class="editor-group" open>
+              <summary>Analysis, mesh, and solver</summary>
+              <form id="configuration-form" class="editor-form">
+                <div class="compact-grid">
+                  <label>Analysis type
+                    <select id="analysis-type">
+                      <option value="static_structural">Linear static</option>
+                      <option disabled>Nonlinear — analysis.nonlinear_unsupported</option>
+                      <option disabled>Thermal — analysis.thermal_unsupported</option>
+                      <option disabled>Dynamics — analysis.dynamics_unsupported</option>
+                    </select>
+                  </label>
+                  <label>Dimensionality
+                    <select id="analysis-dimensionality">
+                      <option value="3d_solid">3D solid</option>
+                      <option disabled>Shell — analysis.shell_unsupported</option>
+                      <option disabled>Beam — analysis.beam_unsupported</option>
+                    </select>
+                  </label>
+                  <label>Coordinates
+                    <select id="analysis-coordinate-system">
+                      <option value="global_cartesian">Global Cartesian</option>
+                      <option disabled>Local / cylindrical — coordinate_system.local_unsupported</option>
+                    </select>
+                  </label>
+                  <label>Solver target
+                    <select id="analysis-solver-target"><option value="calculix">CalculiX</option></select>
+                  </label>
+                  <label>Unit system
+                    <select id="analysis-units"><option value="mm-N-MPa">mm-N-MPa</option></select>
+                  </label>
+                  <label>Target element size
+                    <span class="quantity-row">
+                      <input id="mesh-size" type="number" min="0" step="any" required>
+                      <select id="mesh-size-unit"><option>mm</option><option>m</option></select>
+                    </span>
+                  </label>
+                </div>
+                <p class="fixed-profile">Gmsh tetrahedral · first order · meshing not yet executed</p>
+                <details class="unsupported-list">
+                  <summary>Unsupported capability codes</summary>
+                  <p>interaction.contact_unsupported · material.plastic_unsupported · material.orthotropic_unsupported · geometry.multiple_solids_unsupported · constraint.rotation_unsupported · constraint.time_dependent_unsupported</p>
+                </details>
+                <fieldset class="result-fields">
+                  <legend>Requested result fields</legend>
+                  <label><input type="checkbox" name="result_field" value="displacement"> Displacement</label>
+                  <label><input type="checkbox" name="result_field" value="stress"> Stress</label>
+                  <label><input type="checkbox" name="result_field" value="reaction_force"> Reaction force</label>
+                </fieldset>
+                <button type="submit" class="ghost-button">Save configuration as new revision</button>
+              </form>
+            </details>
+
+            <details class="editor-group" open>
+              <summary>Material</summary>
+              <div id="material-authority" class="authority-card">No material assigned.</div>
+              <div id="material-decision-actions" class="audit-actions" hidden>
+                <button id="accept-material-proposal" class="audit-action accept" type="button">Accept proposal</button>
+                <button id="reject-material-proposal" class="audit-action reject" type="button">Reject proposal</button>
+              </div>
+              <form id="material-form" class="editor-form">
+                <label>Material name <input id="material-name" required></label>
+                <div class="compact-grid">
+                  <label>Young’s modulus
+                    <span class="quantity-row">
+                      <input id="material-e" type="number" min="0" step="any" required>
+                      <select id="material-e-unit"><option>MPa</option><option>GPa</option><option>kPa</option><option>Pa</option></select>
+                    </span>
+                  </label>
+                  <label>Poisson’s ratio <input id="material-nu" type="number" min="-0.999999" max="0.499999" step="any" required></label>
+                  <label>Density (optional)
+                    <span class="quantity-row">
+                      <input id="material-density" type="number" min="0" step="any">
+                      <select id="material-density-unit"><option value="kg/m^3">kg/m³</option><option value="kg/m3">kg/m3</option><option value="t/mm^3">t/mm³</option><option value="tonne/mm^3">tonne/mm³</option></select>
+                    </span>
+                  </label>
+                </div>
+                <button type="submit" class="ghost-button">Save engineer-entered material</button>
+              </form>
+            </details>
+
+            <details class="editor-group" open>
+              <summary>Boundary conditions</summary>
+              <div id="bc-list" class="engineering-list"></div>
+              <form id="bc-form" class="editor-form">
+                <input id="bc-edit-index" type="hidden">
+                <label>Condition
+                  <select id="bc-type">
+                    <option value="fixed_displacement">Fixed displacement</option>
+                    <option value="prescribed_displacement">Prescribed translational displacement</option>
+                  </select>
+                </label>
+                <label>Engineering target <select id="bc-target"></select></label>
+                <p class="selection-hint">Viewer selection: <strong id="bc-viewer-selection">None</strong>. Selection is not confirmation.</p>
+                <fieldset id="bc-fixed-fields" class="axis-fields">
+                  <legend>Fixed components</legend>
+                  <label><input type="checkbox" name="fixed_axis" value="x"> X</label>
+                  <label><input type="checkbox" name="fixed_axis" value="y"> Y</label>
+                  <label><input type="checkbox" name="fixed_axis" value="z"> Z</label>
+                </fieldset>
+                <fieldset id="bc-prescribed-fields" class="component-fields" hidden>
+                  <legend>Prescribed translations</legend>
+                  <label><input type="checkbox" name="prescribed_axis" value="x"> X <input data-axis="x" type="number" step="any"><select data-axis-unit="x"><option>mm</option><option>m</option></select></label>
+                  <label><input type="checkbox" name="prescribed_axis" value="y"> Y <input data-axis="y" type="number" step="any"><select data-axis-unit="y"><option>mm</option><option>m</option></select></label>
+                  <label><input type="checkbox" name="prescribed_axis" value="z"> Z <input data-axis="z" type="number" step="any"><select data-axis-unit="z"><option>mm</option><option>m</option></select></label>
+                  <output id="bc-normalized-preview">Normalized preview: —</output>
+                </fieldset>
+                <div class="form-actions">
+                  <button type="submit" class="ghost-button">Save BC</button>
+                  <button id="bc-cancel-edit" type="button" class="text-button">Clear</button>
+                </div>
+              </form>
+            </details>
+
+            <details class="editor-group" open>
+              <summary>Loads</summary>
+              <div id="load-list" class="engineering-list"></div>
+              <form id="load-form" class="editor-form">
+                <input id="load-edit-index" type="hidden">
+                <label>Load type
+                  <select id="load-type">
+                    <option value="resultant_surface_force">Resultant surface force</option>
+                    <option value="pressure">Pressure</option>
+                    <option value="surface_traction">Surface traction</option>
+                    <option value="gravity">Gravity</option>
+                    <option id="concentrated-force-option" value="concentrated_force" disabled>Concentrated force (native node set)</option>
+                  </select>
+                </label>
+                <label id="load-target-label">Engineering target <select id="load-target"></select></label>
+                <p class="selection-hint">Viewer selection: <strong id="load-viewer-selection">None</strong>. Selection is not confirmation.</p>
+                <label>Magnitude
+                  <span class="quantity-row">
+                    <input id="load-magnitude" type="number" step="any" required>
+                    <select id="load-unit"></select>
+                  </span>
+                </label>
+                <fieldset id="load-direction-fields" class="vector-fields">
+                  <legend>Direction vector</legend>
+                  <label>X <input id="load-direction-x" type="number" step="any" value="0"></label>
+                  <label>Y <input id="load-direction-y" type="number" step="any" value="-1"></label>
+                  <label>Z <input id="load-direction-z" type="number" step="any" value="0"></label>
+                </fieldset>
+                <p id="pressure-convention" class="fixed-profile" hidden>Nonnegative pressure acts on the inward surface normal. Direction is not user-controlled.</p>
+                <p id="gravity-dependency" class="fixed-profile" hidden>Model-wide by default. Gravity requires material density.</p>
+                <output id="load-normalized-preview">Normalized preview: —</output>
+                <p class="fixed-profile">Distribution assumption: uniform</p>
+                <div class="form-actions">
+                  <button type="submit" class="ghost-button">Save load</button>
+                  <button id="load-cancel-edit" type="button" class="text-button">Clear</button>
+                </div>
+              </form>
+            </details>
+
+            <details class="editor-group" open>
+              <summary>Review and decisions</summary>
+              <div class="readiness-grid">
+                <div><span>Engineering</span><strong id="engineering-ready-value">Blocked</strong></div>
+                <div><span>Artifact</span><strong id="artifact-capability-value">Blocked</strong></div>
+                <div><span>Compatibility export</span><strong id="compatibility-export-value">Blocked</strong></div>
+              </div>
+              <div class="audit-group">
+                <h3>Validation issues</h3>
+                <ul id="engineering-issue-list" class="issue-list"></ul>
+              </div>
+              <div class="audit-group">
+                <h3>Load summary</h3>
+                <dl id="load-summary" class="summary-facts"></dl>
+              </div>
+              <div class="audit-group">
+                <h3>Region decisions</h3>
+                <div id="durable-region-list" class="audit-card-list"></div>
+              </div>
+              <div class="audit-group">
+                <h3>Assumption decisions</h3>
+                <div id="durable-assumption-list" class="audit-card-list"></div>
+              </div>
+            </details>
+          </div>
+        </section>
+
+        <section id="audit-panel" class="panel-section audit-section" aria-labelledby="audit-heading" hidden>
           <div class="section-heading">
             <div>
               <p class="eyebrow">Task 13 review gate</p>

@@ -2112,3 +2112,65 @@ completion, solver execution, or results.
   not on PATH; `pyproject.toml`, `uv.lock`, and `requirements.txt` are
   unchanged.
 - No commit, merge, tag, or push was performed.
+
+### R3.2b durable browser engineering editor (working tree, 2026-07-29)
+
+R3.2b replaces the bound production browser workflow with the durable
+project/model-version/setup aggregate while leaving the frozen legacy routes
+available for compatibility tests. The browser now has one explicit state
+object and one `/api/v1` client layer; uploads, reopen, every engineering edit,
+region and assumption decisions, revision history, and source-stale state come
+from durable APIs. No browser action creates or updates a
+`SelectionSessionStore` record.
+
+- A read-only `POST /api/v1/model-versions/{version_id}/interpret` route
+  materializes the exact stored STEP version and returns an existing typed,
+  grounded proposal without persisting session state. The proposal becomes
+  durable only through normal setup creation; INP directs the engineer to
+  native-region editing with `interpretation.step_required`.
+- The workspace creates/lists projects, uploads STEP/INP sources and successor
+  versions, lists/reopens setups, restores the selected durable workspace,
+  loads durable inventory/glTF, shows current revision/history, and blocks
+  stale-source mutations.
+- The compact editor covers the fixed analysis, material, mesh, solver,
+  requested-result, BC, and load envelope. It retains original/normalized
+  quantities, JSON-preserved signed zero, material authority/proposal state,
+  discriminator-specific load fields, normalized previews, pressure/gravity
+  conventions, native NSET/ELSET targets, and an explicit not-yet-meshed state.
+- Viewer clicks remain distinct from targets. Proposed/confirmed/rejected
+  durable regions are visible and decidable, rejected targets can use the
+  backend-supported correction path, and confirmed BC/load targets retain the
+  hatch/arrow visual language.
+- Every form edit submits the current `expected_revision`, a unique request ID,
+  and a full intent; browser truth changes only from the returned revision.
+  Exact replay, safe conflict display, preserved form input, explicit reload,
+  terminal-state preservation, and stale-source blocking are implemented.
+- Backend readiness, stable issues, load/restraint summaries, material
+  decisions, target artifact capability, and compatibility export eligibility
+  render separately. Disabled excluded modes and API problems show stable
+  capability codes without raw exceptions or a false generic green state.
+
+#### R3.2b validation evidence (2026-07-29)
+
+- Final R3.2b static/contract/workflow group: **46 passed**. It proves durable
+  proposal creation without a session write, full setup authoring, decisions,
+  truthful STEP capability blockers, server restart/reopen with exact history,
+  and one post-restart successor revision.
+- Affected R3.2b/R3.2a/R3.1, revision/persistence, source-supersession,
+  viewer/audit, evaluation, and OpenAPI suites: **401 passed**.
+- Full suite with `SIM_INTENT_REQUIRE_BASELINE_EVIDENCE=1`:
+  **1011 passed, 1 skipped** in 454.81 seconds; baseline evidence
+  `executed=49 skipped=0 failed=0 required=yes`. The skip is the optional local
+  CalculiX executable.
+- Read-only deterministic REPLAY: **15/15** (13 pass, 2 pass after
+  clarification), manifest
+  `47c0d7275b9a065a7f5e3316ed60b7ffff58913e0b1e5045c857f663e1f6775b`.
+- OpenAPI/IR export, 35 schema-stamping targets, `compileall`, JavaScript
+  syntax, environment, secret, host-path, scope, and whitespace checks passed.
+  TypeScript regeneration was byte-identical at SHA-256
+  `50ce0e431a8a76420f315c28ed3a6c10792e2b34a39847ad604cd94787e74dc5`.
+- Requirements drift could not execute because pinned `uv` is unavailable;
+  dependency files are unchanged. Rendered-page automation was unavailable
+  because no browser backend was connected; the repository's static browser
+  strategy and durable workflow tests passed.
+- No commit, merge, tag, or push was performed.
