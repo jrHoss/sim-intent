@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from geom.cylinders import CylinderRecord, group_holes
 from geom.inventory import FaceInventory
 from ground.queries import Query, QueryEngine, QueryResult
-from ir.schema import Region
+from ir.schema import Region, UnresolvedCadFaceTarget
 from llm.interpreter import (
     BCPayload,
     Interpretation,
@@ -448,7 +448,10 @@ class GroundingEngine:
             region = Region(
                 id=region_id or f"region_{intent_index + 1}",
                 entity_type="cad_face",
-                entity_ids=sorted(clicked),
+                cad_face_target=UnresolvedCadFaceTarget(
+                    resolution="unresolved",
+                    source_face_tags=sorted(clicked),
+                ),
                 selection_method="user_click",
                 confidence=DIRECT_CLICK_CONFIDENCE,
                 source_instruction=source_instruction,
@@ -475,7 +478,10 @@ class GroundingEngine:
         region = Region(
             id=region_id or f"region_{intent_index + 1}",
             entity_type="cad_face",
-            entity_ids=candidate_sets[0].entity_ids,
+            cad_face_target=UnresolvedCadFaceTarget(
+                resolution="unresolved",
+                source_face_tags=candidate_sets[0].entity_ids,
+            ),
             selection_method="semantic_geometry_query",
             confidence=_clamp_confidence(set_margin),
             source_instruction=source_instruction,

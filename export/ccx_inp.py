@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass, replace
 from decimal import Decimal, localcontext
 
-from ir.schema import Region, SimulationIntent
+from ir.schema import Region, SimulationIntent, region_entity_membership
 
 from export.common import (
     ElementFaceReference,
@@ -97,7 +97,7 @@ def export_ccx_inp(intent: SimulationIntent, model: MeshModelMetadata):
             [
                 f"** Region ID: {_comment_string(region.id)}",
                 f"** source_instruction: {_comment_string(region.source_instruction)}",
-                f"** original_entity_ids: {json.dumps(region.entity_ids, separators=(',', ':'))}",
+                f"** native_mesh_entity_ids: {json.dumps(region_entity_membership(region), separators=(',', ':'))}",
                 f"** selection_method: {region.selection_method}",
                 f"** confidence: {format_float(region.confidence)}",
                 f"** validation_status: {report.validation_status}",
@@ -370,7 +370,7 @@ def _resolve_region(
 
     if region.entity_type in {"node_set", "element_set"}:
         expected_kind = region.entity_type
-        values = region.entity_ids
+        values = region_entity_membership(region)
         if all(isinstance(value, int) and not isinstance(value, bool) for value in values):
             ids = tuple(sorted(set(int(value) for value in values)))
             universe = node_universe if expected_kind == "node_set" else element_universe
@@ -432,12 +432,13 @@ def _resolve_region(
         )
 
     if region.entity_type == "mesh_face":
-        if not all(isinstance(value, int) and not isinstance(value, bool) for value in region.entity_ids):
+        values = region_entity_membership(region)
+        if not all(isinstance(value, int) and not isinstance(value, bool) for value in values):
             raise InvalidRegionReferenceError(
                 f"Mesh-face region '{region.id}' must contain Task 5 facet-group IDs."
             )
-        group_ids = tuple(sorted(set(int(value) for value in region.entity_ids)))
-        if len(group_ids) != len(region.entity_ids):
+        group_ids = tuple(sorted(set(int(value) for value in values)))
+        if len(group_ids) != len(values):
             raise InvalidRegionReferenceError(
                 f"Mesh-face region '{region.id}' contains duplicate facet-group IDs."
             )

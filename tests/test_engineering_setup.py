@@ -105,15 +105,41 @@ EXPLICIT_SOLVER_SETTINGS = {
 
 
 def region(region_id: str, entity_type: str, entity_ids: list | None = None) -> dict:
-    return {
+    """Build one region of *entity_type*.
+
+    A ``cad_face`` region gets a synthetic ``resolved`` target whose
+    ``model_version_id``/``artifact_sha256`` are placeholders.  That is valid
+    only for in-memory schema checks: R4b.2 binds a CAD region to the exact
+    uploaded ModelVersion and its persisted geometry-identity artifact, so a
+    fixture that submits a CAD region through the durable API must overwrite
+    ``cad_face_target`` with the real uploaded identity (see
+    ``test_confirming_and_accepting_everything_never_supplies_configuration``).
+    A fixture that uploads :func:`minimal_inp` has mesh entities rather than
+    CAD faces and must use a mesh region kind -- see :func:`inp_payload`.
+    """
+
+    ids = entity_ids or [1]
+    value = {
         "id": region_id,
         "entity_type": entity_type,
-        "entity_ids": entity_ids or [1],
         "selection_method": "user_confirmed",
         "confidence": 1.0,
         "source_instruction": f"Use {region_id}.",
         "status": "confirmed",
     }
+    if entity_type == "cad_face":
+        value["cad_face_target"] = {
+            "model_version_id": "unit-test-version",
+            "artifact_sha256": "a" * 64,
+            "resolution": "resolved",
+            "stable_identities": [
+                f"gfi1:{entity_id:064x}" for entity_id in ids
+            ],
+            "source_face_tags": ids,
+        }
+    else:
+        value["entity_ids"] = ids
+    return value
 
 
 def payload() -> dict:
@@ -155,6 +181,25 @@ def payload() -> dict:
         "assumptions": [],
         "validation_status": "unvalidated",
     }
+
+
+def inp_payload() -> dict:
+    """:func:`payload` retargeted at the mesh regions of an uploaded INP model.
+
+    R4b.2 scopes ``cad_face`` regions to STEP/CAD ModelVersions: an INP
+    ModelVersion carries mesh entities, not CAD faces, so the durable API
+    rejects a CAD region against one with ``cad_region_not_applicable``.  This
+    keeps the region ids, constraint target and load target of :func:`payload`
+    unchanged -- ``mesh_face`` is in both ``SURFACE_REGION_ENTITY_TYPES`` and
+    ``CONSTRAINT_REGION_ENTITY_TYPES`` -- so only the entity vocabulary moves.
+    """
+
+    body = payload()
+    body["regions"] = [
+        region("fixed", "mesh_face", [1]),
+        region("loaded", "mesh_face", [2]),
+    ]
+    return body
 
 
 def codes(intent: SimulationIntent) -> set[str]:
@@ -551,10 +596,10 @@ LEGACY_EXAMPLES = [
 ]
 
 
-def test_the_current_schema_version_is_two_with_a_registered_migration():
-    assert SIMULATION_INTENT_SCHEMA_VERSION == 2
+def test_the_current_schema_version_is_three_with_registered_migrations():
+    assert SIMULATION_INTENT_SCHEMA_VERSION == 3
     assert SIMULATION_INTENT_MINIMUM_SUPPORTED_VERSION == 1
-    assert SIMULATION_INTENT_MIGRATIONS.registered_edges == (1,)
+    assert SIMULATION_INTENT_MIGRATIONS.registered_edges == (1, 2)
 
 
 @pytest.mark.parametrize("relative", LEGACY_EXAMPLES)
@@ -603,12 +648,22 @@ def test_migration_reinterprets_no_unit_or_load_semantics():
     before = copy.deepcopy(raw)
     migrated = SIMULATION_INTENT_MIGRATIONS.migrate(raw)
     assert migrated[SCHEMA_VERSION_FIELD] == SIMULATION_INTENT_SCHEMA_VERSION
-    for key in ("materials", "regions", "bcs", "loads", "assumptions",
+    for key in ("materials", "bcs", "loads", "assumptions",
                 "validation_status"):
         assert migrated[key] == before[key], key
+    for current, old in zip(migrated["regions"], before["regions"], strict=True):
+        assert {
+            key: value
+            for key, value in current.items()
+            if key != "cad_face_target"
+        } == {
+            key: value for key, value in old.items()
+            if key != "entity_ids"
+        }
+        assert current["cad_face_target"]["resolution"] == "legacy_local_only"
     assert migrated["analysis"]["units"] == before["analysis"]["units"]
     assert migrated["analysis"]["type"] == before["analysis"]["type"]
-    # The migration writes exactly five explicit nulls and invents nothing.
+    # The migration adds five missing decisions and explicit legacy CAD state.
     added = {
         key for key in migrated if key not in before
     } | {
@@ -873,6 +928,7 @@ def invalid_payload() -> dict:
     # A supported load on an unsupported region type: complete, but wrong.
     body["regions"][1]["entity_type"] = "element_set"
     body["regions"][1]["entity_ids"] = ["VOLUME"]
+    body["regions"][1]["cad_face_target"] = None
     return body
 
 
@@ -1111,11 +1167,28 @@ def test_confirming_and_accepting_everything_never_supplies_configuration(tmp_pa
         uploaded = upload(
             app, project["id"], BRACKET_STEP.read_bytes(), filename="bracket.step"
         )
+        version_id = uploaded["model_version"]["id"]
+        record, _raw, artifact = app.state.persistence.read_geometry_identity(
+            version_id
+        )
+        faces = {face["source_ref"]: face for face in artifact["faces"]}
+        for region_body in proposal["regions"]:
+            tags = region_body["cad_face_target"]["source_face_tags"]
+            selected = [faces[tag] for tag in tags]
+            region_body["cad_face_target"] = {
+                "model_version_id": version_id,
+                "artifact_sha256": record.integrity_sha256,
+                "resolution": "resolved",
+                "stable_identities": sorted(
+                    face["stable_identity"] for face in selected
+                ),
+                "source_face_tags": list(tags),
+            }
         created = request(
             app, "POST", f"/api/v1/projects/{project['id']}/setups",
             json={
                 "model_id": uploaded["model_id"],
-                "model_version_id": uploaded["model_version"]["id"],
+                "model_version_id": version_id,
                 "request_id": "underspecified-create",
                 "intent": proposal,
             },
@@ -1240,8 +1313,8 @@ def durable_payload() -> dict:
             "density_original": {"value": 7850.0, "unit": "kg/m^3"},
         }],
         "regions": [
-            durable_region("fixed_face", "cad_face", [1]),
-            durable_region("loaded_face", "cad_face", [2]),
+            durable_region("fixed_face", "mesh_face", [1]),
+            durable_region("loaded_face", "mesh_face", [2]),
             durable_region("load_nodes", "node_set", ["LOAD_NODES"]),
             durable_region("solid_cells", "element_set", ["SOLID"]),
         ],

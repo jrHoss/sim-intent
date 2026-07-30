@@ -151,6 +151,12 @@ before a real product workflow is exposed.
 
 ## Unsafe STEP-to-Abaqus positional mapping
 
+*Historical finding, recorded 2026-07-23 and superseded by R4b.2: the
+`source_step_face_order` strategy described below no longer exists in
+`export/abaqus_py.py`. Source CAD face tags are provenance only, the private
+renderer requires explicitly mapped solver face IDs and an explicit solver-face
+universe, and public CAD export remains blocked without verified mapping (R6).*
+
 `export/abaqus_py.py` declares and implements
 `source_step_face_order`: OCC face tag `n` is emitted as
 `part.faces[n - 1]`. Preflight requires a contiguous source tag sequence, and

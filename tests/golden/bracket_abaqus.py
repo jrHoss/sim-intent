@@ -5,8 +5,9 @@
 # Internal unit convention: mm-N-MPa (gravity acceleration in mm/s^2)
 # Server-computed validation status: valid
 # Source STEP SHA-256: d81d158aa3b0a5464407496bd1782eba375f853e870fba6edd8cf485825f3c90
-# Region mapping: source_step_face_order (OCC tag n -> part.faces[n - 1])
-# Mapping is valid only for the exact content-hashed STEP file; regenerated CAD is unsupported.
+# Region mapping: explicit solver face IDs supplied by the caller below the public export gate.
+# Source CAD face tags are provenance only; they are not solver face IDs and imply no mapping.
+# Provenance is valid only for the exact content-hashed STEP file; regenerated CAD is unsupported.
 # Accepted assumptions:
 # - [assumption_099adc813874096a] "The 5 kN value was interpreted as total force, not pressure or force per node."
 # - [assumption_28387eaa66c82eac] "Downward was interpreted as the negative Y direction of the model coordinate system."
@@ -28,30 +29,35 @@ step_geometry = mdb.openStep(fileName=STEP_FILE, scaleFromFile=OFF)
 part = model.PartFromGeometryFile(
     name=PART_NAME, geometryFile=step_geometry, combine=False,
     dimensionality=THREE_D, type=DEFORMABLE_BODY)
+# The supplied solver-face universe is 1..12; it is not derived from CAD tags.
 if len(part.faces) < 12:
-    raise RuntimeError('Imported STEP face count cannot satisfy confirmed source face tags.')
+    raise RuntimeError('Imported face count cannot satisfy the supplied solver face universe.')
 
 # Region ID: "bolt_holes"
 # source_instruction: "Fix the two bolt holes."
-# original_entity_ids: [11,12]
+# source_cad_face_tags (provenance only, not solver IDs): [11,12]
+# mapped_solver_face_ids (explicitly supplied): [11,12]
 # selection_method: semantic_geometry_query
 # confidence: 0.95
 # validation_status: valid
 # solver_set: SET_BOLT_HOLES; solver_surface: SURF_BOLT_HOLES
-_face_tags = (11, 12)
-_faces = tuple(part.faces[tag - 1] for tag in _face_tags)
+_solver_face_ids = (11, 12)
+_faces = tuple(part.faces[solver_face_id - 1]
+               for solver_face_id in _solver_face_ids)
 part.Set(name='SET_BOLT_HOLES', faces=_faces)
 part.Surface(name='SURF_BOLT_HOLES', side1Faces=_faces)
 
 # Region ID: "upper_mounting_face"
 # source_instruction: "Apply a total downward force of 5 kN to the upper mounting face."
-# original_entity_ids: [4]
+# source_cad_face_tags (provenance only, not solver IDs): [4]
+# mapped_solver_face_ids (explicitly supplied): [4]
 # selection_method: user_confirmed
 # confidence: 1
 # validation_status: valid
 # solver_set: SET_UPPER_MOUNTING_FACE; solver_surface: SURF_UPPER_MOUNTING_FACE
-_face_tags = (4,)
-_faces = tuple(part.faces[tag - 1] for tag in _face_tags)
+_solver_face_ids = (4,)
+_faces = tuple(part.faces[solver_face_id - 1]
+               for solver_face_id in _solver_face_ids)
 part.Set(name='SET_UPPER_MOUNTING_FACE', faces=_faces)
 part.Surface(name='SURF_UPPER_MOUNTING_FACE', side1Faces=_faces)
 

@@ -76,7 +76,9 @@ def run_unsafe(contract: FamilyContract, transform) -> list[SafetyViolation]:
     payload[SCHEMA_VERSION_FIELD] = 1
     before = copy.deepcopy(payload)
     after = registry.migrate(payload)
-    return audit_transition(contract, before, after, from_version=1)
+    return audit_transition(
+        contract, before, after, from_version=1, approved={}
+    )
 
 
 # --------------------------------------------------------------------------

@@ -211,13 +211,20 @@ class ArtifactGenerationFailedError(ExportAdapterError):
 
 @dataclass(frozen=True)
 class CadModelMetadata:
-    """Explicit metadata for the exact STEP source used during grounding."""
+    """Explicit metadata for the exact STEP source used during grounding.
+
+    ``source_cad_face_tags`` is CAD-side provenance and nothing else.  It is
+    never a solver face ID list, a solver face index basis, a statement of
+    solver topology cardinality, or proof that a CAD-to-solver mapping
+    exists.  A renderer below the public export gate is handed an explicit
+    solver-face universe instead; R6 owns production CAD-to-mesh/solver
+    mapping.
+    """
 
     source_path: Path
     source_name: str
     source_sha256: str
-    face_ids: tuple[int, ...]
-    mapping_strategy: Literal["source_step_face_order"] = "source_step_face_order"
+    source_cad_face_tags: tuple[int, ...]
 
 
 @dataclass(frozen=True)

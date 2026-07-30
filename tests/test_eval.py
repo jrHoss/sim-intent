@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from app.config import LocalDataConfig
 from app.orchestration import interpret_and_propose
+from app.record_versions import load_fallback_record
 from app.runtime_mode import RuntimeMode
 from app.session import SelectionSessionStore
 from app.server import create_app
@@ -448,10 +449,16 @@ def test_designated_case_reaches_validation(replay_report):
     assert result.validation_status == "valid"
 
 
-def test_designated_case_reaches_artifact_generation(replay_report):
+def test_designated_case_truthfully_blocks_without_cad_mapping(replay_report):
     result = next(case for case in replay_report.cases if case.case_id == "bracket_combined_export")
-    assert result.export_result["adapter"] == "abaqus_py"
-    assert result.export_result["filename"].endswith(".py")
+    assert result.export_result == {
+        "status": "blocked",
+        "code": "missing_region_mapping",
+        "validation_status": "valid",
+        "export_eligible": False,
+    }
+    assert "adapter" not in result.export_result
+    assert "filename" not in result.export_result
 
 
 def test_evaluation_fails_if_production_orchestration_injects_material(
@@ -485,19 +492,23 @@ def test_evaluation_fails_if_production_orchestration_injects_material(
 
 def test_blocked_intents_remain_blocked(cases):
     result = evaluate_case(by_id(cases, "bracket_combined_export"), paths=PATHS, mode="REPLAY")
-    fallback = json.loads((PATHS.fallback_dir / "bracket_combined_export.json").read_text(encoding="utf-8"))
-    from ir.schema import SimulationIntent
+    fallback_path = PATHS.fallback_dir / "bracket_combined_export.json"
+    _, intent = load_fallback_record(
+        fallback_path.read_text(encoding="utf-8"),
+        source="eval/fallback/bracket_combined_export.json",
+    )
     from ir.validate import validate_intent
-    intent = SimulationIntent.model_validate(fallback["proposed_ir"], strict=True)
     assert result.status == "PASS" and not validate_intent(intent).export_eligible
 
 
 def test_export_eligibility_cannot_be_bypassed():
-    from ir.schema import SimulationIntent
-    payload = json.loads((PATHS.fallback_dir / "bracket_combined_export.json").read_text(encoding="utf-8"))
-    intent = SimulationIntent.model_validate(payload["proposed_ir"], strict=True)
+    fallback_path = PATHS.fallback_dir / "bracket_combined_export.json"
+    _, intent = load_fallback_record(
+        fallback_path.read_text(encoding="utf-8"),
+        source="eval/fallback/bracket_combined_export.json",
+    )
     inventory, _ = get_inventory(PATHS.fixture_dir / "bracket.step")
-    metadata = CadModelMetadata(source_path=PATHS.fixture_dir / "bracket.step", source_name="bracket.step", source_sha256=inventory.file_sha256, face_ids=tuple(face.tag for face in inventory.faces))
+    metadata = CadModelMetadata(source_path=PATHS.fixture_dir / "bracket.step", source_name="bracket.step", source_sha256=inventory.file_sha256, source_cad_face_tags=tuple(face.tag for face in inventory.faces))
     with pytest.raises(ExportNotReadyError):
         export_abaqus_py(intent, metadata)
 
@@ -522,7 +533,10 @@ def test_server_live_proposal_uses_session_and_blocks_export(tmp_path, cases):
     assert response.status_code == 200
     body = response.json()
     assert body["mode"] == "LIVE" and body["state"] == "proposed"
-    assert body["intent"]["regions"][0]["entity_ids"] == [11, 12]
+    assert "entity_ids" not in body["intent"]["regions"][0]
+    assert body["intent"]["regions"][0]["cad_face_target"][
+        "source_face_tags"
+    ] == [11, 12]
     assert request(app, "POST", f"/session/{model_id}/export-gate").status_code == 409
 
 
@@ -557,7 +571,8 @@ def test_vertical_click_uses_central_y_axis_even_if_model_declares_z(tmp_path, c
     assert response.status_code == 200
     intent = response.json()["intent"]
     assert intent["bcs"][0]["components"] == ["y"]
-    assert intent["regions"][0]["entity_ids"] == [5]
+    assert "entity_ids" not in intent["regions"][0]
+    assert intent["regions"][0]["cad_face_target"]["source_face_tags"] == [5]
     assert intent["regions"][0]["selection_method"] == "user_click"
     assert any(
         "Vertical motion was interpreted as the Y displacement component"
@@ -606,7 +621,9 @@ def test_vague_lateral_side_label_returns_real_clarification_candidates(
         json={"intent_index": 0, "entity_ids": [1]},
     )
     assert chosen.status_code == 200
-    assert chosen.json()["intent"]["regions"][0]["entity_ids"] == [1]
+    assert chosen.json()["intent"]["regions"][0]["cad_face_target"][
+        "source_face_tags"
+    ] == [1]
     assert chosen.json()["intent"]["regions"][0]["status"] == "proposed"
 
 
@@ -888,7 +905,13 @@ def test_combined_prompt_omits_repeated_condition_but_adds_force_and_gravity(
     assert len(body["intent"]["bcs"]) == 1
     assert len(body["intent"]["loads"]) == 2
     assert len(body["intent"]["regions"]) == 2
-    assert sum(region["entity_ids"] == [11, 12] for region in body["intent"]["regions"]) == 1
+    assert (
+        sum(
+            region["cad_face_target"]["source_face_tags"] == [11, 12]
+            for region in body["intent"]["regions"]
+        )
+        == 1
+    )
     gravity_loads = [load for load in body["intent"]["loads"] if load["type"] == "gravity"]
     assert len(gravity_loads) == 1 and gravity_loads[0]["region_ref"] is None
 
@@ -965,7 +988,11 @@ def test_same_entities_with_different_condition_types_remain_separate(tmp_path, 
     assert second.status_code == 200
     assert second.json()["notices"] == []
     assert len(second.json()["intent"]["regions"]) == 2
-    assert all(region["entity_ids"] == [5] for region in second.json()["intent"]["regions"])
+    assert all(
+        "entity_ids" not in region
+        and region["cad_face_target"]["source_face_tags"] == [5]
+        for region in second.json()["intent"]["regions"]
+    )
     assert len(second.json()["intent"]["bcs"]) == 1
     assert len(second.json()["intent"]["loads"]) == 1
 
@@ -1092,7 +1119,10 @@ def test_repeated_gravity_is_one_load_and_step_target_stays_blocked(tmp_path, ca
         {
             "id": "support_face",
             "entity_type": "cad_face",
-            "entity_ids": [1],
+            "cad_face_target": {
+                "resolution": "unresolved",
+                "source_face_tags": [1],
+            },
             "selection_method": "user_click",
             "confidence": 1.0,
             "source_instruction": "Fix the mounting face.",
@@ -1114,15 +1144,8 @@ def test_repeated_gravity_is_one_load_and_step_target_stays_blocked(tmp_path, ca
         f"/session/{model_id}/confirm_region",
         json={"region_id": "support_face"},
     )
-    assert confirmed.status_code == 200, confirmed.text
-    for assumption in confirmed.json()["intent"]["assumptions"]:
-        if assumption["criticality"] == "unit_critical":
-            accepted = request(
-                app,
-                "POST",
-                f"/session/{model_id}/assumptions/{assumption['id']}/accept",
-            )
-            assert accepted.status_code == 200
+    assert confirmed.status_code == 409, confirmed.text
+    assert "exact durable ModelVersion" in confirmed.text
     exported = request(
         app,
         "POST",
@@ -1135,6 +1158,8 @@ def test_repeated_gravity_is_one_load_and_step_target_stays_blocked(tmp_path, ca
     } >= {
         "artifact.step_meshing_required",
         "artifact.mapping_not_verified",
+        "region.cad_unresolved",
+        "region.proposed",
     }
 
 
@@ -1161,3 +1186,316 @@ def test_live_unavailable_report_has_no_invented_score(tmp_path):
     assert payload["mode"] == "LIVE" and payload["status"] == "UNAVAILABLE"
     assert payload["score"] is None and payload["threshold_achieved"] is None
     assert "No replay score was substituted" in md_path.read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
+# R4B2-AUDIT-02: the checked-in canonical replay reports must never make a
+# claim the canonical generator does not reproduce.
+# --------------------------------------------------------------------------
+
+REPLAY_JSON = ROOT / "eval" / "results-replay.json"
+REPLAY_MD = ROOT / "eval" / "results-replay.md"
+
+#: ``revision`` is derived from the working tree (``<HEAD>[+dirty]``), so it is
+#: provenance, not a claim about behaviour.  Every other byte of the canonical
+#: output is deterministic and is compared exactly.
+_REVISION_JSON_KEY = "revision"
+_REVISION_MD_PREFIX = "- Code revision:"
+
+
+def _canonical_replay_report():
+    """Regenerate the canonical replay report without touching the repo."""
+
+    return run_evaluation(root=ROOT, mode="REPLAY")
+
+
+def _blocked_export_case(document: dict) -> dict:
+    matches = [
+        case
+        for case in document["cases"]
+        if case["case_id"] == "bracket_combined_export"
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def test_checked_in_replay_reports_match_canonical_generation(tmp_path):
+    """The checked-in replay artifacts are exactly what --replay produces."""
+
+    report = _canonical_replay_report()
+    assert report.mode == "REPLAY"
+    assert report.total == 15
+    assert report.pass_count == 13
+    assert report.pass_after_clarification_count == 2
+    assert report.fail_count == 0
+
+    # Render into an isolated location; the repository copies are only read.
+    isolated_root = tmp_path / "isolated"
+    (isolated_root / "eval").mkdir(parents=True)
+    md_path, json_path = write_report(report, root=isolated_root)
+    assert md_path.parent == isolated_root / "eval"
+
+    generated_json = json.loads(json_path.read_text(encoding="utf-8"))
+    checked_in_json = json.loads(REPLAY_JSON.read_text(encoding="utf-8"))
+    assert generated_json.pop(_REVISION_JSON_KEY) is not None
+    checked_in_json.pop(_REVISION_JSON_KEY)
+    assert generated_json == checked_in_json
+
+    generated_md = md_path.read_text(encoding="utf-8").splitlines()
+    checked_in_md = REPLAY_MD.read_text(encoding="utf-8").splitlines()
+    assert len(generated_md) == len(checked_in_md)
+    for generated_line, checked_in_line in zip(generated_md, checked_in_md):
+        if generated_line.startswith(_REVISION_MD_PREFIX):
+            assert checked_in_line.startswith(_REVISION_MD_PREFIX)
+            continue
+        assert generated_line == checked_in_line
+
+    # Nothing was written into the repository by this regression.
+    assert not (isolated_root / "eval" / "results.json").exists()
+
+
+def test_checked_in_replay_reports_designated_case_as_truthfully_blocked():
+    """bracket_combined_export must claim no artifact of any kind."""
+
+    checked_in = json.loads(REPLAY_JSON.read_text(encoding="utf-8"))
+    case = _blocked_export_case(checked_in)
+    export_result = case["export_result"]
+    assert export_result["status"] == "blocked"
+    assert export_result["code"] == "missing_region_mapping"
+    assert export_result["export_eligible"] is False
+    for forbidden in ("adapter", "filename", "sha256", "bytes"):
+        assert forbidden not in export_result, forbidden
+    assert "bracket_abaqus.py" not in REPLAY_JSON.read_text(encoding="utf-8")
+
+    markdown = REPLAY_MD.read_text(encoding="utf-8")
+    row = next(
+        line
+        for line in markdown.splitlines()
+        if line.startswith("| bracket_combined_export |")
+    )
+    assert "blocked (missing_region_mapping)" in row
+    assert "bracket_abaqus.py" not in markdown
+
+    # The freshly generated report agrees with the checked-in claim.
+    generated = _canonical_replay_report().model_dump(mode="json")
+    assert _blocked_export_case(generated)["export_result"] == export_result
+
+
+def test_checked_in_replay_reports_carry_no_ordinal_mapping_claim():
+    """Replay limitations state the truthful renderer boundary."""
+
+    for path in (REPLAY_JSON, REPLAY_MD):
+        text_content = path.read_text(encoding="utf-8")
+        for obsolete in (
+            "OCC tag n maps to imported part.faces[n-1]",
+            "source_step_face_order",
+            "original_entity_ids",
+        ):
+            assert obsolete not in text_content, (path.name, obsolete)
+
+    limitations = json.loads(REPLAY_JSON.read_text(encoding="utf-8"))[
+        "known_limitations"
+    ]
+    assert any(
+        "Public CAD export stays blocked without a verified CAD-to-solver "
+        "mapping" in item
+        for item in limitations
+    )
+    assert any(
+        "explicit synthetic solver mapping and solver-face universe" in item
+        for item in limitations
+    )
+    assert any(
+        "no production CAD-to-solver mapping is claimed" in item
+        for item in limitations
+    )
+
+
+# --------------------------------------------------------------------------
+# Superseded historical LIVE evidence (eval/results.*)
+# --------------------------------------------------------------------------
+#
+# ``eval/results.json`` and ``eval/results.md`` record the Task 15 LIVE run of
+# 2026-07-21.  They cannot be regenerated without a genuine LIVE run and
+# provider credentials, and REPLAY is never substituted for LIVE, so they are
+# preserved unaltered and framed as superseded historical evidence instead.
+
+HISTORICAL_LIVE_JSON = ROOT / "eval" / "results.json"
+HISTORICAL_LIVE_MD = ROOT / "eval" / "results.md"
+
+#: The measurements of that run, which this remediation must never falsify.
+HISTORICAL_LIVE_REVISION = "7bd789c60d9b9e8b812b6fb7c0f29212587072e0+dirty"
+HISTORICAL_LIVE_DATE = "2026-07-21"
+HISTORICAL_EXPORT_SHA256_PREFIX = "b33921"
+
+
+def test_historical_live_results_are_labelled_superseded():
+    """Neither file can be mistaken for the current R4b.2 report of record."""
+
+    document = json.loads(HISTORICAL_LIVE_JSON.read_text(encoding="utf-8"))
+    status = document["historical_status"]
+    assert status["superseded"] is True
+    assert status["recorded_revision"] == HISTORICAL_LIVE_REVISION
+    assert status["recorded_date"] == HISTORICAL_LIVE_DATE
+    assert status["current_report_of_record"] == "eval/results-replay.md"
+    assert "SUPERSEDED HISTORICAL LIVE EVIDENCE" in status["summary"]
+    assert "not the current report of record" in status["summary"]
+
+    markdown = HISTORICAL_LIVE_MD.read_text(encoding="utf-8")
+    assert markdown.splitlines()[0].startswith("# ")
+    assert "SUPERSEDED" in markdown.splitlines()[0]
+    banner = markdown.split("- Evaluation mode:", 1)[0]
+    assert "NOT THE CURRENT REPORT OF RECORD" in banner
+    assert HISTORICAL_LIVE_REVISION in banner
+    assert HISTORICAL_LIVE_DATE in banner
+    assert "results-replay.md" in banner
+
+
+def test_historical_live_results_frame_their_obsolete_claims_as_historical():
+    """The old export success and the old ordinal statement are not current."""
+
+    document = json.loads(HISTORICAL_LIVE_JSON.read_text(encoding="utf-8"))
+    obsolete = {
+        item["kind"]: item
+        for item in document["historical_status"]["obsolete_claims"]
+    }
+    assert set(obsolete) == {
+        "obsolete_ordinal_mapping_limitation",
+        "obsolete_successful_export_claim",
+    }
+    ordinal = obsolete["obsolete_ordinal_mapping_limitation"]["current_behavior"]
+    assert "provenance only" in ordinal
+    assert "never as solver identifiers" in ordinal
+    assert "solver-face universe" in ordinal
+    assert "blocked without a verified CAD-to-mesh mapping" in ordinal
+    assert "R6" in ordinal
+    export = obsolete["obsolete_successful_export_claim"]["current_behavior"]
+    assert "missing_region_mapping" in export
+    assert "export_eligible false" in export
+    assert "No current Abaqus or CalculiX artifact is claimed" in export
+    assert (
+        document["historical_status"]["regeneration"].startswith(
+            "No LIVE run was regenerated"
+        )
+    )
+
+    markdown = HISTORICAL_LIVE_MD.read_text(encoding="utf-8")
+    # Compare against a line-wrap-insensitive view of the blockquote banner.
+    flowed = " ".join(
+        line.lstrip("> ").strip() for line in markdown.splitlines()
+    )
+    assert "blocked with `missing_region_mapping`" in flowed
+    assert "no current Abaqus or CalculiX artifact is claimed for it" in flowed
+    assert 'imported `part.faces[n-1]`" is obsolete**' in flowed
+    assert "is not a current architecture limitation" in flowed
+    assert "No LIVE run was regenerated to add this notice" in flowed
+    assert "REPLAY was not substituted for LIVE" in flowed
+    # The obsolete claims are never left unqualified: every place the ordinal
+    # statement still appears is inside historical framing.
+    for index, line in enumerate(markdown.splitlines()):
+        if "part.faces[n-1]" not in line:
+            continue
+        context = "\n".join(markdown.splitlines()[max(0, index - 6):index + 1])
+        assert "obsolete" in context.lower() or "historical" in context.lower()
+
+
+def test_historical_live_measurements_were_not_falsified():
+    """The preserved run is byte-truthful: nothing was rewritten to look current."""
+
+    document = json.loads(HISTORICAL_LIVE_JSON.read_text(encoding="utf-8"))
+    assert document["mode"] == "LIVE"
+    assert document["revision"] == HISTORICAL_LIVE_REVISION
+    assert (document["score"], document["pass_count"], document["fail_count"]) == (
+        15,
+        13,
+        0,
+    )
+    export_result = _blocked_export_case(document)["export_result"]
+    assert export_result["export_eligible"] is True
+    assert export_result["adapter"] == "abaqus_py"
+    assert export_result["filename"] == "bracket_abaqus.py"
+    assert export_result["sha256"].startswith(HISTORICAL_EXPORT_SHA256_PREFIX)
+    assert export_result["bytes"] == 4144
+    # The original limitation list is preserved verbatim rather than rewritten.
+    assert (
+        "Abaqus face ordering assumes OCC tag n maps to imported part.faces[n-1]."
+        in document["known_limitations"]
+    )
+
+
+def test_current_replay_evidence_contradicts_the_historical_export_claim():
+    """Current R4b.2 evidence reports the case as blocked, not exported."""
+
+    historical = _blocked_export_case(
+        json.loads(HISTORICAL_LIVE_JSON.read_text(encoding="utf-8"))
+    )["export_result"]
+    current = _blocked_export_case(
+        json.loads(REPLAY_JSON.read_text(encoding="utf-8"))
+    )["export_result"]
+    assert historical["export_eligible"] is True
+    assert current["export_eligible"] is False
+    assert current["status"] == "blocked"
+    assert current["code"] == "missing_region_mapping"
+    assert "filename" not in current and "sha256" not in current
+
+
+#: Documentation that speaks in the repository's present tense.  The frozen V1
+#: records (``PROGRESS.md``, ``sprint-goal.md``, ``EXECUTION_PLAN.md``) and the
+#: superseded LIVE/initial evaluation artifacts are historical by construction
+#: and are excluded here; their framing is asserted by the tests above and by
+#: the authority order in ``CLAUDE.md``.
+_HISTORICAL_BY_CONSTRUCTION = {
+    "PROGRESS.md",
+    "sprint-goal.md",
+    "EXECUTION_PLAN.md",
+    "eval/results.md",
+    "eval/results-initial.md",
+    "eval/results-live-initial.md",
+    "eval/results-replay-initial.md",
+}
+
+#: Phrasings that assert the retired CAD-tag-as-solver-ID mapping.
+_OBSOLETE_MAPPING_PHRASES = (
+    "source_step_face_order",
+    "part.faces[n-1]",
+    "part.faces[n - 1]",
+    "original_entity_ids",
+)
+
+#: A statement may keep an obsolete phrase only when its immediate context
+#: labels it as no longer current.
+_HISTORICAL_MARKERS = (
+    "historical",
+    "superseded",
+    "obsolete",
+    "no longer",
+    "removed",
+    "is gone",
+    "replaced",
+    "never",
+)
+
+
+def test_current_documentation_carries_no_unqualified_ordinal_mapping_claim():
+    """An unqualified ordinal CAD-to-solver claim cannot re-enter the docs."""
+
+    scanned = 0
+    for path in sorted(ROOT.rglob("*.md")):
+        relative = path.relative_to(ROOT).as_posix()
+        parts = set(path.relative_to(ROOT).parts)
+        if parts & {".venv", "node_modules", ".git", "__pycache__"}:
+            continue
+        if relative in _HISTORICAL_BY_CONSTRUCTION:
+            continue
+        scanned += 1
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for index, line in enumerate(lines):
+            if not any(phrase in line for phrase in _OBSOLETE_MAPPING_PHRASES):
+                continue
+            context = " ".join(lines[max(0, index - 8):index + 2]).lower()
+            assert any(marker in context for marker in _HISTORICAL_MARKERS), (
+                relative,
+                index + 1,
+                line,
+            )
+    assert scanned > 5

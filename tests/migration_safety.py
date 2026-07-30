@@ -181,9 +181,24 @@ FAMILY_CONTRACTS: Final[tuple[FamilyContract, ...]] = (
 )
 
 
-#: ``(family, from_version) -> {"scope:path", ...}`` explicitly approved by
-#: recorded migration evidence.  Empty while the registries are empty.
-APPROVED_SAFETY_CHANGES: Final[dict[tuple[str, int], frozenset[str]]] = {}
+#: R4b.2 deliberately synthesizes only an explicit fail-closed legacy marker
+#: from old numeric CAD evidence and relocates the exact numeric values from
+#: the obsolete public ``entity_ids`` field into that marker. The stable target
+#: is never fabricated.
+APPROVED_SAFETY_CHANGES: Final[dict[tuple[str, int], frozenset[str]]] = {
+    ("simulation_intent", 1): frozenset(
+        {
+            "simulation_intent:regions[].cad_face_target",
+            "simulation_intent:regions[].entity_ids",
+        }
+    ),
+    ("simulation_intent", 2): frozenset(
+        {
+            "simulation_intent:regions[].cad_face_target",
+            "simulation_intent:regions[].entity_ids",
+        }
+    ),
+}
 
 
 # --------------------------------------------------------------------------

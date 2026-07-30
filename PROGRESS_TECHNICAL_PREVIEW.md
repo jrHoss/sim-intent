@@ -90,7 +90,8 @@ All values are SHA-256 over exact file bytes.
 | Checkout `fixtures/bracket_expected.json` and `tests/fixtures/bracket_expected.json` (700 bytes, LF) | `e8fb94e02a878626350df51439f718235448871733faf7644e1156d0b8f29971` |
 | `git archive` versions of both `bracket_expected.json` copies (733 bytes, CRLF) | `e2fc8506ef80ea311ebbd359d4c7e61d814526578c97df615774ebff88633982` |
 | `fixtures/plate_hole.step` and `tests/fixtures/plate_hole.step` | `446cf12fed1139d2bfae5e483c1c34905b1444a8d05154a6bd972f1eaa214712` |
-| `tests/golden/bracket_abaqus.py` | `7ed6c5dc5d9e19ed6c9c6e70065f162e08f1c4418afee362d14a9a825f56e3ed` |
+| `tests/golden/bracket_abaqus.py` (Task 16 value, superseded by R4b.2 audit remediation) | `7ed6c5dc5d9e19ed6c9c6e70065f162e08f1c4418afee362d14a9a825f56e3ed` |
+| `tests/golden/bracket_abaqus.py` (current, after the R4b.2 renderer terminology correction) | `91fce598e9876f19c5740b3554d15af3f83c031ce9cd494628c6f25994daf6c5` |
 
 ### Frozen evaluation evidence
 
@@ -2174,3 +2175,227 @@ from durable APIs. No browser action creates or updates a
   because no browser backend was connected; the repository's static browser
   strategy and durable workflow tests passed.
 - No commit, merge, tag, or push was performed.
+
+### R4b.2 stable CAD-region references (working tree, 2026-07-30)
+
+R4b.2 makes the existing R4b.1 `gfi1:` face identity authoritative for durable
+STEP regions. `SimulationIntent` v3 carries the exact ModelVersion, persisted
+artifact digest, stable identities or collision groups, and explicitly
+non-authoritative source-face evidence. Durable writes validate this state
+inside the setup transaction through the strict R4b.1 deserializer; confirmation
+repeats validation against the setup's historical ModelVersion. Ambiguous,
+unresolved and migrated legacy-local-only regions cannot be confirmed or
+exported. INP CAD-face targets are rejected as not applicable.
+
+The deterministic v2-to-v3 loader migration preserves numeric evidence and any
+old terminal status as legacy metadata, while downgrading an old confirmed CAD
+region to proposed. Alembic revision `0005_stable_cad_region_references` records
+the new durable-contract head without rewriting immutable historical revision
+bytes, hashes, or idempotency fingerprints. Reads never regenerate or repair an
+artifact, and source supersession neither rebinds nor transfers targets.
+
+Implementation-focused evidence before independent review: **825 passed,
+1 skipped** across R4b.2/R4b.1 identity, setup/session persistence and
+supersession, engineering validation/export, API problems, schema migration,
+versioning, OpenAPI and generated-contract suites. The skip is the existing
+optional local CalculiX executable check. OpenAPI, SimulationIntent JSON Schema
+and pinned generated TypeScript were regenerated. No dependency or lock file
+changed; no commit, merge, tag or push was performed.
+
+After specialist-review remediation, the directly affected backend set passed
+**524 tests with 1 optional CalculiX skip**. Added hostile regressions cover
+schema-v2 numeric-only CAD
+requests, volatile STEP/INP confirmation without durable references, strict
+discriminated target variants, forged legacy/current payloads, transaction
+failure sanitization and rollback, independent-worker revision races, historical
+stored-versus-materialized response hashes, and safe migration downgrade policy.
+The generated contracts now expose the runtime identity patterns, positive
+source-tag bounds and list uniqueness constraints. Obsolete numeric-only CAD
+solver-success expectations were replaced with legacy migration and typed
+fail-closed assertions; native-mesh export behavior remains covered.
+
+R4b.2 final audit remediation removed the internal CAD `entity_ids`
+compatibility projection. One invariant guard now rejects hostile assignment,
+`model_copy`, `model_construct`, session/setup writes, persistence
+create/update, confirmation, audit serialization and export with the stable
+`cad_region_entity_ids_forbidden` code; non-CAD membership is unchanged.
+Evaluation resolves only unresolved CAD evidence against the exact uploaded
+ModelVersion's persisted geometry-identity artifact before durable review.
+Legacy fallback intent and grounding records remain unchanged on disk and are
+migrated on load through the production v2-to-v3 CAD-region migration helper.
+REPLAY passed **15/15** (13 direct, 2 after clarification), and the designated
+export case now truthfully records `missing_region_mapping` without claiming a
+solver artifact.
+
+The public Abaqus boundary remains blocked without verified CAD-to-solver
+mapping. Its private renderer boundary now requires explicit solver-face
+membership, permitting restored golden-byte, syntax, provenance, load,
+sanitization, normalization and repeatability coverage without consuming local
+CAD tags as solver entities. A populated schema-v2 database downgrade to
+`0002_setup_revisions` and re-upgrade to head proves exact schema restoration,
+trigger recreation, revision-byte/hash preservation and post-upgrade
+immutability enforcement.
+
+#### R4b.2 audit remediation (R4B2-AUDIT-01 .. 04)
+
+**R4B2-AUDIT-01 — explicit CAD `entity_ids: null` is rejected.** The shared
+invariant guard judged mapping inputs by value, so a hostile
+`{"entity_type": "cad_face", "entity_ids": null}` payload was accepted and the
+key was silently dropped during serialization. Mapping inputs are now judged by
+**key presence** (`"entity_ids" in value`); model instances are still judged by
+value, because `Region.entity_ids` legitimately holds `None` for CAD. Direct
+Region validation, complete intent deserialization, the session service,
+persistence create/mutate/canonicalization/read-back, confirmation, audit
+serialization, the export path and HTTP setup creation all reject the payload
+with the stable `cad_region_entity_ids_forbidden` code. HTTP creation persists
+no setup row and no revision row. Non-CAD `entity_ids` membership is unchanged.
+
+**R4B2-AUDIT-02 — canonical replay evidence regenerated.** `eval/results-replay.json`
+and `eval/results-replay.md` were regenerated with
+`.venv\Scripts\python.exe eval\run.py --replay` after the production
+corrections. `bracket_combined_export` now truthfully records
+`status: blocked`, `code: missing_region_mapping`, `export_eligible: false`,
+and carries **no** adapter, filename, byte count or digest. The former claim of
+a generated `bracket_abaqus.py` artifact is gone. A regression regenerates the
+canonical report into an isolated location and compares it with the checked-in
+copies; every field is compared exactly except the working-tree-derived
+`revision` provenance string.
+
+**R4B2-AUDIT-03 — populated downgrade/re-upgrade fully verified.** The focused
+populated migration regression previously re-upgraded without asserting
+anything afterwards. It now captures the pre-downgrade schema (columns, indexes,
+foreign keys), the normalized `sqlite_master.sql` body of every trigger, and all
+row data, then re-verifies them after returning to head, including literal
+comparison against the trigger bodies migration 0002 installs. Historical intent
+JSON, intent hashes, mutation audit fields, revision numbers, parent links,
+project/model ownership, the exact ModelVersion binding and the current-revision
+pointer are all preserved. Database-level enforcement is re-probed after the
+re-upgrade: invalid sequential parent, lineage immutability, cross-project setup
+ownership, exact ModelVersion ownership, invalid current pointer on insert and
+update, revision immutability across every stored column, a valid next revision,
+a valid current-pointer advance, and cascading removal of a deleted ancestor
+revision.
+
+**R4B2-AUDIT-04 — obsolete source-tag-to-solver assumptions removed.** CAD
+source-face tags are CAD-side provenance only. `CadModelMetadata.face_ids` is
+renamed `source_cad_face_tags` and the obsolete
+`mapping_strategy="source_step_face_order"` field is gone. The private renderer
+now requires an explicit `solver_face_universe` alongside
+`solver_face_ids_by_region`; imported topology is validated against that
+universe rather than `max(model.face_ids)`. Generated artifacts no longer claim
+`source_step_face_order` or `OCC tag n -> part.faces[n - 1]`, and the ambiguous
+`original_entity_ids` comment is replaced by the distinct
+`source_cad_face_tags (provenance only, not solver IDs)` and
+`mapped_solver_face_ids (explicitly supplied)` lines. The CalculiX adapter's
+equivalent comment is now `native_mesh_entity_ids`. Evaluation limitations state
+that public CAD export stays blocked without mapping, that the private renderer
+is exercised only with explicit synthetic solver mappings, and that no
+production CAD-to-solver mapping is claimed. A deliberately disjoint fixture
+(source CAD tags `(40, 41)`, mapped solver IDs `(1, 2)`, solver-face universe
+`{1, 2, 3}`) proves that no ordinal assumption survives. R6 remains responsible
+for production CAD-to-mesh/solver mapping; none was implemented.
+
+Final focused audit evidence after the R4B2-AUDIT-01..04 remediation:
+**700 passed, 1 optional CalculiX skip** across R4b.2 hostile/boundary,
+evaluation/fallback/replay, export renderer/public gate, setup/migration and
+affected schema/session/validation/contract suites (previously 618 passed;
+the increase is new regression coverage for the four findings). Schema drift
+check and the schema-version stamp check passed; canonical TypeScript
+regeneration was byte-identical at SHA-256
+`a37c9d21d5ecbb8c42d15e093c8befbca28250ee6b35334b84f9e41346ad8eee`;
+Python compilation/import and `git diff --check` passed. No full suite was run,
+and no dependency, lock, frozen evaluation case/fallback, commit, merge, tag,
+push or staged change was created.
+
+**Correction to the previous R4b.2 remediation report.** That report ran only a
+focused matrix, reported a single failure, and described it as *pre-existing* and
+unrelated. Both claims were wrong. An independent verifier ran the complete
+Python suite on this tree and obtained **6 failed, 1342 passed, 1 skipped**. The
+six failures were not pre-existing: they were introduced or exposed by R4b.2's
+own — and correct — contract changes. Five are stale fixtures that build
+`cad_face` regions against an INP ModelVersion or recreate the removed CAD
+`entity_ids` shape; one is a stale hardcoded expectation left behind by the
+schema bump from v2 to v3. Production was not at fault in any of the six:
+rejecting a CAD region against an INP ModelVersion (`cad_region_not_applicable`)
+and rejecting CAD `entity_ids` (`cad_region_entity_ids_forbidden`) are the
+intended R4b.2 invariants and were not weakened.
+
+**R4B2-AUDIT-05 — six full-suite fixture regressions repaired.** No production
+file was changed. `tests/test_engineering_setup.py` gains `inp_payload()`, the
+canonical INP-compatible variant of `payload()` (region ids, constraint target
+and load target unchanged; `cad_face` becomes `mesh_face`, which is in both
+`SURFACE_REGION_ENTITY_TYPES` and `CONSTRAINT_REGION_ENTITY_TYPES`), and
+`region()` documents that its synthetic `unit-test-version` CAD target is valid
+only for in-memory schema checks. `setup_body()` in
+`tests/test_r3_2a_engineering_rules.py` now refuses a well-formed CAD region
+against its INP upload, so a stale fixture cannot silently turn a downstream
+assertion into an applicability rejection. The durable INP fixtures in
+`tests/test_r3_2a_engineering_rules.py`, `tests/test_r3_2b_browser_editor.py` and
+`tests/test_independent_review_remediation.py` moved to `inp_payload()`; the
+unsupported-future-version case is now derived as
+`SIMULATION_INTENT_SCHEMA_VERSION + 1` instead of the stale literal `3`; and the
+hand-authored browser payload in
+`test_browser_authored_setup_restarts_reopens_and_extends_history` now submits
+the current v3 CAD region contract — no `entity_ids`, the exact uploaded
+ModelVersion id, the persisted geometry-identity `artifact_sha256`, and a stable
+identity read from a non-ambiguous face of that artifact. No test was deleted or
+weakened: malformed-revision, invalid-version, material-successor, signed-zero,
+browser-authored and schema-boundary coverage all remain, with added assertions
+proving each setup precondition succeeds for the right reason (region kind,
+exact ModelVersion binding, absence of removed CAD fields, durable revision
+counts and parent links).
+
+**R4B2-AUDIT-06 — superseded historical LIVE artifacts framed truthfully.**
+`eval/results.json` and `eval/results.md` are the Task 15 LIVE run of
+**2026-07-21** at revision `7bd789c60d9b9e8b812b6fb7c0f29212587072e0+dirty`.
+They still asserted the obsolete ordinal limitation (`OCC tag n` maps to
+`part.faces[n-1]`) and a successful `bracket_abaqus.py` export for
+`bracket_combined_export`, which R4b.2 correctly blocks with
+`missing_region_mapping`. They cannot be regenerated without a genuine LIVE run
+and provider credentials, and REPLAY is never substituted for LIVE, so the
+measurements were **preserved unaltered** and framed instead: the JSON gains a
+top-level `historical_status` block (superseded flag, recorded revision and date,
+current report of record, and both obsolete claims paired with current R4b.2
+behavior), and the Markdown gains a superseded title plus a prominent banner and
+inline historical notes at the export cell and the limitation list. No case
+result, export measurement, hash or count was rewritten, and no LIVE
+regeneration was claimed. `docs/architecture-task15.md` marks its ordinal
+limitation as historical Task 15 behavior superseded by R4b.2 and states the
+current renderer boundary; it also records that `eval/results.*` is historical
+and that `eval/results-replay.*` is the current report of record. The dated
+`docs/audits/product-v2-repository-audit-2026-07-23.md` finding is labelled as
+remediated. `tests/test_eval.py` adds the superseded-framing, non-falsification,
+current-replay-contradiction and documentation-scan regressions; the scan fails
+on any current Markdown that reintroduces `source_step_face_order`,
+`part.faces[n-1]`, `part.faces[n - 1]` or `original_entity_ids` without
+historical framing.
+
+**Full-suite evidence after R4B2-AUDIT-05..06.** The complete Python regression
+suite (`.venv\Scripts\python.exe -m pytest -p no:cacheprovider -q`) reports
+**1354 passed, 1 skipped, 0 failed in 660.11 s (11:00)**. The single skip is the
+optional CalculiX check, which needs an installed `ccx` executable. The verified
+baseline immediately before this remediation was 6 failed, 1342 passed, 1
+skipped; the six repairs plus six new regressions account for the delta
+(1342 + 6 + 6 = 1354). Focused re-runs: the six previously failing tests and the
+new current-version acceptance test pass (12 selected, 12 passed); the focused
+file matrix `test_independent_review_remediation.py`,
+`test_r3_2a_engineering_rules.py`, `test_r3_2b_browser_editor.py`,
+`test_engineering_setup.py`, `test_setup_revisions.py`,
+`test_r4b2_stable_region_references.py` reports 344 passed, and
+`test_eval.py` + `test_export.py` + `test_schema_versioned_payloads.py` reports
+227 passed, 1 optional skip.
+
+`.venv\Scripts\python.exe eval\run.py --replay` reports **15/15 — PASS=13,
+PASS_AFTER_CLARIFICATION=2, FAIL=0** on the unchanged frozen manifest
+`47c0d7275b9a065a7f5e3316ed60b7ffff58913e0b1e5045c857f663e1f6775b`, and
+`bracket_combined_export` stays blocked with `missing_region_mapping`,
+`export_eligible=false`, and no adapter/filename/sha256/bytes claim.
+`scripts/export_schema.py --check` and `scripts/stamp_schema_versions.py --check`
+passed (35 versioned payloads stamped and current); canonical TypeScript
+regeneration via `npm --prefix tools/openapi-types run generate` was
+byte-identical at SHA-256
+`a37c9d21d5ecbb8c42d15e093c8befbca28250ee6b35334b84f9e41346ad8eee`; Python
+compilation of every changed file, production import checks, and
+`git diff --check` passed. No production Python file was changed by
+R4B2-AUDIT-05..06, and no dependency, lock, frozen evaluation case, fallback,
+replay body, fixture, commit, merge, tag, push or staged change was created.

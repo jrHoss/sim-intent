@@ -17,7 +17,9 @@ from pydantic import Field
 from ir.schema import (
     SimulationIntent,
     StrictModel,
+    enforce_cad_region_entity_ids_invariant,
     material_proposal_fingerprint,
+    region_entity_membership,
 )
 from ir.validate import ValidationReport, validate_intent
 
@@ -92,6 +94,7 @@ class SelectionSessionStore:
         self, model_id: str, intent: SimulationIntent
     ) -> SessionSnapshot:
         with self._lock:
+            enforce_cad_region_entity_ids_invariant(intent)
             record = self._sessions.setdefault(model_id, _SessionRecord(model_id))
             self._validate_client_statuses(record.intent, intent)
             record.intent = self._with_computed_validation_status(intent)
@@ -120,6 +123,7 @@ class SelectionSessionStore:
             if record.intent is None:
                 raise SessionIntentMissingError("session has no intent draft")
             intent = record.intent.model_copy(deep=True)
+            enforce_cad_region_entity_ids_invariant(intent)
             return intent, validate_intent(intent)
 
     def _transition(
@@ -132,7 +136,7 @@ class SelectionSessionStore:
             record = self._sessions.setdefault(model_id, _SessionRecord(model_id))
             if record.intent is None:
                 raise SessionIntentMissingError("session has no intent draft")
-
+            enforce_cad_region_entity_ids_invariant(record.intent)
             matching = [region for region in record.intent.regions if region.id == region_id]
             if not matching:
                 raise SessionRegionMissingError(region_id)
@@ -141,6 +145,11 @@ class SelectionSessionStore:
                 raise InvalidRegionTransitionError(
                     f"region '{region_id}' cannot transition from "
                     f"{region.status} to {target}; only proposed regions may transition"
+                )
+            if target == "confirmed" and region.entity_type == "cad_face":
+                raise InvalidRegionTransitionError(
+                    "volatile CAD-face confirmation requires an exact durable "
+                    "ModelVersion and geometry identity artifact"
                 )
 
             regions = [
@@ -167,6 +176,7 @@ class SelectionSessionStore:
             record = self._sessions.setdefault(model_id, _SessionRecord(model_id))
             if record.intent is None:
                 raise SessionIntentMissingError("session has no intent draft")
+            enforce_cad_region_entity_ids_invariant(record.intent)
 
             matching = [
                 assumption
@@ -341,13 +351,13 @@ class SelectionSessionStore:
         # Rejected selections are retained in the IR for provenance, but are
         # removed from active selection/highlight state so correction is open.
         record.selected_entities = {
-            region.id: list(region.entity_ids)
+            region.id: region_entity_membership(region)
             for region in record.intent.regions
             if region.status != "rejected"
         }
         record.highlight_state = {
             region.id: SessionHighlight(
-                entity_ids=list(region.entity_ids), style=region.status
+                entity_ids=region_entity_membership(region), style=region.status
             )
             for region in record.intent.regions
             if region.status in {"proposed", "confirmed"}
@@ -358,6 +368,7 @@ class SelectionSessionStore:
         intent = record.intent.model_copy(deep=True) if record.intent is not None else None
         export_eligible = False
         if intent is not None:
+            enforce_cad_region_entity_ids_invariant(intent)
             report = validate_intent(intent)
             export_eligible = report.export_eligible
             intent = intent.model_copy(
@@ -380,6 +391,7 @@ class SelectionSessionStore:
 
     @staticmethod
     def _with_computed_validation_status(intent: SimulationIntent) -> SimulationIntent:
+        enforce_cad_region_entity_ids_invariant(intent)
         report = validate_intent(intent)
         return intent.model_copy(
             update={"validation_status": report.validation_status}, deep=True

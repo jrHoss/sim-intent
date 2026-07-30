@@ -27,7 +27,7 @@ from llm.interpreter import (
     UnsupportedCapabilityError,
     UnsupportedMaterialInputError,
 )
-from tests.test_engineering_setup import payload, region
+from tests.test_engineering_setup import inp_payload, payload, region
 from tests.test_project_persistence import create_project, minimal_inp, request, upload
 from tests.test_r3_2a_engineering_rules import (
     client_proposal,
@@ -267,10 +267,6 @@ def durable(tmp_path_factory):
 
 def accepted_material_setup(app) -> tuple[str, dict, str]:
     body = proposed_material_payload(status="pending")
-    body["regions"] = [
-        region("fixed", "mesh_face", [1]),
-        region("loaded", "mesh_face", [2]),
-    ]
     path, request_body = setup_body(app, client_proposal(body))
     created = request(app, "POST", path, json=request_body)
     assert created.status_code == 201, created.text
@@ -717,7 +713,7 @@ MALFORMED_COLLECTION_VALUES = [
 def test_malformed_durable_collections_never_500_or_create_records(
     durable, collection, bad_value
 ):
-    candidate = payload()
+    candidate = inp_payload()
     candidate[collection] = bad_value
     path, body = setup_body(
         durable, candidate, f"malformed-{collection}-{type(bad_value).__name__}"
@@ -732,12 +728,21 @@ def test_malformed_durable_collections_never_500_or_create_records(
 
 def test_malformed_revision_collections_never_500_or_extend_history(durable):
     path, body = setup_body(
-        durable, client_proposal(payload()), "malformed-revision-create"
+        durable, client_proposal(inp_payload()), "malformed-revision-create"
     )
     created = request(durable, "POST", path, json=body)
     assert created.status_code == 201, created.text
     setup_id = created.json()["setup"]["id"]
     original = created.json()["current"]["intent"]
+    # The precondition holds for the right reason: mesh regions on an INP
+    # ModelVersion, with no CAD evidence for the server to reject instead.
+    assert [item["entity_type"] for item in original["regions"]] == [
+        "mesh_face",
+        "mesh_face",
+    ]
+    assert all(item.get("cad_face_target") is None for item in original["regions"])
+    assert all(item["entity_ids"] for item in original["regions"])
+    durable_before = request(durable, "GET", f"/api/v1/setups/{setup_id}").json()
     for collection, bad_value in itertools.product(
         ("materials", "regions", "bcs", "loads", "assumptions"),
         MALFORMED_COLLECTION_VALUES,
@@ -765,6 +770,9 @@ def test_malformed_revision_collections_never_500_or_extend_history(durable):
         durable, "GET", f"/api/v1/setups/{setup_id}/revisions"
     ).json()
     assert len(history) == 1
+    assert history[0]["revision"] == 1
+    assert history[0]["parent_revision_id"] is None
+    assert request(durable, "GET", f"/api/v1/setups/{setup_id}").json() == durable_before
 
 
 def test_truthful_export_projection_on_durable_native_and_step(durable, tmp_path):

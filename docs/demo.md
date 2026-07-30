@@ -162,10 +162,13 @@ until confirmation.
   12 PASS, 1 PASS_AFTER_CLARIFICATION, 2 FAIL.
 - Initial failures: `bracket_vertical_click` (`unit`) and
   `bracket_left_side_clarify` (`ambiguity-unflagged`).
-- Final LIVE report in `eval/results.*`: 15/15; 13 PASS,
-  2 PASS_AFTER_CLARIFICATION, 0 FAIL.
+- Final Task 15 LIVE report in `eval/results.*`: 15/15; 13 PASS,
+  2 PASS_AFTER_CLARIFICATION, 0 FAIL. That report is *historical* evidence from
+  2026-07-21 and is explicitly marked superseded; it is no longer the report of
+  record, and its `bracket_combined_export` artifact claim does not describe
+  current behavior.
 - Deterministic REPLAY report in `eval/results-replay.*`: 15/15 and always
-  labeled REPLAY.
+  labeled REPLAY. This is the current reproducible report of record.
 - Frozen manifest SHA-256:
   `47c0d7275b9a065a7f5e3316ed60b7ffff58913e0b1e5045c857f663e1f6775b`.
 

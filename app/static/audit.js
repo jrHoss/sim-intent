@@ -33,6 +33,12 @@ function actionButton(label, action, kind, id) {
   return button;
 }
 
+function regionEntityIds(region) {
+  return region.entity_type === "cad_face"
+    ? (region.cad_face_target?.source_face_tags || [])
+    : (region.entity_ids || []);
+}
+
 function renderRegion(region) {
   const card = element("article", `audit-card region-card ${region.status}`);
   const heading = element("div", "audit-card-heading");
@@ -42,7 +48,7 @@ function renderRegion(region) {
   );
   card.append(heading);
 
-  const ids = region.entity_ids.map((id) => String(id)).join(", ");
+  const ids = regionEntityIds(region).map((id) => String(id)).join(", ");
   const facts = element("dl", "audit-facts");
   for (const [label, value] of [
     ["Entities", ids],
@@ -155,9 +161,10 @@ export function createAuditPanel({ onHighlight, onStatus }) {
     }
 
     for (const region of audit.regions) {
-      if (!region.entity_ids.every((id) => Number.isInteger(Number(id)))) continue;
+      const entityIds = regionEntityIds(region);
+      if (!entityIds.every((id) => Number.isInteger(Number(id)))) continue;
       onHighlight({
-        entity_ids: region.entity_ids.map(Number),
+        entity_ids: entityIds.map(Number),
         style: region.status === "rejected" ? "base" : region.status,
       });
     }

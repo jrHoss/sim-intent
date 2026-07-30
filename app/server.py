@@ -25,7 +25,7 @@ from datetime import timezone
 from email.parser import BytesParser
 from email.policy import default as email_policy
 from pathlib import Path
-from typing import Any, AsyncIterator, Literal
+from typing import Annotated, Any, AsyncIterator, Literal
 from urllib.parse import quote
 
 import gmsh
@@ -49,6 +49,7 @@ from app.ingestion import IngestionService, QuarantinedUpload
 from app.data_root_lock import DataRootLock
 from app.migrations import upgrade_database
 from app.persistence import (
+    CadRegionReferenceError,
     GeometryIdentityArtifactError,
     ModelVersion,
     Persistence,
@@ -61,6 +62,7 @@ from app.persistence import (
     SetupRevisionConflictError,
     SetupSourceSupersededError,
     SimulationSetup,
+    canonical_intent,
     create_sqlite_engine,
 )
 from app.problems import (
@@ -118,6 +120,7 @@ from ground.engine import ClickEvidence, GroundingBatch
 from geom.meshes import MeshInventory, _scan_inp_native_ids, load_mesh
 from ir.schema import (
     Assumption,
+    CadFaceTarget,
     EngineeringConsistencyError,
     EntityType,
     LegacySimulationIntent,
@@ -126,7 +129,10 @@ from ir.schema import (
     SimulationIntent,
     StrictModel,
     ValidationStatus,
+    enforce_cad_region_entity_ids_invariant,
     material_proposal_fingerprint,
+    canonical_cad_numeric_membership,
+    region_entity_membership,
 )
 from ir.schema_version import API_CONTRACT_VERSION, SIMULATION_INTENT_SCHEMA_VERSION
 from ir.validate import ValidationIssue, ValidationReport, validate_intent
@@ -207,18 +213,34 @@ class HighlightRequest(BaseModel):
         return value
 
 
-class AuditRegion(StrictModel):
-    """Region provenance plus all conditions that reference the region."""
-
+class _AuditRegionBase(StrictModel):
     id: str
-    entity_type: EntityType
-    entity_ids: list[int] | list[str]
     selection_method: SelectionMethod
     confidence: float
     source_instruction: str
     status: RegionStatus
     boundary_conditions: list[dict[str, Any]]
     loads: list[dict[str, Any]]
+
+
+class AuditCadRegion(_AuditRegionBase):
+    """CAD provenance without an obsolete ``entity_ids`` projection."""
+
+    entity_type: Literal["cad_face"]
+    cad_face_target: CadFaceTarget
+
+
+class AuditNonCadRegion(_AuditRegionBase):
+    """Non-CAD provenance retains its established membership field."""
+
+    entity_type: Literal["cad_edge", "mesh_face", "node_set", "element_set"]
+    entity_ids: list[int] | list[str]
+
+
+AuditRegion = Annotated[
+    AuditCadRegion | AuditNonCadRegion,
+    Field(discriminator="entity_type"),
+]
 
 
 class AuditResponse(StrictModel):
@@ -539,8 +561,18 @@ class SetupRevisionResponse(StrictModel):
     setup_id: str
     revision: int
     parent_revision_id: str | None
-    simulation_intent_schema_version: int
-    intent_sha256: str
+    simulation_intent_schema_version: int = Field(
+        description="Schema version of the materialized intent returned in this response."
+    )
+    intent_sha256: str = Field(
+        description="SHA-256 of the materialized intent returned in this response."
+    )
+    stored_simulation_intent_schema_version: int = Field(
+        description="Schema version stored immutably on the historical revision."
+    )
+    stored_intent_sha256: str = Field(
+        description="SHA-256 stored immutably for the historical revision bytes."
+    )
     mutation_type: str
     request_id: str
     created_at: str
@@ -793,6 +825,20 @@ def create_app(
         if request.url.path.startswith("/api/v1/"):
             return validation_problem(request, error)
         return await request_validation_exception_handler(request, error)
+
+    @app.exception_handler(EngineeringConsistencyError)
+    async def handle_engineering_consistency(
+        request: Request, error: EngineeringConsistencyError
+    ) -> Response:
+        return problem_response(
+            request,
+            ApiProblem(
+                status=422,
+                code=error.code,
+                title="Invalid engineering state",
+                detail="The engineering state violates a required invariant.",
+            ),
+        )
 
     @app.exception_handler(HTTPException)
     async def handle_http_exception(
@@ -1262,6 +1308,31 @@ def create_app(
             stale_at=None if setup.stale_at is None else _utc_isoformat(setup.stale_at),
         )
 
+    def cad_region_problem(exc: CadRegionReferenceError) -> ApiProblem:
+        return ApiProblem(
+            status=409 if exc.code == "cad_region_unresolved" else 422,
+            code=exc.code,
+            title="Invalid CAD region reference",
+            detail=(
+                "The CAD-face target is not valid for the setup's exact "
+                "persisted geometry identity artifact."
+            ),
+        )
+
+    def bind_durable_cad_targets(
+        intent: SimulationIntent | None, version_id: str
+    ) -> SimulationIntent | None:
+        """Attach R4b.1 identities to grounded local evidence."""
+
+        if intent is None:
+            return None
+        try:
+            return persistence().resolve_cad_regions_for_version(
+                intent, version_id
+            )
+        except GeometryIdentityArtifactError as exc:
+            raise geometry_identity_problem(exc) from exc
+
     def revision_response(revision: SetupRevision) -> SetupRevisionResponse:
         intent = persistence().revision_intent(revision)
         setup = persistence().get_setup(revision.setup_id)
@@ -1273,6 +1344,36 @@ def create_app(
         engineering_report = validate_intent(
             intent, source_is_stale=setup.is_stale
         )
+        try:
+            persistence().validate_setup_region_references(
+                setup.id,
+                intent,
+                allow_legacy=revision.schema_version < 3,
+            )
+        except CadRegionReferenceError as exc:
+            issues = [
+                *engineering_report.issues,
+                ValidationIssue(
+                    code=exc.code,
+                    severity="error",
+                    message=(
+                        "The durable CAD target failed validation against its "
+                        "historical geometry identity artifact."
+                    ),
+                    blocks_export=True,
+                    object_type="region",
+                    field="cad_face_target",
+                ),
+            ]
+            engineering_report = engineering_report.model_copy(
+                update={
+                    "validation_status": "invalid",
+                    "engineering_ready": False,
+                    "export_eligible": False,
+                    "issues": issues,
+                },
+                deep=True,
+            )
         try:
             content = persistence().read_version_bytes(version)
         except (BlobIntegrityError, OSError):
@@ -1294,20 +1395,23 @@ def create_app(
         report = project_report(engineering_report, capability)
         intent = intent.model_copy(update={"validation_status": report.validation_status}, deep=True)
         selected = {
-            region.id: list(region.entity_ids) for region in intent.regions
+            region.id: region_entity_membership(region) for region in intent.regions
             if region.status != "rejected"
         }
         highlights = {
             region.id: SessionHighlight(
-                entity_ids=list(region.entity_ids), style=region.status
+                entity_ids=region_entity_membership(region), style=region.status
             )
             for region in intent.regions if region.status in {"proposed", "confirmed"}
         }
+        _materialized_json, materialized_digest = canonical_intent(intent)
         return SetupRevisionResponse(
             id=revision.id, setup_id=revision.setup_id, revision=revision.revision,
             parent_revision_id=revision.parent_revision_id,
-            simulation_intent_schema_version=revision.schema_version,
-            intent_sha256=revision.intent_sha256,
+            simulation_intent_schema_version=intent.schema_version,
+            intent_sha256=materialized_digest,
+            stored_simulation_intent_schema_version=revision.schema_version,
+            stored_intent_sha256=revision.intent_sha256,
             mutation_type=revision.mutation_type, request_id=revision.request_id,
             created_at=_utc_isoformat(revision.created_at), intent=intent,
             validation=report, selected_entities=selected,
@@ -1330,6 +1434,15 @@ def create_app(
             code, detail = "setup_lineage_conflict", "The model lineage does not belong to the requested project."
         return ApiProblem(status=409, code=code, title="Setup conflict", detail=detail)
 
+    def setup_database_problem() -> ApiProblem:
+        return ApiProblem(
+            status=500,
+            code="setup_database_write_failed",
+            title="Setup persistence failed",
+            detail="The setup write failed and no partial revision was published.",
+            retryable=True,
+        )
+
     @app.post(
         "/api/v1/projects/{project_id}/setups", status_code=201,
         response_model=SetupView, responses=PROBLEM_RESPONSES,
@@ -1350,6 +1463,10 @@ def create_app(
             raise _not_found_problem(exc.resource) from exc
         except PersistenceConflictError as exc:
             raise setup_conflict(exc) from exc
+        except CadRegionReferenceError as exc:
+            raise cad_region_problem(exc) from exc
+        except PersistenceDatabaseError as exc:
+            raise setup_database_problem() from exc
         except (InvalidRegionTransitionError, InvalidAssumptionTransitionError) as exc:
             raise ApiProblem(
                 status=409,
@@ -1420,6 +1537,10 @@ def create_app(
             raise _not_found_problem(exc.resource) from exc
         except PersistenceConflictError as exc:
             raise setup_conflict(exc) from exc
+        except CadRegionReferenceError as exc:
+            raise cad_region_problem(exc) from exc
+        except PersistenceDatabaseError as exc:
+            raise setup_database_problem() from exc
         except (InvalidRegionTransitionError, InvalidAssumptionTransitionError) as exc:
             raise ApiProblem(status=409, code="setup_transition_invalid",
                              title="Invalid setup transition", detail=str(exc)) from exc
@@ -1453,6 +1574,7 @@ def create_app(
             if setup.current_revision != payload.expected_revision:
                 raise SetupRevisionConflictError("stale setup revision")
             intent = persistence().revision_intent(current)
+            enforce_cad_region_entity_ids_invariant(intent)
             if kind == "region":
                 items = intent.regions
                 expected = "proposed"
@@ -1468,6 +1590,24 @@ def create_app(
                 raise ApiProblem(status=409, code="setup_transition_invalid",
                                  title="Invalid setup transition",
                                  detail=f"Only {expected} {kind}s may be changed.")
+            if (
+                kind == "region"
+                and target == "confirmed"
+                and item.entity_type == "cad_face"
+                and (
+                    item.cad_face_target is None
+                    or item.cad_face_target.resolution != "resolved"
+                )
+            ):
+                raise ApiProblem(
+                    status=409,
+                    code="cad_region_unresolved",
+                    title="CAD region is unresolved",
+                    detail=(
+                        "Only a uniquely resolved stable CAD-face target may "
+                        "be confirmed."
+                    ),
+                )
             decision_update: dict[str, Any] = {"status": target}
             if kind == "assumption" and target == "accepted":
                 linked_materials = [
@@ -1510,6 +1650,10 @@ def create_app(
             raise _not_found_problem(exc.resource) from exc
         except PersistenceConflictError as exc:
             raise setup_conflict(exc) from exc
+        except CadRegionReferenceError as exc:
+            raise cad_region_problem(exc) from exc
+        except PersistenceDatabaseError as exc:
+            raise setup_database_problem() from exc
 
     @app.post("/api/v1/setups/{setup_id}/regions/{region_id}/confirm", status_code=201,
               response_model=SetupRevisionResponse, responses=PROBLEM_RESPONSES)
@@ -1714,7 +1858,9 @@ def create_app(
             instruction=payload.instruction,
             interpretation=proposal.interpretation.model_dump(mode="json"),
             grounding=proposal.grounding,
-            intent=proposal.intent,
+            intent=bind_durable_cad_targets(
+                proposal.intent, str(version_id)
+            ),
             clarification_count=0,
             model_name=getattr(
                 app.state.interpreter.transport, "model", DEFAULT_MODEL
@@ -1797,12 +1943,18 @@ def create_app(
             if result.region is None:
                 continue
             await app.state.viewer_events.publish(
-                "highlight", {"entity_ids": result.region.entity_ids, "style": "proposed"}
+                "highlight", {
+                    "entity_ids": region_entity_membership(result.region),
+                    "style": "proposed",
+                }
             )
             if result.bc is not None:
                 await app.state.viewer_events.publish(
                     "highlight",
-                    {"entity_ids": result.region.entity_ids, "style": "fixed_boundary_condition"},
+                    {
+                        "entity_ids": region_entity_membership(result.region),
+                        "style": "fixed_boundary_condition",
+                    },
                 )
 
     @app.post("/session/{session_id}/interpret", response_model=InterpretResponse)
@@ -1906,7 +2058,9 @@ def create_app(
             if result.clarification is not None and result.intent_index == choice.intent_index
             for candidate in result.clarification.candidate_sets
         ]
-        if sorted(choice.entity_ids) not in [sorted(ids) for ids in alternatives]:
+        if canonical_cad_numeric_membership(choice.entity_ids) not in [
+            canonical_cad_numeric_membership(ids) for ids in alternatives
+        ]:
             raise HTTPException(status_code=422, detail="choice must match a returned candidate set")
         clicks = dict(pending.click_evidence_by_intent)
         clicks[choice.intent_index] = ClickEvidence.for_inventory(inventory, choice.entity_ids)
@@ -2155,23 +2309,46 @@ def create_app(
             )
         except SessionIntentMissingError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        enforce_cad_region_entity_ids_invariant(intent)
         capability = model_capability(intent, record)
         report = project_report(engineering_report, capability)
         regions = []
         for region in intent.regions:
+            common = {
+                "id": region.id,
+                "entity_type": region.entity_type,
+                "selection_method": region.selection_method,
+                "confidence": region.confidence,
+                "source_instruction": region.source_instruction,
+                "status": region.status,
+                "boundary_conditions": [
+                    bc.model_dump(mode="json")
+                    for bc in intent.bcs
+                    if bc.region_ref == region.id
+                ],
+                "loads": [
+                    load.model_dump(mode="json")
+                    for load in intent.loads
+                    if load.region_ref == region.id
+                ],
+            }
+            if region.entity_type == "cad_face":
+                if region.cad_face_target is None:
+                    raise EngineeringConsistencyError(
+                        "cad_region_stable_target_required",
+                        "CAD audit serialization requires a CAD target",
+                    )
+                regions.append(
+                    AuditCadRegion(
+                        **common,
+                        cad_face_target=region.cad_face_target,
+                    )
+                )
+                continue
             regions.append(
-                AuditRegion(
-                    **region.model_dump(mode="python"),
-                    boundary_conditions=[
-                        bc.model_dump(mode="json")
-                        for bc in intent.bcs
-                        if bc.region_ref == region.id
-                    ],
-                    loads=[
-                        load.model_dump(mode="json")
-                        for load in intent.loads
-                        if load.region_ref == region.id
-                    ],
+                AuditNonCadRegion(
+                    **common,
+                    entity_ids=region_entity_membership(region),
                 )
             )
         blocking = [issue for issue in report.issues if issue.blocks_export]
@@ -2282,7 +2459,9 @@ def create_app(
                     source_path=record.path,
                     source_name=record.source_name,
                     source_sha256=inventory.file_sha256,
-                    face_ids=tuple(sorted(face.tag for face in inventory.faces)),
+                    source_cad_face_tags=tuple(
+                        sorted(face.tag for face in inventory.faces)
+                    ),
                 )
                 result = export_abaqus_py(intent, metadata)
             else:

@@ -12,6 +12,7 @@ from ir.schema import (
     SimulationIntent,
     export_json_schema,
 )
+from ir.versioning import dump_simulation_intent, load_simulation_intent
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 EXAMPLE_FILES = sorted(EXAMPLES.glob("*.json"))
@@ -27,17 +28,15 @@ def test_examples_exist():
 
 @pytest.mark.parametrize("path", EXAMPLE_FILES, ids=lambda p: p.stem)
 def test_round_trip(path):
-    intent = SimulationIntent.model_validate_json(path.read_text(encoding="utf-8"))
-    dumped = intent.model_dump_json()
-    reloaded = SimulationIntent.model_validate_json(dumped)
+    intent = load_simulation_intent(path.read_text(encoding="utf-8"))
+    dumped = dump_simulation_intent(intent)
+    reloaded = load_simulation_intent(dumped)
     assert reloaded == intent
-    assert reloaded.model_dump() == intent.model_dump()
+    assert dump_simulation_intent(reloaded) == dump_simulation_intent(intent)
 
 
 def test_sprint_goal_example_validates():
-    intent = SimulationIntent.model_validate(
-        load_example("bracket_sprint_goal.json")
-    )
+    intent = load_simulation_intent(load_example("bracket_sprint_goal.json"))
     assert intent.analysis.type == "static_structural"
     assert intent.analysis.units.length == "mm"
     assert intent.analysis.units.force == "N"
@@ -45,10 +44,12 @@ def test_sprint_goal_example_validates():
     assert intent.materials[0].nu == 0.3
 
     by_id = {r.id: r for r in intent.regions}
-    assert by_id["bolt_holes"].entity_ids == [18, 19, 24, 25]
+    assert by_id["bolt_holes"].cad_face_target.source_face_tags == [
+        18, 19, 24, 25
+    ]
     assert by_id["bolt_holes"].selection_method == "semantic_geometry_query"
     assert by_id["bolt_holes"].confidence == 0.94
-    assert by_id["upper_mounting_face"].entity_ids == [7]
+    assert by_id["upper_mounting_face"].cad_face_target.source_face_tags == [7]
     assert by_id["upper_mounting_face"].confidence == 0.88
 
     assert intent.bcs[0].type == "fixed_displacement"
@@ -66,7 +67,7 @@ def test_sprint_goal_example_validates():
 def region_dict(**overrides) -> dict:
     base = {
         "id": "r1",
-        "entity_type": "cad_face",
+        "entity_type": "mesh_face",
         "entity_ids": [1, 2],
         "selection_method": "semantic_geometry_query",
         "confidence": 0.9,
@@ -103,32 +104,28 @@ def test_confidence_out_of_range_rejected():
 
 
 def test_unknown_region_ref_rejected():
-    data = load_example("bracket_sprint_goal.json")
+    data = dump_simulation_intent(
+        load_simulation_intent(load_example("bracket_sprint_goal.json"))
+    )
     data["loads"][0]["region_ref"] = "does_not_exist"
     with pytest.raises(ValidationError):
         SimulationIntent.model_validate(data)
 
 
 def test_export_blocked_for_unconfirmed_regions():
-    intent = SimulationIntent.model_validate(
-        load_example("bracket_sprint_goal.json")
-    )
+    intent = load_simulation_intent(load_example("bracket_sprint_goal.json"))
     assert any(r.status != "confirmed" for r in intent.regions)
     with pytest.raises(ExportBlockedError):
         intent.export_payload()
 
 
-def test_export_allowed_when_all_regions_confirmed():
-    intent = SimulationIntent.model_validate(
+def test_legacy_confirmed_regions_are_safely_blocked_after_migration():
+    intent = load_simulation_intent(
         load_example("bracket_confirmed_export_ready.json")
     )
-    payload = intent.export_payload()
-    assert payload["regions"][0]["status"] == "confirmed"
-    assert payload["analysis"]["units"] == {
-        "length": "mm",
-        "force": "N",
-        "stress": "MPa",
-    }
+    assert all(region.status == "proposed" for region in intent.regions)
+    with pytest.raises(ExportBlockedError):
+        intent.export_payload()
 
 
 def test_json_schema_export():
@@ -151,6 +148,8 @@ def test_json_schema_export():
         "source_instruction",
         "status",
         "selection_method",
-        "entity_ids",
     ):
         assert field in region_schema["required"]
+    assert region_schema["allOf"][0]["else"] == {
+        "required": ["entity_ids"]
+    }

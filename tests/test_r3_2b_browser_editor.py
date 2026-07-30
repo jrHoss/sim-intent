@@ -21,7 +21,7 @@ from app.server import create_app
 from tests.test_engineering_setup import (
     EXPLICIT_MESH_SETTINGS,
     EXPLICIT_SOLVER_SETTINGS,
-    payload as engineering_payload,
+    inp_payload as engineering_inp_payload,
 )
 from tests.test_project_persistence import create_project, minimal_inp, request, upload
 
@@ -160,7 +160,12 @@ def test_signed_zero_survives_api_storage_reopen_and_unrelated_revision(tmp_path
             minimal_inp(),
             filename="signed-zero.inp",
         )
-        candidate = engineering_payload()
+        # An INP ModelVersion carries mesh entities, not CAD faces.
+        candidate = engineering_inp_payload()
+        assert [item["entity_type"] for item in candidate["regions"]] == [
+            "mesh_face",
+            "mesh_face",
+        ]
         for region_item in candidate["regions"]:
             region_item["status"] = "proposed"
         for assumption in candidate["assumptions"]:
@@ -304,6 +309,18 @@ def test_browser_authored_setup_restarts_reopens_and_extends_history(tmp_path):
             app, project["id"], BRACKET_STEP, filename="bracket.step"
         )
         version = uploaded["model_version"]
+        # What a current browser client reads back before authoring a CAD
+        # region: the persisted geometry-identity artifact of the exact
+        # uploaded ModelVersion.  A viewer click yields a stable identity, not
+        # a solver id, and the ambiguous faces are not confirmable.
+        identity = request(
+            app,
+            "GET",
+            f"/api/v1/model-versions/{version['id']}/geometry-identity",
+        ).json()
+        clicked = next(
+            face for face in identity["faces"] if not face["ambiguous"]
+        )
         interpreted = request(
             app,
             "POST",
@@ -347,10 +364,18 @@ def test_browser_authored_setup_restarts_reopens_and_extends_history(tmp_path):
             {
                 "id": "browser_support",
                 "entity_type": "cad_face",
-                "entity_ids": [1],
+                "cad_face_target": {
+                    "resolution": "resolved",
+                    "model_version_id": version["id"],
+                    "artifact_sha256": identity["artifact_sha256"],
+                    "stable_identities": [clicked["stable_identity"]],
+                    "source_face_tags": [clicked["source_ref"]],
+                },
                 "selection_method": "user_click",
                 "confidence": 1.0,
-                "source_instruction": "Use selected viewer face_1.",
+                "source_instruction": (
+                    f"Use selected viewer face_{clicked['source_ref']}."
+                ),
                 "status": "proposed",
             }
         )
@@ -362,6 +387,22 @@ def test_browser_authored_setup_restarts_reopens_and_extends_history(tmp_path):
             }
         )
         current = revision(app, setup_id, current, "browser-add-bc", with_bc)
+        stored_support = next(
+            item
+            for item in current["intent"]["regions"]
+            if item["id"] == "browser_support"
+        )
+        # The persisted CAD region is bound to the exact uploaded ModelVersion
+        # and its artifact, and carries no removed numeric solver evidence.
+        assert "entity_ids" not in stored_support
+        assert stored_support["cad_face_target"]["model_version_id"] == version["id"]
+        assert (
+            stored_support["cad_face_target"]["artifact_sha256"]
+            == identity["artifact_sha256"]
+        )
+        assert stored_support["cad_face_target"]["stable_identities"] == [
+            clicked["stable_identity"]
+        ]
 
         with_load = copy.deepcopy(current["intent"])
         with_load["loads"].append(

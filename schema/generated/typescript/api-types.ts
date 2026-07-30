@@ -646,6 +646,28 @@ export interface components {
             value: number;
         };
         /**
+         * AmbiguousCadFaceTarget
+         * @description A blocked target whose local evidence has no unique stable identity.
+         */
+        AmbiguousCadFaceTarget: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Collision Group Ids */
+            collision_group_ids: string[];
+            /** Model Version Id */
+            model_version_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            resolution: "ambiguous";
+            /**
+             * Source Face Tags
+             * @description Source-local, non-authoritative numeric CAD-face evidence. It must not be used to rebind a region across ModelVersions. Valid positive unique tags represent unordered membership, so input order has no engineering meaning. This is the sole public numeric-evidence field for v3 CAD-face regions.
+             */
+            source_face_tags: number[];
+        };
+        /**
          * Analysis
          * @description Analysis configuration.
          *
@@ -724,10 +746,50 @@ export interface components {
             text: string;
         };
         /**
-         * AuditRegion
-         * @description Region provenance plus all conditions that reference the region.
+         * AuditCadRegion
+         * @description CAD provenance without an obsolete ``entity_ids`` projection.
          */
-        AuditRegion: {
+        AuditCadRegion: {
+            /** Boundary Conditions */
+            boundary_conditions: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Cad Face Target
+             * @description A resolved stable geometry identity is the authoritative CAD-face reference only for the exact bound ModelVersion and persisted geometry-identity artifact. Source-local numeric evidence never authorizes rebinding across ModelVersions. Ambiguous, unresolved, invalid-legacy, and legacy-local-only targets cannot be confirmed or exported. Even a resolved stable identity cannot become solver entities until an explicit CAD-to-mesh mapping exists. R4b.2 performs no cross-version identity transfer.
+             */
+            cad_face_target: components["schemas"]["ResolvedCadFaceTarget"] | components["schemas"]["AmbiguousCadFaceTarget"] | components["schemas"]["UnresolvedCadFaceTarget"] | components["schemas"]["LegacyCadFaceTarget"] | components["schemas"]["InvalidLegacyCadFaceTarget"];
+            /** Confidence */
+            confidence: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            entity_type: "cad_face";
+            /** Id */
+            id: string;
+            /** Loads */
+            loads: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Selection Method
+             * @enum {string}
+             */
+            selection_method: "semantic_geometry_query" | "multimodal_reference" | "user_click" | "user_confirmed";
+            /** Source Instruction */
+            source_instruction: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "proposed" | "confirmed" | "rejected";
+        };
+        /**
+         * AuditNonCadRegion
+         * @description Non-CAD provenance retains its established membership field.
+         */
+        AuditNonCadRegion: {
             /** Boundary Conditions */
             boundary_conditions: {
                 [key: string]: unknown;
@@ -737,10 +799,10 @@ export interface components {
             /** Entity Ids */
             entity_ids: number[] | string[];
             /**
-             * Entity Type
+             * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            entity_type: "cad_face" | "cad_edge" | "mesh_face" | "node_set" | "element_set";
+            entity_type: "cad_edge" | "element_set" | "mesh_face" | "node_set";
             /** Id */
             id: string;
             /** Loads */
@@ -774,7 +836,7 @@ export interface components {
             /** Model Id */
             model_id: string;
             /** Regions */
-            regions: components["schemas"]["AuditRegion"][];
+            regions: (components["schemas"]["AuditCadRegion"] | components["schemas"]["AuditNonCadRegion"])[];
             /** Session Id */
             session_id: string;
             validation_report: components["schemas"]["ValidationReport"];
@@ -1187,6 +1249,58 @@ export interface components {
             state: "proposed" | "clarification";
         };
         /**
+         * InvalidLegacyCadFaceTarget
+         * @description Blocked historical v2 numeric evidence that violates v3 constraints.
+         *
+         *     This read-only migration representation deliberately permits non-positive
+         *     and duplicate integers so immutable historical evidence remains readable
+         *     and inspectable. It never confers stable geometry authority.
+         */
+        InvalidLegacyCadFaceTarget: {
+            /**
+             * Legacy Reason
+             * @default invalid_numeric_tags
+             * @constant
+             */
+            legacy_reason: "invalid_numeric_tags";
+            /**
+             * Legacy Status
+             * @enum {string}
+             */
+            legacy_status: "proposed" | "confirmed" | "rejected";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            resolution: "invalid_legacy_evidence";
+            /**
+             * Source Face Tags
+             * @description Original ordered historical v2 numeric evidence, preserved without sorting, deduplication, sign changes, removal, repair, stable-identity fabrication, or ModelVersion rebinding. This evidence is invalid, non-authoritative, unconfirmable, and unexportable.
+             */
+            source_face_tags: number[];
+        };
+        /**
+         * LegacyCadFaceTarget
+         * @description Blocked valid v2 numeric evidence with no stable authority.
+         */
+        LegacyCadFaceTarget: {
+            /**
+             * Legacy Status
+             * @enum {string}
+             */
+            legacy_status: "proposed" | "confirmed" | "rejected";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            resolution: "legacy_local_only";
+            /**
+             * Source Face Tags
+             * @description Source-local, non-authoritative numeric CAD-face evidence. It must not be used to rebind a region across ModelVersions. Valid positive unique tags represent unordered membership, so input order has no engineering meaning. This is the sole public numeric-evidence field for v3 CAD-face regions.
+             */
+            source_face_tags?: number[];
+        };
+        /**
          * LegacySimulationIntent
          * @description Route-scoped compatibility model for the frozen legacy session PUT.
          *
@@ -1209,7 +1323,7 @@ export interface components {
             regions: components["schemas"]["Region"][];
             /**
              * Schema Version
-             * @default 2
+             * @default 3
              */
             schema_version: number;
             solver_settings?: components["schemas"]["SolverSettings"] | null;
@@ -1507,10 +1621,18 @@ export interface components {
         };
         /** Region */
         Region: {
+            /**
+             * Cad Face Target
+             * @description A resolved stable geometry identity is the authoritative CAD-face reference only for the exact bound ModelVersion and persisted geometry-identity artifact. Source-local numeric evidence never authorizes rebinding across ModelVersions. Ambiguous, unresolved, invalid-legacy, and legacy-local-only targets cannot be confirmed or exported. Even a resolved stable identity cannot become solver entities until an explicit CAD-to-mesh mapping exists. R4b.2 performs no cross-version identity transfer.
+             */
+            cad_face_target?: (components["schemas"]["ResolvedCadFaceTarget"] | components["schemas"]["AmbiguousCadFaceTarget"] | components["schemas"]["UnresolvedCadFaceTarget"] | components["schemas"]["LegacyCadFaceTarget"] | components["schemas"]["InvalidLegacyCadFaceTarget"]) | null;
             /** Confidence */
             confidence: number;
-            /** Entity Ids */
-            entity_ids: number[] | string[];
+            /**
+             * Entity Ids
+             * @description Required source-local entity membership for non-CAD regions. This field is forbidden for CAD-face regions, whose sole public numeric evidence is cad_face_target.source_face_tags.
+             */
+            entity_ids?: number[] | string[] | null;
             /**
              * Entity Type
              * @enum {string}
@@ -1530,7 +1652,7 @@ export interface components {
              * @enum {string}
              */
             status: "proposed" | "confirmed" | "rejected";
-        };
+        } & unknown;
         /**
          * RegionTransitionRequest
          * @description Request body shared by the confirm and reject endpoints.
@@ -1538,6 +1660,37 @@ export interface components {
         RegionTransitionRequest: {
             /** Region Id */
             region_id: string;
+        };
+        /**
+         * ResolvedCadFaceTarget
+         * @description A uniquely resolved stable target scoped to one exact artifact.
+         */
+        ResolvedCadFaceTarget: {
+            /**
+             * Artifact Sha256
+             * @description SHA-256 of the exact persisted geometry-identity artifact that authorizes stable_identities for the bound ModelVersion.
+             */
+            artifact_sha256: string;
+            /**
+             * Model Version Id
+             * @description Exact ModelVersion to which the authoritative stable identity is scoped; it cannot be transferred to another ModelVersion.
+             */
+            model_version_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            resolution: "resolved";
+            /**
+             * Source Face Tags
+             * @description Source-local, non-authoritative numeric CAD-face evidence. It must not be used to rebind a region across ModelVersions. Valid positive unique tags represent unordered membership, so input order has no engineering meaning. This is the sole public numeric-evidence field for v3 CAD-face regions.
+             */
+            source_face_tags: number[];
+            /**
+             * Stable Identities
+             * @description Authoritative stable CAD-face identities for the exact model_version_id and persisted geometry-identity artifact identified by artifact_sha256. They do not transfer identity across ModelVersions and require a separate CAD-to-mesh mapping before solver entities can be produced.
+             */
+            stable_identities: string[];
         };
         /**
          * ResultantSurfaceForceLoad
@@ -1666,7 +1819,10 @@ export interface components {
             /** Id */
             id: string;
             intent: components["schemas"]["SimulationIntent"];
-            /** Intent Sha256 */
+            /**
+             * Intent Sha256
+             * @description SHA-256 of the materialized intent returned in this response.
+             */
             intent_sha256: string;
             /** Mutation Type */
             mutation_type: string;
@@ -1687,8 +1843,21 @@ export interface components {
             };
             /** Setup Id */
             setup_id: string;
-            /** Simulation Intent Schema Version */
+            /**
+             * Simulation Intent Schema Version
+             * @description Schema version of the materialized intent returned in this response.
+             */
             simulation_intent_schema_version: number;
+            /**
+             * Stored Intent Sha256
+             * @description SHA-256 stored immutably for the historical revision bytes.
+             */
+            stored_intent_sha256: string;
+            /**
+             * Stored Simulation Intent Schema Version
+             * @description Schema version stored immutably on the historical revision.
+             */
+            stored_simulation_intent_schema_version: number;
             validation: components["schemas"]["ValidationReport"];
         };
         /** SetupSummary */
@@ -1841,6 +2010,24 @@ export interface components {
              * @constant
              */
             stress: "MPa";
+        };
+        /**
+         * UnresolvedCadFaceTarget
+         * @description A blocked target that has not resolved to stable geometry.
+         */
+        UnresolvedCadFaceTarget: {
+            /** Model Version Id */
+            model_version_id?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            resolution: "unresolved";
+            /**
+             * Source Face Tags
+             * @description Source-local, non-authoritative numeric CAD-face evidence. It must not be used to rebind a region across ModelVersions. Valid positive unique tags represent unordered membership, so input order has no engineering meaning. This is the sole public numeric-evidence field for v3 CAD-face regions.
+             */
+            source_face_tags?: number[];
         };
         /** UnresolvedLoadResultant */
         UnresolvedLoadResultant: {

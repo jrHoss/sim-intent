@@ -24,10 +24,13 @@ from ir.schema import (
     LOAD_REGION_COMPATIBILITY,
     EngineeringConsistencyError,
     ExportBlockedError,
+    Region,
     RegionTargetRule,
     SimulationIntent,
     StrictModel,
+    enforce_cad_region_entity_ids_invariant,
     material_proposal_fingerprint,
+    region_entity_membership,
 )
 
 
@@ -406,7 +409,7 @@ def _validate_reference(
             object_id=item_id,
             field="region_ref",
         )
-    entity_ids = getattr(region, "entity_ids", None)
+    entity_ids = region_entity_membership(region)
     if not isinstance(entity_ids, list) or not entity_ids:
         _issue(
             issues,
@@ -449,6 +452,18 @@ def validate_intent(
     """Return a deterministic report without trusting or mutating the intent."""
 
     issues: list[ValidationIssue] = []
+    try:
+        enforce_cad_region_entity_ids_invariant(intent)
+    except EngineeringConsistencyError as exc:
+        _issue(
+            issues,
+            exc.code,
+            "error",
+            "A CAD-face region contains forbidden duplicate numeric evidence.",
+            blocks_export=True,
+            object_type="region",
+            field="entity_ids",
+        )
     if source_is_stale:
         _issue(
             issues, "source.stale", "error",
@@ -717,7 +732,16 @@ def validate_intent(
             )
         else:
             regions_by_id[str(region_id)] = region
-        entity_ids = getattr(region, "entity_ids", None)
+        # Every other probe in this loop reads the region defensively so an
+        # unvalidated shape is reported rather than raised on.  A region that
+        # never became a ``Region`` -- for example a hostile mapping smuggled
+        # in through ``model_construct`` -- has no trustworthy membership, and
+        # the CAD invariant above has already recorded the blocking issue.
+        entity_ids = (
+            region_entity_membership(region)
+            if isinstance(region, Region)
+            else []
+        )
         if not isinstance(entity_ids, list) or not entity_ids:
             _issue(
                 issues,
@@ -758,6 +782,31 @@ def validate_intent(
                 field="confidence",
             )
         status = getattr(region, "status", None)
+        if getattr(region, "entity_type", None) == "cad_face":
+            target = getattr(region, "cad_face_target", None)
+            resolution = getattr(target, "resolution", None)
+            if target is None:
+                _issue(
+                    issues,
+                    "region.cad_stable_target_missing",
+                    "error",
+                    "CAD-face region has no authoritative stable target.",
+                    blocks_export=True,
+                    object_type="region",
+                    object_id=str(region_id),
+                    field="cad_face_target",
+                )
+            elif resolution != "resolved":
+                _issue(
+                    issues,
+                    f"region.cad_{resolution or 'unresolved'}",
+                    "error",
+                    "CAD-face region is not uniquely resolved to stable geometry.",
+                    blocks_export=True,
+                    object_type="region",
+                    object_id=str(region_id),
+                    field="cad_face_target.resolution",
+                )
         if status == "proposed":
             _issue(
                 issues,
@@ -1122,6 +1171,10 @@ def validate_intent(
             object_type="intent",
             field="regions",
         )
+    except EngineeringConsistencyError:
+        # The shared invariant guard already emitted its stable error issue at
+        # the start of this deterministic pass.
+        pass
 
     issues.sort(
         key=lambda issue: (

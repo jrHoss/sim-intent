@@ -2,13 +2,18 @@
 
 Mapping contract
 ----------------
-Task 2 inventories the exact uploaded STEP file with OCC face tags.  The
-current repository has no cross-kernel geometry fingerprints.  This adapter
-therefore uses the deliberately narrow ``source_step_face_order`` strategy:
-for the exact content-hashed STEP source, OCC tag ``n`` maps to Abaqus
-``part.faces[n - 1]``.  The generated script records that assumption and
-checks the imported face count at runtime.  It must not be used for regenerated
-or edited CAD, where topology ordering may differ.
+Task 2 inventories the exact uploaded STEP file with OCC face tags.  Those
+tags are CAD-side provenance only.  They are never consumed as solver face
+IDs, solver face indexes, solver topology cardinality, solver set IDs, an
+implicit ordinal offset, or proof that a CAD-to-solver correspondence exists.
+
+The public adapter therefore has no CAD mapping at all and fails closed.  The
+private renderer runs only when a caller supplies both an explicit solver
+face mapping (``solver_face_ids_by_region``) and the solver-face universe
+those IDs are drawn from (``solver_face_universe``).  The universe is a
+renderer-owned solver topology contract supplied independently of any CAD
+tag value; focused tests supply a clearly synthetic one.  R6 owns production
+CAD-to-mesh/solver mapping.
 
 Load mappings are explicit: resultant surface force is converted at script
 execution time to an equal traction using the imported face area; pressure is
@@ -23,7 +28,7 @@ import math
 import re
 from pathlib import Path
 
-from ir.schema import SimulationIntent
+from ir.schema import SimulationIntent, region_entity_membership
 
 from export.common import (
     CadModelMetadata,
@@ -47,16 +52,46 @@ _AXIS_TO_DOF = {"x": 1, "y": 2, "z": 3}
 
 
 def export_abaqus_py(intent: SimulationIntent, model: CadModelMetadata):
-    """Generate a readable Abaqus/CAE Python script without executing Abaqus."""
+    """Public boundary: no CAD artifact exists before verified mesh mapping."""
+
+    ensure_export_ready(intent)
+    raise MissingRegionMappingError(
+        "CAD-face export requires an exact artifact-backed solver mapping; "
+        "source-local face tags are not authoritative."
+    )
+
+
+def _render_abaqus_py_with_verified_mapping(
+    intent: SimulationIntent,
+    model: CadModelMetadata,
+    *,
+    solver_face_ids_by_region: dict[str, tuple[int, ...]],
+    solver_face_universe: tuple[int, ...],
+):
+    """Render below the mapping boundary using explicit solver face IDs.
+
+    R4b.2's public adapter never calls this function.  Focused renderer tests
+    supply a clearly synthetic mapping and a synthetic solver-face universe; a
+    future mapping owner may call it only after independently verifying the
+    CAD-to-solver correspondence.  Neither argument may be derived from the
+    source CAD face tags carried on ``model`` or on the intent's regions.
+    """
 
     report = ensure_export_ready(intent)
-    region_names, material_names = _preflight(intent, model)
+    region_names, material_names = _preflight(
+        intent,
+        model,
+        solver_face_ids_by_region=solver_face_ids_by_region,
+        solver_face_universe=solver_face_universe,
+    )
+    solver_face_ids = tuple(sorted(set(solver_face_universe)))
 
     warnings = [
         (
-            "CAD topology mapping assumes OCC face tag n from the exact source STEP "
-            "maps to Abaqus imported face sequence position n-1; edited or regenerated "
-            "CAD must be re-inventoried and reconfirmed."
+            "Solver faces are addressed only by the explicitly supplied solver face "
+            "IDs. Source CAD face tags are retained as provenance and are not used "
+            "as solver IDs, indexes, or topology counts; a verified CAD-to-solver "
+            "mapping remains the caller's responsibility."
         ),
         (
             "The single IR material is assigned to all imported solid cells because the "
@@ -77,8 +112,9 @@ def export_abaqus_py(intent: SimulationIntent, model: CadModelMetadata):
         "# Internal unit convention: mm-N-MPa (gravity acceleration in mm/s^2)",
         f"# Server-computed validation status: {report.validation_status}",
         f"# Source STEP SHA-256: {model.source_sha256}",
-        "# Region mapping: source_step_face_order (OCC tag n -> part.faces[n - 1])",
-        "# Mapping is valid only for the exact content-hashed STEP file; regenerated CAD is unsupported.",
+        "# Region mapping: explicit solver face IDs supplied by the caller below the public export gate.",
+        "# Source CAD face tags are provenance only; they are not solver face IDs and imply no mapping.",
+        "# Provenance is valid only for the exact content-hashed STEP file; regenerated CAD is unsupported.",
         "# Accepted assumptions:",
     ]
     accepted = sorted(
@@ -111,27 +147,35 @@ def export_abaqus_py(intent: SimulationIntent, model: CadModelMetadata):
             "part = model.PartFromGeometryFile(",
             "    name=PART_NAME, geometryFile=step_geometry, combine=False,",
             "    dimensionality=THREE_D, type=DEFORMABLE_BODY)",
-            f"if len(part.faces) < {max(model.face_ids)}:",
-            "    raise RuntimeError('Imported STEP face count cannot satisfy confirmed source face tags.')",
+            f"# The supplied solver-face universe is 1..{max(solver_face_ids)}; it is not derived from CAD tags.",
+            f"if len(part.faces) < {max(solver_face_ids)}:",
+            "    raise RuntimeError('Imported face count cannot satisfy the supplied solver face universe.')",
             "",
         ]
     )
 
     for region in sorted(intent.regions, key=lambda item: item.id):
         set_name, surface_name = region_names[region.id]
-        entity_ids = tuple(sorted(int(value) for value in region.entity_ids))
-        tuple_text = _python_int_tuple(entity_ids)
+        source_cad_face_tags = tuple(
+            sorted(int(value) for value in region_entity_membership(region))
+        )
+        mapped_solver_face_ids = tuple(sorted(solver_face_ids_by_region[region.id]))
+        tuple_text = _python_int_tuple(mapped_solver_face_ids)
         lines.extend(
             [
                 f"# Region ID: {_comment_string(region.id)}",
                 f"# source_instruction: {_comment_string(region.source_instruction)}",
-                f"# original_entity_ids: {json.dumps(list(entity_ids), separators=(',', ':'))}",
+                f"# source_cad_face_tags (provenance only, not solver IDs): "
+                f"{json.dumps(list(source_cad_face_tags), separators=(',', ':'))}",
+                f"# mapped_solver_face_ids (explicitly supplied): "
+                f"{json.dumps(list(mapped_solver_face_ids), separators=(',', ':'))}",
                 f"# selection_method: {region.selection_method}",
                 f"# confidence: {format_float(region.confidence)}",
                 f"# validation_status: {report.validation_status}",
                 f"# solver_set: {set_name}; solver_surface: {surface_name}",
-                f"_face_tags = {tuple_text}",
-                "_faces = tuple(part.faces[tag - 1] for tag in _face_tags)",
+                f"_solver_face_ids = {tuple_text}",
+                "_faces = tuple(part.faces[solver_face_id - 1]",
+                "               for solver_face_id in _solver_face_ids)",
                 f"part.Set(name='{set_name}', faces=_faces)",
                 f"part.Surface(name='{surface_name}', side1Faces=_faces)",
                 "",
@@ -282,7 +326,11 @@ def export_abaqus_py(intent: SimulationIntent, model: CadModelMetadata):
 
 
 def _preflight(
-    intent: SimulationIntent, model: CadModelMetadata
+    intent: SimulationIntent,
+    model: CadModelMetadata,
+    *,
+    solver_face_ids_by_region: dict[str, tuple[int, ...]],
+    solver_face_universe: tuple[int, ...],
 ) -> tuple[dict[str, tuple[str, str]], dict[str, str]]:
     suffix = Path(model.source_name).suffix.lower()
     if suffix not in {".step", ".stp"} or Path(model.source_name).name != model.source_name:
@@ -299,16 +347,33 @@ def _preflight(
         raise MissingRegionMappingError(
             "The explicit STEP file no longer matches the grounded source content hash."
         )
-    if model.mapping_strategy != "source_step_face_order":
-        raise MissingRegionMappingError("The requested CAD face mapping strategy is unsupported.")
-    face_ids = tuple(sorted(set(model.face_ids)))
-    if not face_ids or face_ids != tuple(range(1, max(face_ids) + 1)):
+    # The solver-face universe is the renderer's own solver topology contract.
+    # It is supplied explicitly and is never inferred from CAD tag values, so
+    # a large source tag can neither create nor enlarge a solver face.
+    if any(
+        isinstance(value, bool) or not isinstance(value, int)
+        for value in solver_face_universe
+    ):
         raise MissingRegionMappingError(
-            "STEP face inventory is not a contiguous source topology-tag sequence."
+            "The solver-face universe must contain integer solver face IDs."
+        )
+    solver_face_ids = tuple(sorted(set(solver_face_universe)))
+    if not solver_face_ids or solver_face_ids != tuple(
+        range(1, max(solver_face_ids) + 1)
+    ):
+        raise MissingRegionMappingError(
+            "The solver-face universe is not a contiguous solver face-ID sequence."
         )
     if len(intent.materials) != 1:
         raise MissingMaterialAssignmentError(
             "The current IR can assign material safely only when exactly one material applies to all solid cells."
+        )
+    expected_region_ids = {
+        region.id for region in intent.regions if region.entity_type == "cad_face"
+    }
+    if set(solver_face_ids_by_region) != expected_region_ids:
+        raise MissingRegionMappingError(
+            "The verified solver mapping must cover every CAD region exactly."
         )
 
     region_names: dict[str, tuple[str, str]] = {}
@@ -318,14 +383,21 @@ def _preflight(
             raise UnsupportedEntityTypeError(
                 f"The abaqus_py adapter supports cad_face regions, not '{region.entity_type}'."
             )
-        if any(isinstance(value, bool) or not isinstance(value, int) for value in region.entity_ids):
+        mapped_ids = solver_face_ids_by_region[region.id]
+        if any(
+            isinstance(value, bool) or not isinstance(value, int)
+            for value in mapped_ids
+        ):
             raise InvalidRegionReferenceError(
-                f"CAD region '{region.id}' must contain integer source face tags."
+                f"CAD region '{region.id}' must map to integer solver face IDs."
             )
-        ids = [int(value) for value in region.entity_ids]
-        if len(ids) != len(set(ids)) or any(value not in face_ids for value in ids):
+        ids = [int(value) for value in mapped_ids]
+        if len(ids) != len(set(ids)) or any(
+            value not in solver_face_ids for value in ids
+        ):
             raise InvalidRegionReferenceError(
-                f"CAD region '{region.id}' contains duplicate or unknown source face tags."
+                f"CAD region '{region.id}' maps to duplicate solver faces or to "
+                "solver face IDs outside the supplied solver-face universe."
             )
         names = (stable_name("SET", region.id), stable_name("SURF", region.id))
         if any(name in used_names for name in names):

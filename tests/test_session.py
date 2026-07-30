@@ -8,6 +8,7 @@ import pytest
 
 from app.server import create_app
 from ir.schema import SimulationIntent
+from ir.schema_version import SIMULATION_INTENT_SCHEMA_VERSION
 from llm.interpreter import Interpreter
 
 
@@ -67,7 +68,7 @@ def intent_payload(first_ids=None, second_ids=None) -> dict:
     """
 
     return {
-        "schema_version": 2,
+        "schema_version": SIMULATION_INTENT_SCHEMA_VERSION,
         "analysis": {
             "type": "static_structural",
             "units": {"length": "mm", "force": "N", "stress": "MPa"},

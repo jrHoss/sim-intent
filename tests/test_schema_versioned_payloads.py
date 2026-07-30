@@ -202,25 +202,49 @@ def test_fallback_envelope_requires_its_declared_members():
     assert exc.value.details["missing"] == ["model_sha256"]
 
 
-def test_envelope_migration_delegates_nested_intent_without_rewriting_it():
+def test_fallback_loader_migrates_nested_intent_and_grounding_without_mutating_input():
     raw = json.loads(
         (FALLBACK_DIR / "bracket_bottom_fixed.json").read_text(encoding="utf-8")
     )
+    original_raw = copy.deepcopy(raw)
     envelope, intent = load_fallback_record(raw, source="t")
-    assert envelope[NESTED_INTENT_KEY] == raw[NESTED_INTENT_KEY]
     dumped = dump_simulation_intent(intent)
-    # The nested body is migrated 1 -> 2 on read and nothing else: every
-    # version-2 engineering decision stays explicitly missing.
+    assert raw == original_raw
+    assert envelope[NESTED_INTENT_KEY] == dumped
+    # The nested body is migrated 1 -> 2 -> 3 on read: version-2 engineering
+    # decisions stay missing and numeric CAD evidence becomes explicit legacy.
     assert dumped[SCHEMA_VERSION_FIELD] == SIMULATION_INTENT_SCHEMA_VERSION
     assert dumped["analysis"]["dimensionality"] is None
     assert dumped["analysis"]["solver_target"] is None
     assert dumped["analysis"]["coordinate_system"] is None
     assert dumped["mesh_settings"] is None
     assert dumped["solver_settings"] is None
-    # ... and the pre-existing engineering content is untouched.
+    # ... and pre-existing conditions remain untouched.
     assert dumped["loads"] == raw[NESTED_INTENT_KEY]["loads"]
     assert dumped["bcs"] == raw[NESTED_INTENT_KEY]["bcs"]
-    assert dumped["regions"] == raw[NESTED_INTENT_KEY]["regions"]
+    for migrated, original in zip(
+        dumped["regions"], raw[NESTED_INTENT_KEY]["regions"], strict=True
+    ):
+        assert {
+            key: value
+            for key, value in migrated.items()
+            if key != "cad_face_target"
+        } == {
+            key: value for key, value in original.items()
+            if key != "entity_ids"
+        }
+        assert migrated["cad_face_target"]["resolution"] == "legacy_local_only"
+        assert migrated["cad_face_target"]["source_face_tags"] == original["entity_ids"]
+    for key in ("initial_grounding", "final_grounding"):
+        migrated_region = envelope[key]["results"][0]["region"]
+        original_region = raw[key]["results"][0]["region"]
+        assert "entity_ids" not in migrated_region
+        assert migrated_region["cad_face_target"]["resolution"] == (
+            "legacy_local_only"
+        )
+        assert migrated_region["cad_face_target"]["source_face_tags"] == (
+            original_region["entity_ids"]
+        )
 
 
 def test_build_fallback_envelope_emits_only_current_versions():
@@ -518,6 +542,16 @@ def current_intent_document() -> dict[str, Any]:
     body["analysis"] = {**body["analysis"], **EXPLICIT_ANALYSIS_DECISIONS}
     body["mesh_settings"] = dict(EXPLICIT_MESH_SETTINGS)
     body["solver_settings"] = dict(EXPLICIT_SOLVER_SETTINGS)
+    for index, region in enumerate(body["regions"], start=1):
+        if region["entity_type"] == "cad_face":
+            region["cad_face_target"] = {
+                "resolution": "resolved",
+                "model_version_id": "fixture-model-version",
+                "artifact_sha256": "a" * 64,
+                "stable_identities": [f"gfi1:{index:064x}"],
+                "source_face_tags": list(region["entity_ids"]),
+            }
+            region.pop("entity_ids")
     return body
 
 

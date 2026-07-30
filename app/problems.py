@@ -91,6 +91,7 @@ def engineering_consistency_code(item: dict[str, Any]) -> str | None:
 
 def validation_problem(request: Request, error: RequestValidationError) -> JSONResponse:
     safe_errors = []
+    domain_codes: set[str] = set()
     for item in error.errors():
         safe_item: dict[str, Any] = {
             "location": list(item["loc"]),
@@ -99,7 +100,27 @@ def validation_problem(request: Request, error: RequestValidationError) -> JSONR
         code = engineering_consistency_code(item)
         if code is not None:
             safe_item["code"] = code
+            domain_codes.add(code)
         safe_errors.append(safe_item)
+    cad_region_codes = {
+        "cad_region_evidence_mismatch",
+        "cad_region_entity_ids_forbidden",
+    }
+    matched_cad_code = next(
+        (code for code in sorted(cad_region_codes) if code in domain_codes),
+        None,
+    )
+    if matched_cad_code is not None:
+        return problem_response(
+            request,
+            ApiProblem(
+                status=422,
+                code=matched_cad_code,
+                title="Invalid CAD region reference",
+                detail="The CAD region contains forbidden or contradictory numeric evidence.",
+                errors=safe_errors,
+            ),
+        )
     return problem_response(
         request,
         ApiProblem(

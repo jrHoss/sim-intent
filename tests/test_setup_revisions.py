@@ -1,6 +1,8 @@
 """Focused R1.2 durable setup revision evidence."""
 
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
+import json
 import threading
 
 from alembic import command
@@ -575,29 +577,143 @@ def test_nonexistent_current_pointer_rejected_and_stale_status_precedes_transiti
         assert stale.json()["code"] == "setup_revision_conflict"
 
 
-def test_populated_downgrade_reupgrade_and_triggers_with_three_revisions(tmp_path):
+def test_populated_v2_downgrade_reupgrade_restores_schema_triggers_and_data(
+    tmp_path,
+):
     config = LocalDataConfig(tmp_path / "data")
-    with TestClient(create_app(tmp_path / "legacy", mode=RuntimeMode.TEST, data_config=config)) as client:
-        create_three_revision_setup(client.app)
-
+    config.root.mkdir(parents=True)
     migration = alembic_config(config.database_url)
-    command.downgrade(migration, "0001_projects_models")
-    engine = None
-    try:
-        from app.persistence import create_sqlite_engine
+    command.upgrade(migration, "0004_geometry_identity_artifacts")
+    from app.persistence import create_sqlite_engine
 
-        engine = create_sqlite_engine(config.database_url)
-        assert "simulation_setups" not in inspect(engine).get_table_names()
-        with engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0001_projects_models"
-        engine.dispose()
-        engine = None
+    engine = create_sqlite_engine(config.database_url)
+    project_id = "22222222-2222-2222-2222-222222222220"
+    model_id = "22222222-2222-2222-2222-222222222221"
+    version_id = "22222222-2222-2222-2222-222222222222"
+    setup_id = "22222222-2222-2222-2222-222222222223"
+    revision_id = "33333333-3333-3333-3333-333333333333"
+    historical = intent_payload()
+    historical["schema_version"] = 2
+    historical_json = json.dumps(
+        historical, sort_keys=True, separators=(",", ":")
+    )
+    historical_sha = hashlib.sha256(historical_json.encode()).hexdigest()
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO projects (id, name, created_at) "
+                "VALUES (:id, 'historical-v2', CURRENT_TIMESTAMP)"
+            ),
+            {"id": project_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO models (id, project_id, created_at) "
+                "VALUES (:id, :project, CURRENT_TIMESTAMP)"
+            ),
+            {"id": model_id, "project": project_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO model_versions "
+                "(id, model_id, version, source_sha256, source_name, "
+                "size_bytes, media_type, model_kind, blob_key, created_at) "
+                "VALUES (:id, :model, 1, :digest, 'part.inp', 1, "
+                "'application/octet-stream', 'inp', :blob, CURRENT_TIMESTAMP)"
+            ),
+            {
+                "id": version_id,
+                "model": model_id,
+                "digest": "b" * 64,
+                "blob": f"sha256/bb/bb/{'b' * 64}",
+            },
+        )
+        connection.execute(
+            text(
+                "UPDATE models SET current_version_id=:version "
+                "WHERE id=:model"
+            ),
+            {"version": version_id, "model": model_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO simulation_setups "
+                "(id, project_id, model_id, model_version_id, "
+                "current_revision, create_request_id, "
+                "create_request_sha256, created_at, updated_at) "
+                "VALUES (:id, :project, :model, :version, NULL, "
+                "'historical-create', :digest, CURRENT_TIMESTAMP, "
+                "CURRENT_TIMESTAMP)"
+            ),
+            {
+                "id": setup_id,
+                "project": project_id,
+                "model": model_id,
+                "version": version_id,
+                "digest": "c" * 64,
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO setup_revisions "
+                "(id, setup_id, revision, parent_revision_id, "
+                "schema_version, intent_json, intent_sha256, "
+                "mutation_type, request_id, mutation_sha256, created_at) "
+                "VALUES (:id, :setup, 1, NULL, 2, :intent, :digest, "
+                "'create', 'historical-create', :mutation, "
+                "CURRENT_TIMESTAMP)"
+            ),
+            {
+                "id": revision_id,
+                "setup": setup_id,
+                "intent": historical_json,
+                "digest": historical_sha,
+                "mutation": "d" * 64,
+            },
+        )
+        connection.execute(
+            text(
+                "UPDATE simulation_setups SET current_revision=1 "
+                "WHERE id=:id"
+            ),
+            {"id": setup_id},
+        )
+    engine.dispose()
 
-        command.upgrade(migration, "head")
-        engine = create_sqlite_engine(config.database_url)
-        trigger_names = set(engine.connect().scalars(text(
-            "SELECT name FROM sqlite_master WHERE type='trigger'"
-        )))
+    command.upgrade(migration, "head")
+    engine = create_sqlite_engine(config.database_url)
+    head_columns = {
+        table: tuple(
+            column["name"] for column in inspect(engine).get_columns(table)
+        )
+        for table in ("models", "model_versions", "simulation_setups", "setup_revisions")
+    }
+    engine.dispose()
+
+    command.downgrade(migration, "0002_setup_revisions")
+    command.upgrade(migration, "head")
+
+    engine = create_sqlite_engine(config.database_url)
+    with engine.connect() as connection:
+        assert connection.scalar(
+            text("SELECT version_num FROM alembic_version")
+        ) == "0005_stable_cad_region_references"
+        preserved = connection.execute(
+            text(
+                "SELECT schema_version, intent_json, intent_sha256 "
+                "FROM setup_revisions WHERE id=:id"
+            ),
+            {"id": revision_id},
+        ).one()
+        assert preserved == (2, historical_json, historical_sha)
+        trigger_names = set(
+            connection.scalars(
+                text(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='trigger'"
+                )
+            )
+        )
         assert {
             "simulation_setups_lineage_insert",
             "simulation_setups_lineage_update",
@@ -606,72 +722,19 @@ def test_populated_downgrade_reupgrade_and_triggers_with_three_revisions(tmp_pat
             "setup_revisions_immutable",
             "setup_revisions_sequential",
         }.issubset(trigger_names)
+    assert {
+        table: tuple(
+            column["name"] for column in inspect(engine).get_columns(table)
+        )
+        for table in head_columns
+    } == head_columns
+    with pytest.raises(IntegrityError, match="immutable"):
         with engine.begin() as connection:
-            project_id, model_id, version_id, setup_id = (
-                f"22222222-2222-2222-2222-22222222222{index}" for index in range(4)
+            connection.execute(
+                text(
+                    "UPDATE setup_revisions SET mutation_type='changed' "
+                    "WHERE id=:id"
+                ),
+                {"id": revision_id},
             )
-            connection.execute(text(
-                "INSERT INTO projects (id, name, created_at) "
-                "VALUES (:id, 'reupgrade', CURRENT_TIMESTAMP)"
-            ), {"id": project_id})
-            connection.execute(text(
-                "INSERT INTO models (id, project_id, created_at) "
-                "VALUES (:id, :project, CURRENT_TIMESTAMP)"
-            ), {"id": model_id, "project": project_id})
-            connection.execute(text(
-                "INSERT INTO model_versions "
-                "(id, model_id, version, source_sha256, source_name, size_bytes, "
-                "media_type, model_kind, blob_key, created_at) VALUES "
-                "(:id, :model, 1, :digest, 'part.inp', 1, "
-                "'application/octet-stream', 'inp', :blob, CURRENT_TIMESTAMP)"
-            ), {
-                "id": version_id, "model": model_id, "digest": "b" * 64,
-                "blob": f"sha256/bb/bb/{'b' * 64}",
-            })
-            connection.execute(text(
-                "UPDATE models SET current_version_id=:version WHERE id=:model"
-            ), {"version": version_id, "model": model_id})
-            connection.execute(text(
-                "INSERT INTO simulation_setups "
-                "(id, project_id, model_id, model_version_id, current_revision, "
-                "create_request_id, create_request_sha256, created_at, updated_at) "
-                "VALUES (:id, :project, :model, :version, NULL, 'reupgrade', "
-                ":digest, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
-            ), {
-                "id": setup_id, "project": project_id, "model": model_id,
-                "version": version_id, "digest": "c" * 64,
-            })
-        with pytest.raises(IntegrityError, match="invalid setup revision parent"):
-            with engine.begin() as connection:
-                connection.execute(text(
-                    "INSERT INTO setup_revisions "
-                    "(id, setup_id, revision, parent_revision_id, schema_version, "
-                    "intent_json, intent_sha256, mutation_type, request_id, "
-                    "mutation_sha256, created_at) VALUES "
-                    "(:id, :setup, 2, NULL, 1, '{}', :digest, 'bad', 'bad', "
-                    ":digest, CURRENT_TIMESTAMP)"
-                ), {
-                    "id": "33333333-3333-3333-3333-333333333333",
-                    "setup": setup_id, "digest": "d" * 64,
-                })
-        revision_id = "44444444-4444-4444-4444-444444444444"
-        with engine.begin() as connection:
-            connection.execute(text(
-                "INSERT INTO setup_revisions "
-                "(id, setup_id, revision, parent_revision_id, schema_version, "
-                "intent_json, intent_sha256, mutation_type, request_id, "
-                "mutation_sha256, created_at) VALUES "
-                "(:id, :setup, 1, NULL, 1, '{}', :digest, 'create', 'valid', "
-                ":digest, CURRENT_TIMESTAMP)"
-            ), {"id": revision_id, "setup": setup_id, "digest": "e" * 64})
-            connection.execute(text(
-                "UPDATE simulation_setups SET current_revision=1 WHERE id=:id"
-            ), {"id": setup_id})
-        with pytest.raises(IntegrityError, match="immutable"):
-            with engine.begin() as connection:
-                connection.execute(text(
-                    "UPDATE setup_revisions SET mutation_type='changed' WHERE id=:id"
-                ), {"id": revision_id})
-    finally:
-        if engine is not None:
-            engine.dispose()
+    engine.dispose()
