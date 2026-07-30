@@ -65,10 +65,11 @@
             ],
             "target_description": "the bottom face"
           }
-        ]
+        ],
+        "material_proposal": null
       },
       "status": "PASS",
-      "validation_status": "valid"
+      "validation_status": "invalid"
     },
     {
       "actual_condition_types": [
@@ -129,10 +130,11 @@
             ],
             "target_description": "this face"
           }
-        ]
+        ],
+        "material_proposal": null
       },
       "status": "PASS",
-      "validation_status": "valid"
+      "validation_status": "invalid"
     },
     {
       "actual_condition_types": [
@@ -202,10 +204,11 @@
             ],
             "target_description": "both bolt holes"
           }
-        ]
+        ],
+        "material_proposal": null
       },
       "status": "PASS",
-      "validation_status": "valid"
+      "validation_status": "invalid"
     },
     {
       "actual_condition_types": [
@@ -259,10 +262,11 @@
             ],
             "target_description": "the inner cylindrical surface"
           }
-        ]
+        ],
+        "material_proposal": null
       },
       "status": "PASS_AFTER_CLARIFICATION",
-      "validation_status": "valid"
+      "validation_status": "invalid"
     },
     {
       "actual_condition_types": [
@@ -326,10 +330,11 @@
             ],
             "target_description": "the top flange"
           }
-        ]
+        ],
+        "material_proposal": null
       },
       "status": "PASS",
-      "validation_status": "valid"
+      "validation_status": "invalid"
     },
     {
       "actual_condition_types": [
@@ -388,10 +393,11 @@
             ],
             "target_description": "the entire model"
           }
-        ]
+        ],
+        "material_proposal": null
       },
       "status": "PASS",
-      "validation_status": "valid"
+      "validation_status": "invalid"
     },
     {
       "actual_condition_types": [
@@ -458,10 +464,11 @@
             ],
             "target_description": "the face marked in red"
           }
-        ]
+        ],
+        "material_proposal": null
       },
       "status": "PASS",
-      "validation_status": "valid"
+      "validation_status": "invalid"
     },
     {
       "actual_condition_types": [
@@ -529,10 +536,11 @@
             ],
             "target_description": "the two circled holes"
           }
-        ]
+        ],
+        "material_proposal": null
       },
       "status": "PASS",
-      "validation_status": "valid"
+      "validation_status": "invalid"
     },
     {
       "actual_condition_types": [
@@ -599,10 +607,11 @@
             ],
             "target_description": "the left side"
           }
-        ]
+        ],
+        "material_proposal": null
       },
       "status": "PASS_AFTER_CLARIFICATION",
-      "validation_status": "valid"
+      "validation_status": "invalid"
     },
     {
       "actual_condition_types": [
@@ -666,10 +675,11 @@
             ],
             "target_description": "the top face"
           }
-        ]
+        ],
+        "material_proposal": null
       },
       "status": "PASS",
-      "validation_status": "valid"
+      "validation_status": "invalid"
     },
     {
       "actual_condition_types": [
@@ -733,10 +743,11 @@
             ],
             "target_description": "the top face"
           }
-        ]
+        ],
+        "material_proposal": null
       },
       "status": "PASS",
-      "validation_status": "valid"
+      "validation_status": "invalid"
     },
     {
       "actual_condition_types": [
@@ -800,10 +811,11 @@
             ],
             "target_description": "the top face"
           }
-        ]
+        ],
+        "material_proposal": null
       },
       "status": "PASS",
-      "validation_status": "valid"
+      "validation_status": "invalid"
     },
     {
       "actual_condition_types": [
@@ -857,10 +869,11 @@
             ],
             "target_description": "the hole surface"
           }
-        ]
+        ],
+        "material_proposal": null
       },
       "status": "PASS",
-      "validation_status": "valid"
+      "validation_status": "invalid"
     },
     {
       "actual_condition_types": [
@@ -914,10 +927,11 @@
             ],
             "target_description": "the hole surface"
           }
-        ]
+        ],
+        "material_proposal": null
       },
       "status": "PASS",
-      "validation_status": "valid"
+      "validation_status": "invalid"
     },
     {
       "actual_condition_types": [
@@ -988,11 +1002,9 @@
       ],
       "explanation": "All frozen expected fields match.",
       "export_result": {
-        "adapter": "abaqus_py",
-        "bytes": 4144,
-        "export_eligible": true,
-        "filename": "bracket_abaqus.py",
-        "sha256": "b33921a554ce741872a845b3221a9c2d2be50b0e8b944a30e8f4505a023472f4",
+        "code": "missing_region_mapping",
+        "export_eligible": false,
+        "status": "blocked",
         "validation_status": "valid"
       },
       "failure_category": null,
@@ -1033,7 +1045,8 @@
             ],
             "target_description": "the top flange"
           }
-        ]
+        ],
+        "material_proposal": null
       },
       "status": "PASS",
       "validation_status": "valid"
@@ -1047,7 +1060,8 @@
   },
   "known_limitations": [
     "No solver was executed and the Abaqus artifact was not run in Abaqus.",
-    "Abaqus face ordering assumes OCC tag n maps to imported part.faces[n-1].",
+    "Public CAD export stays blocked without a verified CAD-to-solver mapping; source CAD face tags are retained as provenance only and are never used as solver face IDs.",
+    "The private Abaqus renderer is exercised only by focused tests that supply an explicit synthetic solver mapping and solver-face universe; no production CAD-to-solver mapping is claimed.",
     "Click evidence is supported; general screenshot or drawing recognition is not.",
     "No meshing, contact, nonlinear, thermal, dynamic, or result-validation workflow is included.",
     "The optional CalculiX live check requires an installed ccx executable."
@@ -1057,7 +1071,7 @@
   "model_name": "checked-in typed responses",
   "pass_after_clarification_count": 2,
   "pass_count": 13,
-  "revision": "84517d0277673268397d10f9b62debb234621c54+dirty",
+  "revision": "4e0ae349d26429c32aa44262e61ad1606580f0f2+dirty",
   "score": 15,
   "threshold_achieved": true,
   "total": 15

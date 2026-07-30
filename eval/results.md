@@ -1,4 +1,29 @@
-# Task 15 evaluation results
+# Task 15 evaluation results — SUPERSEDED HISTORICAL LIVE RUN
+
+> **SUPERSEDED — HISTORICAL EVIDENCE. THIS IS NOT THE CURRENT REPORT OF RECORD.**
+>
+> This file records the Task 15 LIVE run made on **2026-07-21** at code revision
+> `7bd789c60d9b9e8b812b6fb7c0f29212587072e0+dirty`. Its measurements are
+> preserved unaltered as historical evidence. The current reproducible report of
+> record is [`eval/results-replay.md`](results-replay.md), regenerated at
+> revision `4e0ae349d26429c32aa44262e61ad1606580f0f2`.
+>
+> Two statements below describe behavior this repository no longer has:
+>
+> 1. **The `bracket_combined_export` export column records a successful
+>    `bracket_abaqus.py` artifact.** That is historical. Under R4b.2 the case is
+>    blocked with `missing_region_mapping` and is not export-eligible; no current
+>    Abaqus or CalculiX artifact is claimed for it.
+> 2. **The known limitation "Abaqus face ordering assumes OCC tag n maps to
+>    imported `part.faces[n-1]`" is obsolete**, and is not a current
+>    architecture limitation. R4b.2 treats source CAD face tags as provenance
+>    only and never as solver identifiers; private rendering requires an
+>    explicit mapped solver-face universe; public CAD export stays blocked
+>    without a verified CAD-to-mesh mapping; real mapping is R6 work.
+>
+> No LIVE run was regenerated to add this notice, and REPLAY was not substituted
+> for LIVE. Regenerating this report requires a genuine LIVE run with provider
+> credentials.
 
 - Evaluation mode: **LIVE**
 - Code revision: `7bd789c60d9b9e8b812b6fb7c0f29212587072e0+dirty`
@@ -30,7 +55,16 @@
 | plate_hole_pressure_kpa | PASS | `[[7]]` | `[[7]]` | `["pressure"]` | `["pressure"]` | `[{"magnitude":2.0,"unit":"MPa"}]` | `[{"magnitude":2.0,"unit":"MPa"}]` | no/no | - | - |
 | bracket_combined_export | PASS | `[[11,12],[4]]` | `[[11,12],[4]]` | `["fixed_displacement","resultant_surface_force"]` | `["fixed_displacement","resultant_surface_force"]` | `[{"components":["x","y","z"],"unit":"none"},{"unit":"N","vector":[0.0,-5000.0,0.0]}]` | `[{"components":["x","y","z"],"unit":"none"},{"unit":"N","vector":[0.0,-5000.0,0.0]}]` | no/no | - | bracket_abaqus.py (b33921a554ce) |
 
+*Historical: the `bracket_combined_export` export cell above records the artifact
+produced at that 2026-07-21 revision. R4b.2 blocks that case with
+`missing_region_mapping` and claims no artifact — see `eval/results-replay.md`.*
+
 ## Known limitations
+
+*Historical: the limitation set recorded at revision
+`7bd789c60d9b9e8b812b6fb7c0f29212587072e0+dirty` on 2026-07-21. The OCC-tag
+ordinal item below is superseded and is not a current R4b.2 limitation — see the
+superseded notice at the top of this file and `eval/results-replay.md`.*
 
 - No solver was executed and the Abaqus artifact was not run in Abaqus.
 - Abaqus face ordering assumes OCC tag n maps to imported part.faces[n-1].

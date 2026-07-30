@@ -23,6 +23,59 @@
       "title": "AccelerationQuantity",
       "type": "object"
     },
+    "AmbiguousCadFaceTarget": {
+      "additionalProperties": false,
+      "description": "A blocked target whose local evidence has no unique stable identity.",
+      "properties": {
+        "artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "collision_group_ids": {
+          "items": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Collision Group Ids",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "model_version_id": {
+          "minLength": 1,
+          "title": "Model Version Id",
+          "type": "string"
+        },
+        "resolution": {
+          "const": "ambiguous",
+          "title": "Resolution",
+          "type": "string"
+        },
+        "source_face_tags": {
+          "description": "Source-local, non-authoritative numeric CAD-face evidence. It must not be used to rebind a region across ModelVersions. Valid positive unique tags represent unordered membership, so input order has no engineering meaning. This is the sole public numeric-evidence field for v3 CAD-face regions.",
+          "items": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "minItems": 1,
+          "title": "Source Face Tags",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "source_face_tags",
+        "resolution",
+        "model_version_id",
+        "artifact_sha256",
+        "collision_group_ids"
+      ],
+      "title": "AmbiguousCadFaceTarget",
+      "type": "object"
+    },
     "Analysis": {
       "additionalProperties": false,
       "description": "Analysis configuration.\n\n``dimensionality``, ``solver_target`` and ``coordinate_system`` were\nintroduced by schema version 2 and default to ``None`` — *explicitly\nmissing*, not silently approved.  A schema-version-1 payload migrated\nforward keeps them ``None`` and is therefore structurally incomplete until\nan engineer states them; a current-version submission must supply them.",
@@ -380,6 +433,84 @@
       "title": "GravityLoad",
       "type": "object"
     },
+    "InvalidLegacyCadFaceTarget": {
+      "additionalProperties": false,
+      "description": "Blocked historical v2 numeric evidence that violates v3 constraints.\n\nThis read-only migration representation deliberately permits non-positive\nand duplicate integers so immutable historical evidence remains readable\nand inspectable. It never confers stable geometry authority.",
+      "properties": {
+        "legacy_reason": {
+          "const": "invalid_numeric_tags",
+          "default": "invalid_numeric_tags",
+          "title": "Legacy Reason",
+          "type": "string"
+        },
+        "legacy_status": {
+          "enum": [
+            "proposed",
+            "confirmed",
+            "rejected"
+          ],
+          "title": "Legacy Status",
+          "type": "string"
+        },
+        "resolution": {
+          "const": "invalid_legacy_evidence",
+          "title": "Resolution",
+          "type": "string"
+        },
+        "source_face_tags": {
+          "description": "Original ordered historical v2 numeric evidence, preserved without sorting, deduplication, sign changes, removal, repair, stable-identity fabrication, or ModelVersion rebinding. This evidence is invalid, non-authoritative, unconfirmable, and unexportable.",
+          "items": {
+            "type": "integer"
+          },
+          "title": "Source Face Tags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "resolution",
+        "legacy_status",
+        "source_face_tags"
+      ],
+      "title": "InvalidLegacyCadFaceTarget",
+      "type": "object"
+    },
+    "LegacyCadFaceTarget": {
+      "additionalProperties": false,
+      "description": "Blocked valid v2 numeric evidence with no stable authority.",
+      "properties": {
+        "legacy_status": {
+          "enum": [
+            "proposed",
+            "confirmed",
+            "rejected"
+          ],
+          "title": "Legacy Status",
+          "type": "string"
+        },
+        "resolution": {
+          "const": "legacy_local_only",
+          "title": "Resolution",
+          "type": "string"
+        },
+        "source_face_tags": {
+          "description": "Source-local, non-authoritative numeric CAD-face evidence. It must not be used to rebind a region across ModelVersions. Valid positive unique tags represent unordered membership, so input order has no engineering meaning. This is the sole public numeric-evidence field for v3 CAD-face regions.",
+          "items": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "minItems": 1,
+          "title": "Source Face Tags",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "resolution",
+        "legacy_status"
+      ],
+      "title": "LegacyCadFaceTarget",
+      "type": "object"
+    },
     "LengthQuantity": {
       "additionalProperties": false,
       "properties": {
@@ -648,7 +779,73 @@
     },
     "Region": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "required": [
+              "entity_ids"
+            ]
+          },
+          "if": {
+            "properties": {
+              "entity_type": {
+                "const": "cad_face"
+              }
+            },
+            "required": [
+              "entity_type"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "entity_ids"
+              ]
+            }
+          }
+        }
+      ],
       "properties": {
+        "cad_face_target": {
+          "anyOf": [
+            {
+              "description": "A resolved stable geometry identity is the authoritative CAD-face reference only for the exact bound ModelVersion and persisted geometry-identity artifact. Source-local numeric evidence never authorizes rebinding across ModelVersions. Ambiguous, unresolved, invalid-legacy, and legacy-local-only targets cannot be confirmed or exported. Even a resolved stable identity cannot become solver entities until an explicit CAD-to-mesh mapping exists. R4b.2 performs no cross-version identity transfer.",
+              "discriminator": {
+                "mapping": {
+                  "ambiguous": "#/$defs/AmbiguousCadFaceTarget",
+                  "invalid_legacy_evidence": "#/$defs/InvalidLegacyCadFaceTarget",
+                  "legacy_local_only": "#/$defs/LegacyCadFaceTarget",
+                  "resolved": "#/$defs/ResolvedCadFaceTarget",
+                  "unresolved": "#/$defs/UnresolvedCadFaceTarget"
+                },
+                "propertyName": "resolution"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ResolvedCadFaceTarget"
+                },
+                {
+                  "$ref": "#/$defs/AmbiguousCadFaceTarget"
+                },
+                {
+                  "$ref": "#/$defs/UnresolvedCadFaceTarget"
+                },
+                {
+                  "$ref": "#/$defs/LegacyCadFaceTarget"
+                },
+                {
+                  "$ref": "#/$defs/InvalidLegacyCadFaceTarget"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A resolved stable geometry identity is the authoritative CAD-face reference only for the exact bound ModelVersion and persisted geometry-identity artifact. Source-local numeric evidence never authorizes rebinding across ModelVersions. Ambiguous, unresolved, invalid-legacy, and legacy-local-only targets cannot be confirmed or exported. Even a resolved stable identity cannot become solver entities until an explicit CAD-to-mesh mapping exists. R4b.2 performs no cross-version identity transfer.",
+          "title": "Cad Face Target"
+        },
         "confidence": {
           "maximum": 1.0,
           "minimum": 0.0,
@@ -661,16 +858,22 @@
               "items": {
                 "type": "integer"
               },
+              "minItems": 1,
               "type": "array"
             },
             {
               "items": {
                 "type": "string"
               },
+              "minItems": 1,
               "type": "array"
+            },
+            {
+              "type": "null"
             }
           ],
-          "minLength": 1,
+          "default": null,
+          "description": "Required source-local entity membership for non-CAD regions. This field is forbidden for CAD-face regions, whose sole public numeric evidence is cad_face_target.source_face_tags.",
           "title": "Entity Ids"
         },
         "entity_type": {
@@ -715,13 +918,68 @@
       "required": [
         "id",
         "entity_type",
-        "entity_ids",
         "selection_method",
         "confidence",
         "source_instruction",
         "status"
       ],
       "title": "Region",
+      "type": "object"
+    },
+    "ResolvedCadFaceTarget": {
+      "additionalProperties": false,
+      "description": "A uniquely resolved stable target scoped to one exact artifact.",
+      "properties": {
+        "artifact_sha256": {
+          "description": "SHA-256 of the exact persisted geometry-identity artifact that authorizes stable_identities for the bound ModelVersion.",
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "model_version_id": {
+          "description": "Exact ModelVersion to which the authoritative stable identity is scoped; it cannot be transferred to another ModelVersion.",
+          "minLength": 1,
+          "title": "Model Version Id",
+          "type": "string"
+        },
+        "resolution": {
+          "const": "resolved",
+          "title": "Resolution",
+          "type": "string"
+        },
+        "source_face_tags": {
+          "description": "Source-local, non-authoritative numeric CAD-face evidence. It must not be used to rebind a region across ModelVersions. Valid positive unique tags represent unordered membership, so input order has no engineering meaning. This is the sole public numeric-evidence field for v3 CAD-face regions.",
+          "items": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "minItems": 1,
+          "title": "Source Face Tags",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "stable_identities": {
+          "description": "Authoritative stable CAD-face identities for the exact model_version_id and persisted geometry-identity artifact identified by artifact_sha256. They do not transfer identity across ModelVersions and require a separate CAD-to-mesh mapping before solver entities can be produced.",
+          "items": {
+            "maxLength": 69,
+            "minLength": 69,
+            "pattern": "^gfi1:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Stable Identities",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "source_face_tags",
+        "resolution",
+        "model_version_id",
+        "artifact_sha256",
+        "stable_identities"
+      ],
+      "title": "ResolvedCadFaceTarget",
       "type": "object"
     },
     "ResultantSurfaceForceLoad": {
@@ -965,6 +1223,46 @@
         "force"
       ],
       "title": "Units",
+      "type": "object"
+    },
+    "UnresolvedCadFaceTarget": {
+      "additionalProperties": false,
+      "description": "A blocked target that has not resolved to stable geometry.",
+      "properties": {
+        "model_version_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Version Id"
+        },
+        "resolution": {
+          "const": "unresolved",
+          "title": "Resolution",
+          "type": "string"
+        },
+        "source_face_tags": {
+          "description": "Source-local, non-authoritative numeric CAD-face evidence. It must not be used to rebind a region across ModelVersions. Valid positive unique tags represent unordered membership, so input order has no engineering meaning. This is the sole public numeric-evidence field for v3 CAD-face regions.",
+          "items": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "minItems": 1,
+          "title": "Source Face Tags",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "resolution"
+      ],
+      "title": "UnresolvedCadFaceTarget",
       "type": "object"
     }
   },

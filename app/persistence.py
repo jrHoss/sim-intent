@@ -27,10 +27,11 @@ from sqlalchemy import (
     func,
     inspect as sa_inspect,
     select,
+    update,
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
@@ -41,7 +42,16 @@ from sqlalchemy.orm import (
 )
 
 from app.blob_store import BlobStore, SourceStorageLimitExceededError
-from ir.schema import SimulationIntent
+from ir.schema import (
+    AmbiguousCadFaceTarget,
+    CAD_ENTITY_IDS_FORBIDDEN_CODE,
+    EngineeringConsistencyError,
+    ResolvedCadFaceTarget,
+    SimulationIntent,
+    UnresolvedCadFaceTarget,
+    enforce_cad_region_entity_ids_invariant,
+    region_entity_membership,
+)
 from ir.canonical import canonical_intent_document
 from ir.versioning import load_simulation_intent
 from geom.identity import (
@@ -84,6 +94,14 @@ class SetupSourceSupersededError(PersistenceConflictError):
 
 class GeometryIdentityArtifactError(RuntimeError):
     """Stable safe failure while writing or reading a durable identity artifact."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+class CadRegionReferenceError(RuntimeError):
+    """Sanitized durable CAD-region validation failure."""
 
     def __init__(self, code: str):
         self.code = code
@@ -224,6 +242,7 @@ def _immutable_geometry_identity_artifact(*_args) -> None:
 
 
 def canonical_intent(intent: SimulationIntent) -> tuple[str, str]:
+    enforce_cad_region_entity_ids_invariant(intent)
     canonical = json.dumps(
         canonical_intent_document(intent),
         ensure_ascii=False,
@@ -701,6 +720,47 @@ class Persistence:
         self, *, project_id: str, model_id: str, model_version_id: str,
         intent: SimulationIntent, request_id: str,
     ) -> tuple[SimulationSetup, SetupRevision]:
+        self._enforce_cad_entity_ids(intent)
+        try:
+            return self._create_setup_once(
+                project_id=project_id,
+                model_id=model_id,
+                model_version_id=model_version_id,
+                intent=intent,
+                request_id=request_id,
+            )
+        except IntegrityError as exc:
+            canonical, intent_digest = canonical_intent(intent)
+            del canonical
+            expected_digest = canonical_fingerprint({
+                "model_id": model_id,
+                "model_version_id": model_version_id,
+                "intent_sha256": intent_digest,
+            })
+            with self.sessions() as session:
+                replay = session.scalar(select(SimulationSetup).where(
+                    SimulationSetup.project_id == project_id,
+                    SimulationSetup.create_request_id == request_id,
+                ))
+                if replay is not None:
+                    if replay.create_request_sha256 != expected_digest:
+                        raise SetupRequestConflictError(
+                            "request ID reused with different setup"
+                        ) from exc
+                    revision = session.scalar(select(SetupRevision).where(
+                        SetupRevision.setup_id == replay.id,
+                        SetupRevision.revision == 1,
+                    ))
+                    if revision is not None:
+                        return replay, revision
+            raise PersistenceDatabaseError("setup database write failed") from exc
+        except SQLAlchemyError as exc:
+            raise PersistenceDatabaseError("setup database write failed") from exc
+
+    def _create_setup_once(
+        self, *, project_id: str, model_id: str, model_version_id: str,
+        intent: SimulationIntent, request_id: str,
+    ) -> tuple[SimulationSetup, SetupRevision]:
         canonical, intent_digest = canonical_intent(intent)
         create_digest = canonical_fingerprint({
             "model_id": model_id,
@@ -735,6 +795,9 @@ class Persistence:
                 raise PersistenceConflictError("invalid setup lineage")
             if model.current_version_id != version.id or version.is_superseded:
                 raise SetupSourceSupersededError("setup source is superseded")
+            self._validate_cad_region_references(
+                session=session, version=version, intent=intent
+            )
             now = datetime.now(timezone.utc)
             setup = SimulationSetup(
                 project_id=project_id, model_id=model_id,
@@ -810,6 +873,52 @@ class Persistence:
         mutation_type: str, intent: SimulationIntent,
         mutation_payload: dict | None = None,
     ) -> SetupRevision:
+        self._enforce_cad_entity_ids(intent)
+        canonical, digest = canonical_intent(intent)
+        del canonical
+        relevant_payload = mutation_payload or {"intent_sha256": digest}
+        expected_digest = canonical_fingerprint({
+            "expected_revision": expected_revision,
+            "mutation_type": mutation_type,
+            "payload": relevant_payload,
+        })
+        try:
+            return self._mutate_setup_once(
+                setup_id=setup_id,
+                expected_revision=expected_revision,
+                request_id=request_id,
+                mutation_type=mutation_type,
+                intent=intent,
+                mutation_payload=mutation_payload,
+            )
+        except IntegrityError as exc:
+            with self.sessions() as session:
+                replay = session.scalar(select(SetupRevision).where(
+                    SetupRevision.setup_id == setup_id,
+                    SetupRevision.request_id == request_id,
+                ))
+                if replay is not None:
+                    if replay.mutation_sha256 == expected_digest:
+                        return replay
+                    raise SetupRequestConflictError(
+                        "request ID reused with different mutation"
+                    ) from exc
+                setup = session.get(SimulationSetup, setup_id)
+                if setup is None:
+                    raise PersistenceNotFoundError("setup") from exc
+                if setup.current_revision != expected_revision:
+                    raise SetupRevisionConflictError(
+                        "stale setup revision"
+                    ) from exc
+            raise PersistenceDatabaseError("setup database write failed") from exc
+        except SQLAlchemyError as exc:
+            raise PersistenceDatabaseError("setup database write failed") from exc
+
+    def _mutate_setup_once(
+        self, *, setup_id: str, expected_revision: int, request_id: str,
+        mutation_type: str, intent: SimulationIntent,
+        mutation_payload: dict | None = None,
+    ) -> SetupRevision:
         canonical, digest = canonical_intent(intent)
         relevant_payload = mutation_payload or {"intent_sha256": digest}
         mutation_digest = canonical_fingerprint({
@@ -833,6 +942,12 @@ class Persistence:
                 raise SetupSourceSupersededError("setup source is superseded")
             if setup.current_revision != expected_revision:
                 raise SetupRevisionConflictError("stale setup revision")
+            version = session.get(ModelVersion, setup.model_version_id)
+            if version is None or version.model_id != setup.model_id:
+                raise PersistenceConflictError("invalid setup lineage")
+            self._validate_cad_region_references(
+                session=session, version=version, intent=intent
+            )
             parent = session.scalar(select(SetupRevision).where(
                 SetupRevision.setup_id == setup_id,
                 SetupRevision.revision == expected_revision,
@@ -842,9 +957,275 @@ class Persistence:
                 canonical=canonical, digest=digest, mutation_digest=mutation_digest,
             )
             session.add(revision)
-            setup.current_revision = revision.revision
-            setup.updated_at = revision.created_at
+            session.flush()
+            advanced = session.execute(
+                update(SimulationSetup)
+                .where(
+                    SimulationSetup.id == setup_id,
+                    SimulationSetup.current_revision == expected_revision,
+                )
+                .values(
+                    current_revision=revision.revision,
+                    updated_at=revision.created_at,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if advanced.rowcount != 1:
+                raise SetupRevisionConflictError("stale setup revision")
             return revision
+
+    def validate_setup_region_references(
+        self, setup_id: str, intent: SimulationIntent, *,
+        allow_legacy: bool = False,
+    ) -> None:
+        """Revalidate against the exact historical artifact without writes."""
+
+        with self.sessions() as session:
+            setup = session.get(SimulationSetup, setup_id)
+            if setup is None:
+                raise PersistenceNotFoundError("setup")
+            version = session.get(ModelVersion, setup.model_version_id)
+            if version is None or version.model_id != setup.model_id:
+                raise PersistenceConflictError("invalid setup lineage")
+            self._validate_cad_region_references(
+                session=session, version=version, intent=intent,
+                allow_legacy=allow_legacy,
+            )
+
+    def _validate_cad_region_references(
+        self, *, session: Session, version: ModelVersion,
+        intent: SimulationIntent, allow_legacy: bool = False,
+    ) -> None:
+        self._enforce_cad_entity_ids(intent)
+        cad_regions = [
+            region for region in intent.regions if region.entity_type == "cad_face"
+        ]
+        if not cad_regions:
+            return
+        if version.model_kind != "step":
+            raise CadRegionReferenceError("cad_region_not_applicable")
+        record = session.get(GeometryIdentityArtifactRecord, version.id)
+        if record is None:
+            raise CadRegionReferenceError("cad_region_artifact_missing")
+        if (
+            record.artifact_version != GEOMETRY_IDENTITY_SCHEMA_VERSION
+            or record.hash_domain != GEOMETRY_IDENTITY_HASH_DOMAIN
+        ):
+            raise CadRegionReferenceError(
+                "cad_region_artifact_version_unsupported"
+            )
+        try:
+            raw = bytes(record.canonical_bytes)
+        except (TypeError, ValueError) as exc:
+            raise CadRegionReferenceError(
+                "cad_region_artifact_integrity_failed"
+            ) from exc
+        digest = hashlib.sha256(raw).hexdigest()
+        if not (
+            isinstance(record.integrity_sha256, str)
+            and hmac.compare_digest(digest, record.integrity_sha256)
+        ):
+            raise CadRegionReferenceError(
+                "cad_region_artifact_integrity_failed"
+            )
+        try:
+            artifact = self._deserialize_geometry_identity(raw)
+        except GeometryIdentityArtifactError as exc:
+            raise CadRegionReferenceError(
+                "cad_region_artifact_invalid"
+            ) from exc
+        if (
+            artifact.model_version_id != version.id
+            or artifact.source_sha256 != version.source_sha256
+            or record.model_version_id != version.id
+            or record.model_id != version.model_id
+            or record.source_sha256 != version.source_sha256
+        ):
+            raise CadRegionReferenceError("cad_region_artifact_binding_mismatch")
+        faces_by_tag = {
+            face.source_ref: face
+            for face in artifact.faces
+            if isinstance(face.source_ref, int)
+            and not isinstance(face.source_ref, bool)
+        }
+        stable_ids = {
+            face.stable_identity
+            for face in artifact.faces
+            if face.stable_identity is not None
+        }
+        collision_ids = {
+            str(group["collision_group_id"])
+            for group in artifact.collision_groups
+        }
+        for region in cad_regions:
+            target = region.cad_face_target
+            if target is None:
+                raise CadRegionReferenceError("cad_region_stable_target_required")
+            evidence = list(target.source_face_tags)
+            if (
+                getattr(target, "model_version_id", None) is not None
+                and getattr(target, "model_version_id") != version.id
+            ):
+                raise CadRegionReferenceError("cad_region_model_version_mismatch")
+            if target.resolution in {
+                "legacy_local_only",
+                "invalid_legacy_evidence",
+            }:
+                if not allow_legacy:
+                    raise CadRegionReferenceError(
+                        "cad_region_legacy_client_forbidden"
+                    )
+                if region.status == "confirmed":
+                    raise CadRegionReferenceError("cad_region_unresolved")
+                continue
+            if target.resolution == "unresolved":
+                if region.status == "confirmed":
+                    raise CadRegionReferenceError("cad_region_unresolved")
+                continue
+            if not hmac.compare_digest(
+                target.artifact_sha256 or "", record.integrity_sha256
+            ):
+                raise CadRegionReferenceError("cad_region_artifact_mismatch")
+            evidence_faces = []
+            for tag in evidence:
+                face = faces_by_tag.get(tag)
+                if face is None:
+                    raise CadRegionReferenceError("cad_region_evidence_unknown")
+                evidence_faces.append(face)
+            if target.resolution == "resolved":
+                if not set(target.stable_identities).issubset(stable_ids):
+                    raise CadRegionReferenceError("cad_region_identity_unknown")
+                evidence_ids = {
+                    face.stable_identity
+                    for face in evidence_faces
+                    if face.stable_identity is not None
+                }
+                if (
+                    any(face.ambiguous for face in evidence_faces)
+                    or evidence_ids != set(target.stable_identities)
+                ):
+                    raise CadRegionReferenceError(
+                        "cad_region_identity_evidence_inconsistent"
+                    )
+            else:
+                if not set(target.collision_group_ids).issubset(collision_ids):
+                    raise CadRegionReferenceError(
+                        "cad_region_collision_group_unknown"
+                    )
+                evidence_groups = {
+                    face.collision_group_id
+                    for face in evidence_faces
+                    if face.collision_group_id is not None
+                }
+                if (
+                    any(not face.ambiguous for face in evidence_faces)
+                    or evidence_groups != set(target.collision_group_ids)
+                ):
+                    raise CadRegionReferenceError(
+                        "cad_region_collision_evidence_inconsistent"
+                    )
+
+    @staticmethod
+    def _enforce_cad_entity_ids(intent: SimulationIntent) -> None:
+        try:
+            enforce_cad_region_entity_ids_invariant(intent)
+        except EngineeringConsistencyError as exc:
+            raise CadRegionReferenceError(
+                CAD_ENTITY_IDS_FORBIDDEN_CODE
+            ) from exc
+
+    def resolve_cad_regions_for_version(
+        self, intent: SimulationIntent, model_version_id: str
+    ) -> SimulationIntent:
+        """Resolve local CAD evidence against one exact persisted artifact.
+
+        This is a proposal-time resolver, not a migration or rebinding path.
+        It reads the artifact owned by the caller-supplied historical
+        ModelVersion and never consults a model's latest version.
+        """
+
+        self._enforce_cad_entity_ids(intent)
+        record, _raw, payload = self.read_geometry_identity(model_version_id)
+        by_tag = {
+            face["source_ref"]: face
+            for face in payload["faces"]
+            if isinstance(face["source_ref"], int)
+            and not isinstance(face["source_ref"], bool)
+        }
+        regions = []
+        for region in intent.regions:
+            if region.entity_type != "cad_face":
+                regions.append(region.model_copy(deep=True))
+                continue
+            existing_target = region.cad_face_target
+            if existing_target is None:
+                raise CadRegionReferenceError(
+                    "cad_region_stable_target_required"
+                )
+            if existing_target.resolution != "unresolved":
+                # Never overwrite a pre-existing stable, ambiguous, or legacy
+                # claim. Persistence validation remains authoritative for an
+                # already-resolved exact target.
+                regions.append(region.model_copy(deep=True))
+                continue
+            if (
+                existing_target.model_version_id is not None
+                and existing_target.model_version_id != model_version_id
+            ):
+                raise CadRegionReferenceError(
+                    "cad_region_model_version_mismatch"
+                )
+            tags = [
+                value
+                for value in region_entity_membership(region)
+                if isinstance(value, int) and not isinstance(value, bool)
+            ]
+            faces = [by_tag.get(tag) for tag in tags]
+            stable = {
+                face["stable_identity"]
+                for face in faces
+                if face is not None and face["stable_identity"] is not None
+            }
+            collisions = {
+                face["collision_group_id"]
+                for face in faces
+                if face is not None and face["collision_group_id"] is not None
+            }
+            if tags and len(faces) == len(tags) and all(
+                face is not None and not face["ambiguous"] for face in faces
+            ):
+                target = ResolvedCadFaceTarget(
+                    model_version_id=model_version_id,
+                    artifact_sha256=record.integrity_sha256,
+                    resolution="resolved",
+                    stable_identities=sorted(stable),
+                    source_face_tags=tags,
+                )
+            elif tags and len(faces) == len(tags) and all(
+                face is not None and face["ambiguous"] for face in faces
+            ):
+                target = AmbiguousCadFaceTarget(
+                    model_version_id=model_version_id,
+                    artifact_sha256=record.integrity_sha256,
+                    resolution="ambiguous",
+                    collision_group_ids=sorted(collisions),
+                    source_face_tags=tags,
+                )
+            else:
+                target = UnresolvedCadFaceTarget(
+                    model_version_id=model_version_id,
+                    resolution="unresolved",
+                    source_face_tags=tags,
+                )
+            regions.append(
+                region.model_copy(
+                    update={"cad_face_target": target, "entity_ids": None},
+                    deep=True,
+                )
+            )
+        resolved = intent.model_copy(update={"regions": regions}, deep=True)
+        enforce_cad_region_entity_ids_invariant(resolved)
+        return resolved
 
     def replay_setup_mutation(
         self, *, setup_id: str, expected_revision: int, request_id: str,

@@ -23,13 +23,15 @@ from app.server import create_app
 from eval.schema import EvaluationCase, ExpectedCondition, load_cases, manifest_hash
 from eval.versioning import verify_replay_directory
 from export.abaqus_py import export_abaqus_py
-from export.common import CadModelMetadata
+from export.common import CadModelMetadata, MissingRegionMappingError
 from geom.cylinders import analyze_cylinders
 from geom.inventory import FaceInventory, get_inventory
 from ground.engine import ClickEvidence
 from ir.schema import (
     SimulationIntent,
     StrictModel,
+    canonical_cad_numeric_membership,
+    region_entity_membership,
 )
 from ir.validate import validate_intent
 from ir.versioning import load_simulation_intent
@@ -210,10 +212,14 @@ def _actual_conditions(intent: SimulationIntent, grounding) -> tuple[list[list[i
             entity_sets.append([])
         elif result.bc is not None:
             obj = bcs[result.region.id]
-            entity_sets.append(sorted(int(value) for value in result.region.entity_ids))
+            entity_sets.append(
+                _canonical_region_membership(result.region)
+            )
         else:
             obj = loads_by_ref[result.region.id]
-            entity_sets.append(sorted(int(value) for value in result.region.entity_ids))
+            entity_sets.append(
+                _canonical_region_membership(result.region)
+            )
         dumped = obj.model_dump(mode="json")
         types.append(obj.type)
         objects.append(dumped)
@@ -226,6 +232,47 @@ def _actual_conditions(intent: SimulationIntent, grounding) -> tuple[list[list[i
             unit = "mm/s^2" if obj.type == "gravity" else ("MPa" if obj.type == "surface_traction" else "N")
             values.append({"vector": dumped["vector"], "unit": unit})
     return entity_sets, types, values, objects
+
+
+def _canonical_region_membership(region) -> list[int]:
+    values = region_entity_membership(region)
+    if region.entity_type == "cad_face":
+        return list(canonical_cad_numeric_membership(values))
+    return sorted(int(value) for value in values)
+
+
+def _canonical_expected_membership(condition: ExpectedCondition) -> list[int]:
+    if condition.region_entity_type == "cad_face":
+        return list(canonical_cad_numeric_membership(condition.entity_ids))
+    return sorted(condition.entity_ids)
+
+
+def _current_expected_ir_subset(case: EvaluationCase) -> dict[str, Any]:
+    """Project frozen numeric CAD expectations onto the current v3 contract."""
+
+    expected = json.loads(json.dumps(case.expected_structured_ir_subset))
+    regions = expected.get("regions")
+    if not isinstance(regions, list):
+        return expected
+    conditions = {
+        condition.intent_index: condition for condition in case.expected_conditions
+    }
+    for index, region in enumerate(regions):
+        condition = conditions.get(index)
+        if (
+            not isinstance(region, dict)
+            or condition is None
+            or condition.region_entity_type != "cad_face"
+        ):
+            continue
+        legacy_ids = region.pop("entity_ids", None)
+        if isinstance(legacy_ids, list):
+            region["cad_face_target"] = {
+                "source_face_tags": list(
+                    canonical_cad_numeric_membership(legacy_ids)
+                )
+            }
+    return expected
 
 
 def _clicks(case: EvaluationCase, inventory: FaceInventory) -> dict[int, ClickEvidence]:
@@ -241,7 +288,10 @@ def _classify_mismatch(
     actual_types: list[str],
     actual_values: list[dict[str, Any]],
 ) -> tuple[FailureCategory | None, str]:
-    expected_ids = [sorted(item.entity_ids) for item in case.expected_conditions]
+    expected_ids = [
+        _canonical_expected_membership(item)
+        for item in case.expected_conditions
+    ]
     expected_types = [item.condition_type for item in case.expected_conditions]
     expected_values = [_condition_value(item) for item in case.expected_conditions]
     if actual_ids != expected_ids:
@@ -393,6 +443,10 @@ def persist_evaluation_setup_to_incomplete(
         201,
         "model persistence",
     )
+    resolved_intent = client.app.state.persistence.resolve_cad_regions_for_version(
+        intent,
+        uploaded["model_version"]["id"],
+    )
     created = _require_response(
         client.post(
             f"/api/v1/projects/{project['id']}/setups",
@@ -400,7 +454,7 @@ def persist_evaluation_setup_to_incomplete(
                 "model_id": uploaded["model_id"],
                 "model_version_id": uploaded["model_version"]["id"],
                 "request_id": f"evaluation-{case.case_id}-create-v1",
-                "intent": intent.model_dump(mode="json"),
+                "intent": resolved_intent.model_dump(mode="json"),
             },
         ),
         201,
@@ -568,10 +622,19 @@ def _confirm_validate_export(
         source_path=fixture,
         source_name=case.model_fixture,
         source_sha256=inventory.file_sha256,
-        face_ids=tuple(sorted(face.tag for face in inventory.faces)),
+        source_cad_face_tags=tuple(sorted(face.tag for face in inventory.faces)),
     )
-    result = export_abaqus_py(confirmed, metadata)
+    try:
+        result = export_abaqus_py(confirmed, metadata)
+    except MissingRegionMappingError:
+        return report.validation_status, {
+            "status": "blocked",
+            "code": "missing_region_mapping",
+            "validation_status": report.validation_status,
+            "export_eligible": False,
+        }, evidence
     return report.validation_status, {
+        "status": "generated",
         "adapter": result.adapter_name,
         "filename": result.suggested_filename,
         "sha256": result.checksum_sha256,
@@ -589,7 +652,10 @@ def evaluate_case(
     live_interpreter: Interpreter | None = None,
     write_fallback: bool = False,
 ) -> CaseResult:
-    expected_ids = [sorted(item.entity_ids) for item in case.expected_conditions]
+    expected_ids = [
+        _canonical_expected_membership(item)
+        for item in case.expected_conditions
+    ]
     expected_types = [item.condition_type for item in case.expected_conditions]
     expected_values = [_condition_value(item) for item in case.expected_conditions]
     fixture = paths.fixture_dir / case.model_fixture
@@ -675,14 +741,17 @@ def evaluate_case(
         # The immutable corpus predates this explicit no-injection assertion
         # and contains the old demo steel in some historical subsets.  Keep
         # those bytes untouched; the assertion above replaces that expectation.
-        expected_top_level = dict(case.expected_structured_ir_subset)
+        expected_top_level = _current_expected_ir_subset(case)
         expected_top_level.pop("materials", None)
         if category is None and not _subset(
             expected_top_level, intent.model_dump(mode="json")
         ):
             category, explanation = "grounding", "The expected top-level IR subset does not match."
         for region in intent.regions:
-            if region.source_instruction != case.instruction or not region.entity_ids:
+            if (
+                region.source_instruction != case.instruction
+                or not region_entity_membership(region)
+            ):
                 category, explanation = "grounding", "Required region provenance is incomplete."
                 break
 
@@ -788,7 +857,8 @@ def run_evaluation(
         cases=results,
         known_limitations=[
             "No solver was executed and the Abaqus artifact was not run in Abaqus.",
-            "Abaqus face ordering assumes OCC tag n maps to imported part.faces[n-1].",
+            "Public CAD export stays blocked without a verified CAD-to-solver mapping; source CAD face tags are retained as provenance only and are never used as solver face IDs.",
+            "The private Abaqus renderer is exercised only by focused tests that supply an explicit synthetic solver mapping and solver-face universe; no production CAD-to-solver mapping is claimed.",
             "Click evidence is supported; general screenshot or drawing recognition is not.",
             "No meshing, contact, nonlinear, thermal, dynamic, or result-validation workflow is included.",
             "The optional CalculiX live check requires an installed ccx executable.",
@@ -811,7 +881,15 @@ def render_markdown(report: EvaluationReport) -> str:
     ]
     for result in report.cases:
         compact = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"))
-        export = "-" if result.export_result is None else f"{result.export_result['filename']} ({result.export_result['sha256'][:12]})"
+        if result.export_result is None:
+            export = "-"
+        elif result.export_result.get("status") == "blocked":
+            export = f"blocked ({result.export_result['code']})"
+        else:
+            export = (
+                f"{result.export_result['filename']} "
+                f"({result.export_result['sha256'][:12]})"
+            )
         failure = result.failure_category or ("HARNESS_ERROR" if result.harness_error else "-")
         lines.append(
             f"| {result.case_id} | {result.status} | `{compact(result.expected_entity_ids)}` | `{compact(result.actual_entity_ids)}` | "

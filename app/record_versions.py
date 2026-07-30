@@ -21,6 +21,7 @@ record loader, and the check stays a strict filename guard.
 
 from __future__ import annotations
 
+import copy
 from typing import Any, Final, Mapping
 
 from ir.schema import SimulationIntent
@@ -35,6 +36,7 @@ from ir.versioning import (
     decode_json_object,
     dump_simulation_intent,
     load_simulation_intent,
+    migrate_legacy_cad_region,
 )
 
 
@@ -96,7 +98,22 @@ def load_fallback_record(
     intent = load_simulation_intent(
         envelope[NESTED_INTENT_KEY], source=nested_source
     )
-    return envelope, intent
+    migrated_envelope = copy.deepcopy(envelope)
+    migrated_envelope[NESTED_INTENT_KEY] = dump_simulation_intent(intent)
+    for grounding_key in ("initial_grounding", "final_grounding"):
+        grounding = migrated_envelope.get(grounding_key)
+        if not isinstance(grounding, dict):
+            continue
+        results = grounding.get("results")
+        if not isinstance(results, list):
+            continue
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            region = result.get("region")
+            if isinstance(region, Mapping):
+                result["region"] = migrate_legacy_cad_region(region)
+    return migrated_envelope, intent
 
 
 def build_fallback_envelope(

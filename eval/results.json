@@ -1070,6 +1070,27 @@
     "bracket.step": "d81d158aa3b0a5464407496bd1782eba375f853e870fba6edd8cf485825f3c90",
     "plate_hole.step": "446cf12fed1139d2bfae5e483c1c34905b1444a8d05154a6bd972f1eaa214712"
   },
+  "historical_status": {
+    "current_report_of_record": "eval/results-replay.md",
+    "obsolete_claims": [
+      {
+        "claim": "known_limitations[1]: Abaqus face ordering assumes OCC tag n maps to imported part.faces[n-1].",
+        "current_behavior": "R4b.2 treats source CAD face tags as provenance only and never as solver identifiers. Private rendering requires an explicit mapped solver-face universe, public CAD export stays blocked without a verified CAD-to-mesh mapping, and real mapping is R6 work.",
+        "kind": "obsolete_ordinal_mapping_limitation"
+      },
+      {
+        "claim": "cases[bracket_combined_export].export_result: a successful bracket_abaqus.py Abaqus artifact (4144 bytes, sha256 b33921a554ce..., validation_status valid, export_eligible true).",
+        "current_behavior": "R4b.2 blocks bracket_combined_export with code missing_region_mapping and export_eligible false. No current Abaqus or CalculiX artifact is claimed for this case; see eval/results-replay.json.",
+        "kind": "obsolete_successful_export_claim"
+      }
+    ],
+    "recorded_date": "2026-07-21",
+    "recorded_revision": "7bd789c60d9b9e8b812b6fb7c0f29212587072e0+dirty",
+    "regeneration": "No LIVE run was regenerated to add this notice. The measurements in this file are the original 2026-07-21 LIVE measurements and were not altered; REPLAY is never substituted for LIVE.",
+    "superseded": true,
+    "superseded_by_revision": "4e0ae349d26429c32aa44262e61ad1606580f0f2",
+    "summary": "SUPERSEDED HISTORICAL LIVE EVIDENCE. This file is not the current report of record. It records the Task 15 LIVE run at the revision below and is preserved unaltered."
+  },
   "known_limitations": [
     "No solver was executed and the Abaqus artifact was not run in Abaqus.",
     "Abaqus face ordering assumes OCC tag n maps to imported part.faces[n-1].",

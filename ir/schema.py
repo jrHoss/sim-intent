@@ -2,8 +2,8 @@
 
 Pydantic v2 models per EXECUTION_PLAN Task 1 and CLAUDE.md standing rules:
 
-- Every Region carries entity_ids, selection_method, confidence,
-  source_instruction (verbatim user text) and status. None are optional.
+- Every non-CAD Region carries entity_ids. CAD-face regions carry their sole
+  public numeric evidence in cad_face_target.source_face_tags.
 - Every SimulationIntent carries a units block, assumptions[] and
   validation_status.
 - Internal units are fixed to mm-N-MPa; unit conversion happens upstream
@@ -17,10 +17,19 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Annotated, ClassVar, Final, Literal, Sequence, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from ir.schema_version import SIMULATION_INTENT_SCHEMA_VERSION
 
@@ -330,16 +339,380 @@ SelectionMethod = Literal[
     "semantic_geometry_query", "multimodal_reference", "user_click", "user_confirmed"
 ]
 RegionStatus = Literal["proposed", "confirmed", "rejected"]
+CadFaceResolution = Literal[
+    "resolved",
+    "ambiguous",
+    "unresolved",
+    "legacy_local_only",
+    "invalid_legacy_evidence",
+]
+StableFaceIdentity = Annotated[
+    str,
+    Field(
+        min_length=69,
+        max_length=69,
+        pattern=r"^gfi1:[0-9a-f]{64}$",
+    ),
+]
+CollisionGroupIdentity = Annotated[
+    str,
+    Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    ),
+]
+SourceFaceTag = Annotated[int, Field(ge=1)]
+
+CAD_TARGET_AUTHORITY_DESCRIPTION: Final[str] = (
+    "A resolved stable geometry identity is the authoritative CAD-face "
+    "reference only for the exact bound ModelVersion and persisted "
+    "geometry-identity artifact. Source-local numeric evidence never "
+    "authorizes rebinding across ModelVersions. Ambiguous, unresolved, "
+    "invalid-legacy, and legacy-local-only targets cannot be confirmed or "
+    "exported. Even a resolved stable identity cannot become solver entities "
+    "until an explicit CAD-to-mesh mapping exists. R4b.2 performs no "
+    "cross-version identity transfer."
+)
+NUMERIC_EVIDENCE_DESCRIPTION: Final[str] = (
+    "Source-local, non-authoritative numeric CAD-face evidence. It must not "
+    "be used to rebind a region across ModelVersions. Valid positive unique "
+    "tags represent unordered membership, so input order has no engineering "
+    "meaning. This is the sole public numeric-evidence field for v3 CAD-face "
+    "regions."
+)
+STABLE_IDENTITY_DESCRIPTION: Final[str] = (
+    "Authoritative stable CAD-face identities for the exact model_version_id "
+    "and persisted geometry-identity artifact identified by artifact_sha256. "
+    "They do not transfer identity across ModelVersions and require a separate "
+    "CAD-to-mesh mapping before solver entities can be produced."
+)
+
+
+def canonical_cad_numeric_membership(
+    values: Sequence[object],
+) -> tuple[int, ...]:
+    """Return the authoritative canonical form for valid v3 CAD evidence."""
+
+    if (
+        not values
+        or any(
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value <= 0
+            for value in values
+        )
+        or len(values) != len(set(values))
+    ):
+        raise EngineeringConsistencyError(
+            "cad_region_numeric_evidence_invalid",
+            "CAD numeric evidence must contain positive unique integers",
+        )
+    return tuple(sorted(values))
+
+
+def same_cad_numeric_membership(
+    left: Sequence[object], right: Sequence[object]
+) -> bool:
+    """Compare valid v3 CAD evidence as unordered membership."""
+
+    return (
+        canonical_cad_numeric_membership(left)
+        == canonical_cad_numeric_membership(right)
+    )
+
+
+def validate_cad_numeric_evidence(
+    left: Sequence[object] | None, right: Sequence[object] | None
+) -> None:
+    """Compatibility wrapper for callers comparing valid CAD membership."""
+
+    if left is None or right is None:
+        return
+    if not same_cad_numeric_membership(left, right):
+        raise EngineeringConsistencyError(
+            "cad_region_evidence_mismatch",
+            "CAD numeric evidence has different membership",
+        )
+
+
+class _CadFaceTargetBase(StrictModel):
+    """Shared non-authoritative local evidence for one target state."""
+
+    source_face_tags: list[SourceFaceTag] = Field(
+        default_factory=list,
+        min_length=1,
+        description=NUMERIC_EVIDENCE_DESCRIPTION,
+        json_schema_extra={"uniqueItems": True},
+    )
+
+    @field_validator("source_face_tags", mode="before")
+    @classmethod
+    def _strict_integer_source_evidence(cls, value: object) -> object:
+        if not isinstance(value, list) or any(
+            not isinstance(tag, int) or isinstance(tag, bool)
+            for tag in value
+        ):
+            raise EngineeringConsistencyError(
+                "cad_region_numeric_evidence_invalid",
+                "source_face_tags must contain only integer values",
+            )
+        return list(canonical_cad_numeric_membership(value))
+
+
+class ResolvedCadFaceTarget(_CadFaceTargetBase):
+    """A uniquely resolved stable target scoped to one exact artifact."""
+
+    resolution: Literal["resolved"]
+    model_version_id: str = Field(
+        min_length=1,
+        description=(
+            "Exact ModelVersion to which the authoritative stable identity is "
+            "scoped; it cannot be transferred to another ModelVersion."
+        ),
+    )
+    artifact_sha256: str = Field(
+        pattern=r"^[0-9a-f]{64}$",
+        description=(
+            "SHA-256 of the exact persisted geometry-identity artifact that "
+            "authorizes stable_identities for the bound ModelVersion."
+        ),
+    )
+    stable_identities: list[StableFaceIdentity] = Field(
+        min_length=1,
+        description=STABLE_IDENTITY_DESCRIPTION,
+        json_schema_extra={"uniqueItems": True},
+    )
+    source_face_tags: list[SourceFaceTag] = Field(
+        min_length=1,
+        description=NUMERIC_EVIDENCE_DESCRIPTION,
+        json_schema_extra={"uniqueItems": True},
+    )
+
+    @field_validator("stable_identities")
+    @classmethod
+    def _valid_stable_identities(
+        cls, value: list[StableFaceIdentity]
+    ) -> list[StableFaceIdentity]:
+        if len(set(value)) != len(value):
+            raise ValueError("stable face identities must be valid and unique")
+        return value
+
+
+class AmbiguousCadFaceTarget(_CadFaceTargetBase):
+    """A blocked target whose local evidence has no unique stable identity."""
+
+    resolution: Literal["ambiguous"]
+    model_version_id: str = Field(min_length=1)
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    collision_group_ids: list[CollisionGroupIdentity] = Field(
+        min_length=1,
+        json_schema_extra={"uniqueItems": True},
+    )
+    source_face_tags: list[SourceFaceTag] = Field(
+        min_length=1,
+        description=NUMERIC_EVIDENCE_DESCRIPTION,
+        json_schema_extra={"uniqueItems": True},
+    )
+
+    @field_validator("collision_group_ids")
+    @classmethod
+    def _valid_collision_groups(
+        cls, value: list[CollisionGroupIdentity]
+    ) -> list[CollisionGroupIdentity]:
+        if len(set(value)) != len(value):
+            raise ValueError("collision group identities must be valid and unique")
+        return value
+
+
+class UnresolvedCadFaceTarget(_CadFaceTargetBase):
+    """A blocked target that has not resolved to stable geometry."""
+
+    resolution: Literal["unresolved"]
+    model_version_id: str | None = Field(default=None, min_length=1)
+
+
+class LegacyCadFaceTarget(_CadFaceTargetBase):
+    """Blocked valid v2 numeric evidence with no stable authority."""
+
+    resolution: Literal["legacy_local_only"]
+    legacy_status: RegionStatus
+
+
+class InvalidLegacyCadFaceTarget(StrictModel):
+    """Blocked historical v2 numeric evidence that violates v3 constraints.
+
+    This read-only migration representation deliberately permits non-positive
+    and duplicate integers so immutable historical evidence remains readable
+    and inspectable. It never confers stable geometry authority.
+    """
+
+    resolution: Literal["invalid_legacy_evidence"]
+    legacy_status: RegionStatus
+    legacy_reason: Literal["invalid_numeric_tags"] = "invalid_numeric_tags"
+    source_face_tags: list[int] = Field(
+        description=(
+            "Original ordered historical v2 numeric evidence, preserved "
+            "without sorting, deduplication, sign changes, removal, repair, "
+            "stable-identity fabrication, or ModelVersion rebinding. This "
+            "evidence is invalid, non-authoritative, unconfirmable, and "
+            "unexportable."
+        )
+    )
+
+
+CadFaceTarget = Annotated[
+    Union[
+        ResolvedCadFaceTarget,
+        AmbiguousCadFaceTarget,
+        UnresolvedCadFaceTarget,
+        LegacyCadFaceTarget,
+        InvalidLegacyCadFaceTarget,
+    ],
+    Field(
+        discriminator="resolution",
+        description=CAD_TARGET_AUTHORITY_DESCRIPTION,
+    ),
+]
+
+
+EntityIds = Union[
+    Annotated[list[int], Field(min_length=1)],
+    Annotated[list[str], Field(min_length=1)],
+]
+
+CAD_ENTITY_IDS_FORBIDDEN_CODE: Final[str] = "cad_region_entity_ids_forbidden"
+
+
+def enforce_cad_region_entity_ids_invariant(value: object) -> None:
+    """Reject the obsolete CAD ``entity_ids`` projection on any object shape.
+
+    Pydantic assignment, ``model_copy(update=...)``, and ``model_construct``
+    deliberately bypass normal model validation.  Every trust boundary calls
+    this same guard, so none of those construction paths can turn source-local
+    CAD evidence into a second, contradictory membership collection.
+
+    Mapping inputs are rejected on *key presence* rather than on a non-null
+    value.  A hostile ``{"entity_type": "cad_face", "entity_ids": null}``
+    payload must not be accepted and silently stripped during serialization:
+    the invariant is that a CAD region never carries the key at all.  Model
+    instances are still judged by value, because ``Region.entity_ids`` is
+    always present as an attribute and legitimately holds ``None`` for CAD.
+    """
+
+    if isinstance(value, Mapping):
+        regions = value.get("regions")
+        if isinstance(regions, (list, tuple)):
+            for region in regions:
+                enforce_cad_region_entity_ids_invariant(region)
+            return
+        entity_type = value.get("entity_type")
+        carries_entity_ids = "entity_ids" in value
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            enforce_cad_region_entity_ids_invariant(item)
+        return
+    elif hasattr(value, "regions"):
+        regions = getattr(value, "regions", None)
+        if isinstance(regions, (list, tuple)):
+            for region in regions:
+                enforce_cad_region_entity_ids_invariant(region)
+            return
+        entity_type = getattr(value, "entity_type", None)
+        carries_entity_ids = getattr(value, "entity_ids", None) is not None
+    else:
+        entity_type = getattr(value, "entity_type", None)
+        carries_entity_ids = getattr(value, "entity_ids", None) is not None
+
+    if entity_type == "cad_face" and carries_entity_ids:
+        raise EngineeringConsistencyError(
+            CAD_ENTITY_IDS_FORBIDDEN_CODE,
+            "CAD-face regions must not contain entity_ids; "
+            "cad_face_target.source_face_tags is the sole numeric evidence",
+        )
 
 
 class Region(StrictModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {"entity_type": {"const": "cad_face"}},
+                        "required": ["entity_type"],
+                    },
+                    "then": {"not": {"required": ["entity_ids"]}},
+                    "else": {"required": ["entity_ids"]},
+                }
+            ]
+        },
+    )
+
     id: str
     entity_type: EntityType
-    entity_ids: Union[list[int], list[str]] = Field(min_length=1)
+    entity_ids: EntityIds | None = Field(
+        default=None,
+        description=(
+            "Required source-local entity membership for non-CAD regions. "
+            "This field is forbidden for CAD-face regions, whose sole public "
+            "numeric evidence is cad_face_target.source_face_tags."
+        ),
+    )
     selection_method: SelectionMethod
     confidence: float = Field(ge=0.0, le=1.0)
     source_instruction: str
     status: RegionStatus
+    cad_face_target: CadFaceTarget | None = Field(
+        default=None,
+        description=CAD_TARGET_AUTHORITY_DESCRIPTION,
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _forbid_redundant_cad_entity_evidence(cls, value: object) -> object:
+        enforce_cad_region_entity_ids_invariant(value)
+        return value
+
+    @model_validator(mode="after")
+    def _cad_target_applies_only_to_faces(self) -> "Region":
+        enforce_cad_region_entity_ids_invariant(self)
+        if self.entity_type != "cad_face" and self.cad_face_target is not None:
+            raise ValueError("CAD face target is not applicable to this region")
+        if self.entity_type != "cad_face" and self.entity_ids is None:
+            raise ValueError("a non-CAD region requires entity_ids")
+        if (
+            self.entity_type == "cad_face"
+            and self.cad_face_target is not None
+            and not isinstance(self.cad_face_target, ResolvedCadFaceTarget)
+            and self.status == "confirmed"
+        ):
+            raise ValueError("an unresolved CAD face region cannot be confirmed")
+        if (
+            self.entity_type == "cad_face"
+            and self.status == "confirmed"
+            and self.cad_face_target is None
+        ):
+            raise ValueError("a confirmed CAD face region requires a stable target")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _serialize_region(self, serializer):
+        enforce_cad_region_entity_ids_invariant(self)
+        payload = serializer(self)
+        if self.entity_type == "cad_face":
+            payload.pop("entity_ids", None)
+        return payload
+
+
+def region_entity_membership(region: Region) -> list[int] | list[str]:
+    """Return display/local membership without introducing a CAD fallback."""
+
+    if region.entity_type == "cad_face":
+        if region.cad_face_target is None:
+            return []
+        return list(region.cad_face_target.source_face_tags)
+    return [] if region.entity_ids is None else list(region.entity_ids)
 
 
 # --------------------------------------------------------------------------
@@ -878,6 +1251,7 @@ class SimulationIntent(StrictModel):
 
     @model_validator(mode="after")
     def _check_region_refs(self) -> "SimulationIntent":
+        enforce_cad_region_entity_ids_invariant(self.regions)
         region_ids = [r.id for r in self.regions]
         if len(set(region_ids)) != len(region_ids):
             raise ValueError("duplicate region ids")
@@ -899,10 +1273,21 @@ class SimulationIntent(StrictModel):
         Architectural confirmation gate (CLAUDE.md rule 3): refuses unless
         every region status == "confirmed".
         """
+        enforce_cad_region_entity_ids_invariant(self)
         blocked = [r.id for r in self.regions if r.status != "confirmed"]
+        blocked.extend(
+            r.id
+            for r in self.regions
+            if r.entity_type == "cad_face"
+            and (
+                r.cad_face_target is None
+                or r.cad_face_target.resolution != "resolved"
+            )
+        )
         if blocked:
             raise ExportBlockedError(
-                "export blocked: regions not confirmed: " + ", ".join(blocked)
+                "export blocked: regions are not confirmed stable targets: "
+                + ", ".join(sorted(set(blocked)))
             )
         return self.model_dump(mode="json")
 

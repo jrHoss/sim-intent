@@ -13,13 +13,14 @@ from app.orchestration import propose_from_interpretation
 from export.common import assess_artifact_capability
 from geom.inventory import FaceInventory
 from ir.schema import Assumption, SimulationIntent
+from ir.schema_version import SIMULATION_INTENT_SCHEMA_VERSION
 from ir.validate import validate_intent
 from llm.interpreter import (
     Interpreter,
     UnsupportedCapabilityError,
     UnsupportedMaterialInputError,
 )
-from tests.test_engineering_setup import payload, region
+from tests.test_engineering_setup import inp_payload, payload, region
 from tests.test_project_persistence import create_project, minimal_inp, request, upload
 
 
@@ -41,6 +42,22 @@ def durable(tmp_path):
 
 
 def setup_body(app, intent: dict, request_id: str = "create") -> tuple[str, dict]:
+    """Upload one INP ModelVersion and build the create-setup body for *intent*.
+
+    The uploaded model is an INP mesh, so a structurally well-formed *intent*
+    states mesh regions here: R4b.2 rejects a ``cad_face`` region against an
+    INP ModelVersion with ``cad_region_not_applicable``.  The guard stops a
+    stale CAD fixture from silently converting a downstream assertion into an
+    applicability rejection.  Deliberately malformed collections are left
+    alone -- they are the point of the malformed-payload tests.
+    """
+
+    regions = intent.get("regions")
+    if isinstance(regions, list):
+        assert not any(
+            isinstance(item, dict) and item.get("entity_type") == "cad_face"
+            for item in regions
+        ), "an INP ModelVersion has mesh entities, not CAD faces"
     project = create_project(app)
     uploaded = upload(app, project["id"], minimal_inp())
     body = {
@@ -77,6 +94,35 @@ def confirm_all_regions(app, current: dict, prefix: str) -> dict:
     return current
 
 
+#: Derived from the authoritative constant so the "future" boundary case
+#: cannot silently become the current version at the next schema bump.
+UNSUPPORTED_FUTURE_VERSION = SIMULATION_INTENT_SCHEMA_VERSION + 1
+
+
+def test_durable_create_accepts_the_current_explicit_version(durable):
+    """The shared fixture is valid, so the rejections below are version-only."""
+
+    path, body = setup_body(
+        durable, client_proposal(inp_payload()), "version-current"
+    )
+    response = request(durable, "POST", path, json=body)
+    assert response.status_code == 201, response.text
+    current = response.json()["current"]
+    assert (
+        current["simulation_intent_schema_version"]
+        == SIMULATION_INTENT_SCHEMA_VERSION
+    )
+    assert [item["entity_type"] for item in current["intent"]["regions"]] == [
+        "mesh_face",
+        "mesh_face",
+    ]
+    assert all(
+        item.get("cad_face_target") is None
+        for item in current["intent"]["regions"]
+    )
+    assert len(request(durable, "GET", path).json()) == 1
+
+
 @pytest.mark.parametrize(
     ("declared", "code"),
     [
@@ -85,15 +131,19 @@ def confirm_all_regions(app, current: dict, prefix: str) -> dict:
         (True, "simulation_intent.schema_version_invalid"),
         (0, "simulation_intent.schema_version_invalid"),
         (1, "simulation_intent.schema_version_unsupported_legacy"),
-        (3, "simulation_intent.schema_version_unsupported_future"),
+        (
+            UNSUPPORTED_FUTURE_VERSION,
+            "simulation_intent.schema_version_unsupported_future",
+        ),
     ],
 )
 def test_durable_create_requires_the_current_explicit_version(durable, declared, code):
-    candidate = payload()
+    candidate = inp_payload()
     if declared is None:
         candidate.pop("schema_version")
     else:
         candidate["schema_version"] = declared
+    assert declared != SIMULATION_INTENT_SCHEMA_VERSION
     path, body = setup_body(durable, candidate, f"version-{declared!r}")
     response = request(durable, "POST", path, json=body)
     assert response.status_code == 422
@@ -102,15 +152,19 @@ def test_durable_create_requires_the_current_explicit_version(durable, declared,
 
 
 def test_durable_revision_rejects_invalid_versions_without_extending_history(durable):
-    path, body = setup_body(durable, client_proposal(payload()))
+    path, body = setup_body(durable, client_proposal(inp_payload()))
     created = request(durable, "POST", path, json=body)
     assert created.status_code == 201, created.text
     setup_id = created.json()["setup"]["id"]
+    durable_before = request(durable, "GET", f"/api/v1/setups/{setup_id}").json()
     for declared, code in (
         (None, "simulation_intent.schema_version_required"),
         ("2", "simulation_intent.schema_version_invalid"),
         (1, "simulation_intent.schema_version_unsupported_legacy"),
-        (3, "simulation_intent.schema_version_unsupported_future"),
+        (
+            UNSUPPORTED_FUTURE_VERSION,
+            "simulation_intent.schema_version_unsupported_future",
+        ),
     ):
         candidate = copy.deepcopy(created.json()["current"]["intent"])
         if declared is None:
@@ -129,7 +183,10 @@ def test_durable_revision_rejects_invalid_versions_without_extending_history(dur
         )
         assert rejected.status_code == 422
         assert rejected.json()["errors"][0]["code"] == code
-    assert len(request(durable, "GET", f"/api/v1/setups/{setup_id}/revisions").json()) == 1
+    history = request(durable, "GET", f"/api/v1/setups/{setup_id}/revisions").json()
+    assert len(history) == 1
+    assert history[0]["revision"] == 1
+    assert request(durable, "GET", f"/api/v1/setups/{setup_id}").json() == durable_before
 
 
 @pytest.mark.parametrize("axis", ["x", "y", "z"])
@@ -158,7 +215,9 @@ def test_rotational_prescribed_constraint_is_typed_unsupported_without_model_cal
 
 
 def proposed_material_payload(*, status: str) -> dict:
-    candidate = payload()
+    """A system-proposed material on the durable INP setup fixture."""
+
+    candidate = inp_payload()
     decision = Assumption(
         text="Proposed isotropic material: E=210 GPa, nu=0.3.",
         criticality="unit_critical",
@@ -183,6 +242,10 @@ def test_material_proposal_acceptance_and_rejection_create_successor_revisions(d
     )
     created = request(durable, "POST", path, json=body)
     assert created.status_code == 201, created.text
+    setup_id = created.json()["setup"]["id"]
+    assert [
+        item["entity_type"] for item in created.json()["current"]["intent"]["regions"]
+    ] == ["mesh_face", "mesh_face"]
     current = confirm_all_regions(durable, created.json()["current"], "confirm-accept")
     assert current["validation"]["readiness_status"] == "awaiting_assumption_acceptance", current["validation"]["issues"]
     assert current["intent"]["materials"][0]["authority"] == "system_proposed"
@@ -198,6 +261,19 @@ def test_material_proposal_acceptance_and_rejection_create_successor_revisions(d
     assert accepted.json()["revision"] == current["revision"] + 1
     assert accepted.json()["validation"]["readiness_status"] == "ready"
     assert current["intent"]["assumptions"][0]["status"] == "pending"
+
+    # The successor is a real durable revision: numbered, parent-linked, and
+    # pointed at by the setup, and reopening the setup still reports it.
+    history = request(durable, "GET", f"/api/v1/setups/{setup_id}/revisions").json()
+    assert [item["revision"] for item in history] == [1, 2, 3, 4]
+    assert [item["parent_revision_id"] for item in history] == [
+        None,
+        *[item["id"] for item in history[:-1]],
+    ]
+    reopened = request(durable, "GET", f"/api/v1/setups/{setup_id}").json()
+    assert reopened["setup"]["current_revision"] == 4
+    assert reopened["current"]["revision"] == accepted.json()["revision"]
+    assert reopened["current"]["intent"]["assumptions"][0]["status"] == "accepted"
 
     path, body = setup_body(
         durable,

@@ -463,8 +463,13 @@ def _condition_signature(item: Any, regions: Mapping[str, Any]) -> str:
         target: dict[str, Any] = {"scope": "whole_model"}
     else:
         region = regions[region_ref]
+        from ir.schema import region_entity_membership
+
         entity_ids = sorted(
-            ({"kind": type(value).__name__, "value": value} for value in region.entity_ids),
+            (
+                {"kind": type(value).__name__, "value": value}
+                for value in region_entity_membership(region)
+            ),
             key=lambda value: (value["kind"], str(value["value"])),
         )
         target = {

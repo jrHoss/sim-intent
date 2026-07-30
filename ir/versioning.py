@@ -432,6 +432,7 @@ SAFETY_CRITICAL_PATHS: Final[tuple[str, ...]] = (
     "regions[].confidence",
     "regions[].source_instruction",
     "regions[].status",
+    "regions[].cad_face_target",
     "bcs[].region_ref",
     "bcs[].components",
     "loads[].region_ref",
@@ -568,6 +569,82 @@ def _simulation_intent_one_to_two(payload: Mapping[str, Any]) -> dict[str, Any]:
     for key in V1_TO_V2_MISSING_SETUP_DECISIONS:
         body.setdefault(key, None)
     return body
+
+
+@SIMULATION_INTENT_MIGRATIONS.register(2)
+def _simulation_intent_two_to_three(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve v2 CAD evidence without inventing stable identity.
+
+    Positive unique integer sequences retain the established
+    ``legacy_local_only`` policy. Integer sequences that violate the v3
+    positive/unique constraints use an explicit blocked representation whose
+    evidence is copied byte-for-value and in its original order.
+    """
+
+    body = dict(payload)
+    regions = body.get("regions")
+    if not isinstance(regions, list):
+        return body
+    migrated_regions: list[Any] = []
+    for raw_region in regions:
+        if not isinstance(raw_region, Mapping):
+            migrated_regions.append(raw_region)
+            continue
+        migrated_regions.append(migrate_legacy_cad_region(raw_region))
+    body["regions"] = migrated_regions
+    return body
+
+
+def migrate_legacy_cad_region(raw_region: Mapping[str, Any]) -> dict[str, Any]:
+    """Migrate one numeric CAD Region without fabricating stable identity.
+
+    Fallback grounding records embed Region-shaped legacy data outside their
+    nested SimulationIntent.  They call this same production migration helper
+    so legacy numeric evidence is never deserialized as current v3
+    ``entity_ids``.
+    """
+
+    region = dict(raw_region)
+    if region.get("entity_type") != "cad_face":
+        return region
+    if "cad_face_target" in region and "entity_ids" not in region:
+        return region
+    old_status = region.get("status")
+    raw_ids = region.get("entity_ids")
+    integer_evidence = (
+        isinstance(raw_ids, list)
+        and all(
+            isinstance(value, int) and not isinstance(value, bool)
+            for value in raw_ids
+        )
+    )
+    source_tags = list(raw_ids) if integer_evidence else []
+    valid_v3_tags = (
+        bool(source_tags)
+        and all(value > 0 for value in source_tags)
+        and len(source_tags) == len(set(source_tags))
+    )
+    if valid_v3_tags:
+        region["cad_face_target"] = {
+            "resolution": "legacy_local_only",
+            "source_face_tags": source_tags,
+            "legacy_status": old_status,
+        }
+    elif integer_evidence:
+        region["cad_face_target"] = {
+            "resolution": "invalid_legacy_evidence",
+            "source_face_tags": source_tags,
+            "legacy_status": old_status,
+            "legacy_reason": "invalid_numeric_tags",
+        }
+    else:
+        # Non-numeric/mixed legacy entity_ids remain invalid.  Do not coerce
+        # or discard them into seemingly numeric evidence.
+        return region
+    region.pop("entity_ids", None)
+    if old_status == "confirmed":
+        region["status"] = "proposed"
+    return region
 
 
 SIMULATION_INTENT_MIGRATIONS.validate()

@@ -11,7 +11,7 @@ from geom.inventory import FaceInventory, file_sha256
 from geom.parser import parse_step
 from ground.engine import ClickEvidence, GroundingEngine
 from ground.queries import QueryResult
-from ir.schema import Region
+from ir.schema import Region, region_entity_membership
 from llm.interpreter import Interpretation
 
 
@@ -69,9 +69,9 @@ def test_bolt_hole_grounding_produces_proposed_region(bracket):
 
     assert isinstance(grounded.region, Region)
     assert grounded.clarification is None
-    assert set(grounded.region.entity_ids) == {11, 12}
-    assert 3 not in grounded.region.entity_ids
-    assert 10 not in grounded.region.entity_ids
+    assert set(region_entity_membership(grounded.region)) == {11, 12}
+    assert 3 not in region_entity_membership(grounded.region)
+    assert 10 not in region_entity_membership(grounded.region)
     assert grounded.region.status == "proposed"
     assert grounded.region.selection_method == "semantic_geometry_query"
     assert grounded.region.source_instruction == source
@@ -122,7 +122,7 @@ def test_click_assisted_hole_uses_only_clicked_face(bracket):
 
     assert grounded.clarification is None
     assert grounded.region is not None
-    assert grounded.region.entity_ids == [10]
+    assert region_entity_membership(grounded.region) == [10]
     assert grounded.region.selection_method == "user_click"
     assert grounded.region.status == "proposed"
     assert grounded.region.source_instruction == source
@@ -262,7 +262,8 @@ def test_every_successful_region_has_full_provenance(bracket):
         fixed_intent([{"op": "labeled", "name": "top_face"}], "the top face"),
     )
     dumped = grounded.region.model_dump(mode="json")
-    assert dumped["entity_ids"]
+    assert "entity_ids" not in dumped
+    assert dumped["cad_face_target"]["source_face_tags"]
     assert dumped["selection_method"] == "semantic_geometry_query"
     assert 0.0 <= dumped["confidence"] <= 1.0
     assert dumped["source_instruction"] == "Fix the top face verbatim."
@@ -292,8 +293,8 @@ def test_multiple_intents_preserve_order_and_payload_association(bracket):
     assert batch.results[0].load is None
     assert batch.results[1].bc is None
     assert batch.results[1].load.type == "pressure"
-    assert batch.results[0].region.entity_ids == [11, 12]
-    assert batch.results[1].region.entity_ids == [10]
+    assert region_entity_membership(batch.results[0].region) == [11, 12]
+    assert region_entity_membership(batch.results[1].region) == [10]
 
 
 def test_grounding_never_crosses_the_live_openai_boundary(bracket, monkeypatch):

@@ -63,6 +63,13 @@ def intent_payload() -> dict[str, Any]:
         (EXAMPLES / "bracket_sprint_goal.json").read_text(encoding="utf-8")
     )
     payload[SCHEMA_VERSION_FIELD] = SIMULATION_INTENT_SCHEMA_VERSION
+    for region in payload["regions"]:
+        if region["entity_type"] == "cad_face":
+            tags = region.pop("entity_ids")
+            region["cad_face_target"] = {
+                "resolution": "unresolved",
+                "source_face_tags": tags,
+            }
     return payload
 
 
@@ -523,6 +530,15 @@ def test_export_payload_carries_the_current_version():
         )
     )
     payload[SCHEMA_VERSION_FIELD] = SIMULATION_INTENT_SCHEMA_VERSION
+    for region in payload["regions"]:
+        tags = region.pop("entity_ids")
+        region["cad_face_target"] = {
+            "model_version_id": "version-for-schema-unit-test",
+            "artifact_sha256": "a" * 64,
+            "resolution": "resolved",
+            "stable_identities": ["gfi1:" + "b" * 64],
+            "source_face_tags": tags,
+        }
     intent = load_simulation_intent(payload, source="t")
     assert (
         intent.export_payload()[SCHEMA_VERSION_FIELD]

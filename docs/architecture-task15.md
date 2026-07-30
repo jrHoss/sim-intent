@@ -102,9 +102,12 @@ A clarification choice creates a proposed region with click provenance. It never
 
 The first scored LIVE result is retained as `eval/results-live-initial.*`
 (13/15, with one axis-semantic and one ambiguity-unflagged failure). The final
-LIVE result is `eval/results.*` (15/15, zero failures), while
-`eval/results-replay.*` remains a separately labeled deterministic 15/15
-regression. All use the unchanged frozen manifest
+Task 15 LIVE result is `eval/results.*` (15/15, zero failures). Both are
+*historical* evidence recorded on 2026-07-21 at revision
+`7bd789c60d9b9e8b812b6fb7c0f29212587072e0+dirty`; `eval/results.*` carries an
+explicit superseded notice and is no longer the report of record. The current
+reproducible report of record is `eval/results-replay.*`, a separately labeled
+deterministic 15/15 regression. All use the unchanged frozen manifest
 `47c0d7275b9a065a7f5e3316ed60b7ffff58913e0b1e5045c857f663e1f6775b`.
 
 ## Known limitations
@@ -113,7 +116,7 @@ regression. All use the unchanged frozen manifest
 - No solver execution, convergence analysis, result reading, or numerical result validation.
 - No contact, nonlinear material, large-deformation, thermal, or dynamic analysis.
 - Click evidence is supported; arbitrary screenshot, drawing, or computer-vision understanding is not.
-- The Abaqus adapter assumes OCC source face tag `n` maps to imported `part.faces[n-1]` for the exact content-hashed STEP file.
+- *Historical Task 15 behavior, superseded by R4b.2:* the Abaqus adapter assumed OCC source face tag `n` mapped to imported `part.faces[n-1]` for the exact content-hashed STEP file. That ordinal assumption is no longer current and is not a current limitation. R4b.2 replaced it with the following renderer boundary: source CAD face tags are provenance only and are never solver identifiers; the private renderer requires explicitly mapped solver face IDs together with an explicit solver-face universe, and validates imported topology against that universe; public CAD export stays blocked without a verified CAD-to-mesh mapping; producing real mapping is R6 work.
 - The Abaqus artifact has not been executed in a real Abaqus environment.
 - The optional CalculiX test requires an installed `ccx` executable.
 - Live LLM evaluation cannot be scored without server-side OpenAI configuration.
