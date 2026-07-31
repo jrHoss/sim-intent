@@ -1,5 +1,617 @@
 # Technical-preview progress
 
+> Current authority clarification (2026-07-30, Europe/Berlin):
+> `LEAN_RELEASE_PLAN.md` supersedes the older active task sequence in
+> `TECHNICAL_PREVIEW_PLAN.md`. Historical entries below remain unchanged.
+
+## R5.1 — Mesh domain and durable persistence
+
+**Status:** FIFTH INDEPENDENT READ-ONLY VERIFICATION `APPROVE` on 2026-07-31
+(Europe/Berlin); approved and ready for a local commit; not published remotely.
+
+### Starting state and independent verdict
+
+- Remediation began on `r5-1-mesh-domain-persistence` at unchanged `HEAD`
+  `4e0ae349d26429c32aa44262e61ad1606580f0f2`, with the uncommitted
+  `0005_mesh_domain_persistence` implementation under review.
+- The independent review rejected the implementation for two HIGH findings:
+  stale/superseded/non-current setup inputs were accepted, and empty or
+  physically inconsistent quality evidence could be accepted.
+- MEDIUM findings covered coercive integer fields, signed-zero hash drift,
+  incomplete exact-read pair validation, unhandled cross-process request races,
+  non-atomic second-artifact publication, cleanup that could mask failures or
+  delete unrelated orphans, and overstated exact-read evidence. The exact
+  ABI-isolation command was also missing (LOW).
+
+### Remediation
+
+- Topology now requires at least four nodes, one tetrahedron, and one exterior
+  triangle, with unique IDs and connectivity, valid references, valid exterior
+  ownership, and no duplicate boundary connectivity.
+- Every integer-valued artifact field uses strict integer validation. Booleans,
+  floats, numeric strings, and other coercible non-integers are rejected.
+- Quality now requires a positive element count, bounded non-positive count,
+  finite and internally consistent signed-volume evidence, mean-ratio values in
+  `[0, 1]` with ordered percentiles, aspect ratios at least one with ordered
+  percentiles, accepted-state positive minima and no rejection codes, and at
+  least one rejection code for rejected state.
+- The shared canonical serializer recursively normalizes every finite floating
+  zero to positive `0.0`; NaN and infinities remain rejected.
+- One `validate_mesh_artifact_pair` function now owns binding, source/settings
+  hashes, topology linkage, non-empty topology, quality/topology cardinality,
+  and pair consistency. Creation and exact read call the same function after
+  independent canonical/integrity validation.
+- The authoritative creation transaction now checks Model/ModelVersion
+  ownership, current-version identity, non-supersession, non-stale Setup,
+  exact Setup-to-ModelVersion binding, and SetupRevision ownership. Updated
+  `0005` insertion triggers repeat ownership and currentness checks, while a
+  separate lineage trigger protects predecessor ownership.
+- Database request-ID races are resolved after rollback by loading the winner
+  with exact Project/request scope and comparing canonical request hashes.
+  Identical requests replay; changed content raises `request_id_conflict`;
+  predecessor races raise `mesh_lineage_conflict`; unrelated integrity failures
+  remain database failures.
+- At the first-remediation stage, CAS publication reported the exact key,
+  pre-operation existence, and exact creation via atomic same-directory links.
+  Publication, SQL commit, and operation-scoped cleanup shared only an
+  in-process failure boundary. The cleanup preserved pre-existing/shared blobs,
+  avoided broad orphan scans, and preserved the original failure, but it was
+  **not cross-process safe**; the second review rejected that overstatement.
+- Migration regressions cover stale/non-current/superseded insertion, every
+  immutable column, request/predecessor uniqueness, ownership and lineage
+  mismatch branches, populated-`0004` preservation, downgrade, re-upgrade, and
+  the sole head.
+
+### Named regression evidence
+
+- HIGH stale/currentness:
+  `test_stale_setup_is_rejected_by_authoritative_creation_transaction`,
+  `test_superseded_model_version_is_rejected_by_creation_transaction`,
+  `test_non_current_model_version_is_rejected_by_creation_transaction`,
+  `test_source_replacement_before_mesh_creation_rejects_old_setup`,
+  `test_invalidation_between_validation_and_insert_is_typed`, and direct-SQL
+  stale/currentness tests all pass.
+- HIGH artifact validity:
+  `test_empty_or_incomplete_topology_is_rejected`,
+  `test_zero_element_quality_is_rejected_for_every_status`, and the
+  parameterized mathematical/status inconsistency tests pass.
+- Strict integers:
+  `test_every_integer_category_rejects_coercible_non_integers` passes for every
+  integer category and `True`, `False`, `1.0`, `"1"`, and `Decimal("1")`.
+- Signed zero: coordinate, signed-volume, mean-ratio, and shared aspect-ratio
+  serializer byte/hash equality tests pass.
+- Exact reads:
+  `test_exact_read_repeats_every_bypassable_pair_invariant` rejects embedded
+  binding, source hash, settings hash, topology link, row mesher-profile
+  identity/version, and element-count bypasses.
+- Races: all four tests in `tests/test_mesh_concurrency.py` pass using
+  independent processes.
+- CAS: all nine tests in `tests/test_mesh_cas_atomicity.py` pass, including
+  second-publication failure, rollback cleanup, cleanup failure, pre-existing
+  blobs, shared references, and unrelated older orphans.
+
+### Validation evidence
+
+- Artifact remediation:
+  `PYTHONDONTWRITEBYTECODE=1 TMPDIR=/tmp .venv/bin/python -m pytest
+  -p no:cacheprovider --basetemp=/tmp/sim-intent-r5-1-artifact-remediation-01
+  tests/test_mesh_artifact_remediation.py -q` → **91 passed**.
+- Complete R5.1 focused selection → **171 passed**.
+- Final ABI-isolated affected persistence selection → **237 passed**.
+- Affected migration selection → **97 passed**. Affected schema/versioning
+  selection → **181 passed**. Frozen fixture/evaluation integrity → **6 passed**.
+- Ordinary host full suite:
+  `PYTHONDONTWRITEBYTECODE=1 TMPDIR=/tmp .venv/bin/python -m pytest
+  -p no:cacheprovider --basetemp=/tmp/sim-intent-r5-1-full-ordinary-final
+  -q -ra --tb=short` → **1176 passed, 180 failed, 91 errors, 2 skipped**.
+  The 91 direct errors are the known order-sensitive
+  `CXXABI_1.3.15` SQLite/ICU import collision; downstream assertion/process
+  failures followed that contaminated environment and do not reproduce in the
+  fresh isolated process.
+- Exact fresh ABI-isolated command (not an ordinary host run):
+
+  `LD_PRELOAD=/home/m2227837/miniforge3/envs/fea/lib/libstdc++.so.6 PYTHONDONTWRITEBYTECODE=1 TMPDIR=/tmp .venv/bin/python -m pytest -p no:cacheprovider --basetemp=/tmp/sim-intent-r5-1-full-abi-isolated-final -q -ra`
+
+  Result: **1447 passed, 2 skipped**, 0 failed, 0 errors (148.49 s).
+- Environment check: `ENV OK`; optional CCX unavailable. Sole migration head:
+  `0005_mesh_domain_persistence`. Schema/OpenAPI and all 35 stamped payload
+  checks pass. Dependency files are unchanged.
+- Docker exists but access to `/var/run/docker.sock` is denied. Node/npm, uv,
+  gitleaks, pip in `.venv`, and CCX are unavailable; JavaScript syntax,
+  generated-TypeScript regeneration, uv requirements export, gitleaks, and
+  container validation were not claimed.
+
+### Scope and disposition
+
+No real meshing, Gmsh production path, worker/queue, API/OpenAPI/generated
+client/frontend change, CAD-to-mesh mapping, solver set/export behavior, INP
+remeshing, R6, or later work entered this slice. R5.1 was not approved; this
+first-remediation disposition was superseded by the second rejection below.
+
+### Second independent verdict and exact reproduction
+
+- A second independent read-only review returned **`REJECT`** on 2026-07-31.
+- The reviewer forced this cross-process sequence: process A published topology
+  and quality, failed its database operation, and observed both unreferenced;
+  process B then committed a MeshRevision with the same hashes before process A
+  unlinked them. The exact reproduced result was:
+
+  ```text
+  ROW_COMMITTED True
+  FINAL_BLOBS_EXIST False False
+  ```
+
+  A durable committed MeshRevision therefore referenced two missing artifacts.
+- The same review found that a triangle incident to two tetrahedra could be
+  declared exterior; artifact ownership accepted non-UUID strings; quality
+  artifacts lacked mesher-profile ID/version; and remediation/environment
+  documentation overstated the prior guarantees.
+
+### Second remediation design
+
+- `app.blob_store.ProcessSharedCASLock` now promotes the existing canonical-CAS
+  `coordination_lock` boundary to a re-entrant thread lock plus an external
+  `filelock` keyed by the canonical CAS-root hash under
+  `/tmp/sim-intent-cas-locks`. Acquisition is bounded to 10 seconds. The global
+  ordering is process-shared CAS lock → process-local setup lock → SQLite
+  transaction. Mesh creation holds it continuously across topology publication,
+  quality publication, ownership/currentness validation, MeshRevision commit,
+  and operation-scoped failure cleanup. Cleanup re-acquires the same re-entrant
+  lock so its final reference check and unlink are indivisible even if the
+  private helper is invoked separately. Pre-existing blobs, committed shared
+  blobs, and unrelated historical orphans retain the earlier protections;
+  cleanup exceptions remain suppressed in favor of the original operation
+  failure.
+- `MeshTopologyArtifact.valid_topology` derives all four sorted triangular faces
+  of every tetrahedron and builds a face-incidence map. A declared exterior face
+  must occur exactly once, name that sole incident tetrahedron as owner, and be
+  declared only once. Zero-incidence, interior/non-manifold, wrong-owner, and
+  duplicate declarations are rejected; partial boundary enumeration remains
+  allowed.
+- One reusable strict `CanonicalUUID` type now owns all six topology and quality
+  domain identifiers. It accepts only lowercase, hyphenated canonical UUID text
+  and rejects text labels, uppercase, braces, whitespace, compact/truncated or
+  non-hex forms, and non-string coercions during direct construction and JSON
+  deserialization.
+- `sim-intent.mesh-quality.v1` now includes `mesher_profile_id` and
+  `mesher_profile_version` with the same strict string semantics as topology and
+  the durable row. `validate_mesh_artifact_pair` enforces topology-quality-row
+  agreement on both values during creation before publication and during exact
+  reads after canonical and CAS integrity validation. This changes artifact
+  bytes only; migration `0005` and its SQL schema are unchanged, and no `0006`
+  exists.
+
+### Second-remediation named regressions
+
+- `test_cross_process_failed_cleanup_cannot_delete_committed_mesh_artifacts`
+  forces the failing creator to publish both artifacts and enter cleanup while
+  a second process attempts the identical hashes. It proves two cleanup
+  attempts, the original `ForcedMeshCreationError`, one committed row, exact
+  MeshRevision read success, both final regular files, and two verified CAS
+  reads. The process-shared lock prevents the successful commit from entering
+  cleanup's check/unlink interval; it commits immediately after failed-operation
+  cleanup and republishes any eligible removed leaves.
+- Exterior incidence is covered by true-exterior acceptance plus shared-face,
+  wrong-owner, non-tetrahedral, and canonical-duplicate rejection tests.
+- The parameterized UUID matrix covers every domain UUID field in both artifact
+  types, all eight malformed/noncanonical categories, and both direct Python and
+  JSON construction, plus canonical round trips.
+- Creation rejects topology/quality profile ID or version disagreement before
+  either final artifact exists. Exact-read regressions reject topology-quality
+  ID/version mismatches and quality/durable-row ID/version mismatches; a valid
+  three-way agreement reopens successfully.
+
+### Supported second-remediation environment
+
+```bash
+source /home/m2227837/miniforge3/etc/profile.d/conda.sh
+conda activate fea
+```
+
+`echo "$LD_PRELOAD"` returns
+`/home/m2227837/miniforge3/envs/fea/lib/libstdc++.so.6`, and
+`readlink -f .venv/bin/python` returns
+`/home/m2227837/miniforge3/envs/fea/bin/python3.13`. `.venv.partial` is not
+required, rebuilt, or used.
+
+### Second-remediation validation evidence
+
+All pytest commands used `PYTHONDONTWRITEBYTECODE=1`, `TMPDIR=/tmp`,
+`-p no:cacheprovider`, and a unique `/tmp` basetemp except the explicitly
+prescribed full-suite basetemp.
+
+- Forced two-process cleanup race: **1 passed**. All CAS atomicity:
+  **9 passed**. Exterior-incidence-only: **5 passed, 307 deselected**.
+  Artifact contracts: **324 passed**. Strict-UUID-only:
+  **216 passed, 96 deselected**. Mesher-profile-only:
+  **7 passed, 13 deselected**. All profile/ownership remediation:
+  **20 passed**. Exact-read corruption and pair validation: **11 passed**.
+  All concurrency: **5 passed**. All `tests/test_mesh_*.py`:
+  **398 passed**.
+- BlobStore, durable project storage, ingestion, and source supersession:
+  **83 passed**. Geometry artifact integrity: **41 passed**. Setup/database
+  migration persistence: **28 passed**. Schema/version/OpenAPI:
+  **204 passed**. Frozen fixture, replay-manifest, baseline, and corpus hashes:
+  **6 passed**.
+- Exact prescribed full suite:
+
+  ```bash
+  source /home/m2227837/miniforge3/etc/profile.d/conda.sh
+  conda activate fea
+  PYTHONDONTWRITEBYTECODE=1 TMPDIR=/tmp .venv/bin/python -m pytest \
+    -p no:cacheprovider \
+    --basetemp=/tmp/sim-intent-r5-1-third-remediation-full \
+    tests -q -ra
+  ```
+
+  Result: **1675 passed, 1 skipped, 0 failed, 0 errors**, one existing
+  Starlette/httpx deprecation warning, in **149.52 s** on the final
+  rerun. The sole skip was the Node-dependent browser-editor test because
+  Node.js is unavailable.
+- `scripts/check_env.py` reported `CCX AVAILABLE: This is Version 2.23` and
+  `ENV OK`. `scripts/export_schema.py --check`, all 35 payload-version stamps,
+  `scripts/export_requirements.py --check`, and `uv lock --check` passed.
+  Alembic sole head and current both equal `0005_mesh_domain_persistence`.
+- No database schema changed during this second remediation: migration `0005`
+  is unchanged by it, its existing populated upgrade/downgrade/re-upgrade tests
+  pass within the mesh/migration groups, migrations `0001`–`0004` are untouched,
+  and no `0006` exists.
+- Dependency/lock files have no diff. Python AST parsing passed for all changed
+  Python files. Node/npm and gitleaks are unavailable, so JavaScript syntax and
+  gitleaks execution are not claimed; the bounded repository scan found no
+  private key, credential assignment, or provider token. Docker 29.4.2 and uv
+  0.11.32 are available, but no unnecessary container rebuild was run.
+- Added absolute paths are only the prescribed Conda/ABI and `/tmp` evidence.
+  Production scope-term, generated/temp-artifact, and unexpected-untracked-file
+  scans are clean. No real meshing, Gmsh production, worker/queue, API,
+  OpenAPI/client/frontend, mapping, solver, INP-remeshing, R6, or later scope
+  entered. `git diff --check` passes. R5.1 remains unapproved and is ready only
+  for a third independent read-only verification.
+
+### Third independent verdict and exact reproduction
+
+- A third independent read-only review returned **`REJECT`** on 2026-07-31.
+  R5.1 remained unapproved.
+- Canonical-root hashing was correct, but
+  `ProcessSharedCASLock.__init__` prefixed the digest-named file with
+  `Path(tempfile.gettempdir()).resolve() / "sim-intent-cas-locks"`.
+  Therefore the same canonical CAS root produced different external paths when
+  two processes selected different temporary directories:
+
+  ```text
+  TMPDIR=/tmp
+  /tmp/sim-intent-cas-locks/<same-digest>.lock
+
+  TMPDIR=/var/tmp
+  /var/tmp/sim-intent-cas-locks/<same-digest>.lock
+  ```
+
+- The reviewer reproduced a failing-cleanup/successful-commit interleaving with:
+
+  ```text
+  ROW_COMMITTED True
+  QUALITY_BLOB_EXISTS False
+  EXACT_READ_SUCCEEDED False
+  ```
+
+  A committed MeshRevision could therefore reference a deleted quality
+  artifact despite the prior process-lock remediation.
+
+### Third-remediation stable lock-path design
+
+- `ProcessSharedCASLock` now resolves the CAS root itself, computes
+  `digest = sha256(normcase(str(canonical_root))).hexdigest()`, and derives
+  the complete path only from that durable identity:
+
+  ```text
+  <canonical-CAS-root-parent>/.sim-intent-locks/cas-<digest>.lock
+  ```
+
+- The hidden coordination directory is a sibling of the canonical CAS root,
+  outside its fixed `sha256/<2>/<2>/<digest>` final-blob namespace. Neither
+  temporary-artifact cleanup nor unreferenced-final-blob cleanup enumerates it.
+  Directory creation is recursive with owner-only mode for a new leaf;
+  symlink/non-directory coordination directories and non-regular lock paths
+  fail closed with `BlobCoordinationPathError`. A stale regular file remains
+  valid metadata because the operating-system lock, not existence, owns the
+  critical section.
+- No lock identity component uses `TMPDIR`, `tempfile.gettempdir()`, the
+  current working directory, process ID, or session state. Independent spawned
+  interpreters using different valid `TMPDIR` and working directories report
+  the exact same path for one canonical root. A symlink spelling resolves to
+  that same identity, and a different canonical root produces a different
+  digest/path.
+- The existing 10-second bounded acquisition and typed
+  `BlobCoordinationTimeoutError`, same-process re-entrancy, thread
+  serialization, process-termination release, and regular stale-file behavior
+  remain intact. Global ordering remains process-shared CAS lock → setup/domain
+  lock → SQLite transaction; no inverse acquisition was introduced.
+- Artifact schemas, topology and UUID validation, mesher-profile contracts,
+  MeshRevision schema, APIs/OpenAPI/frontend, meshing, mappings, solver behavior,
+  and R6 functionality are unchanged by this third remediation. Migration
+  `0005_mesh_domain_persistence` is unchanged, no `0006` exists, and no
+  database change is required.
+
+### Third-remediation named regressions and focused evidence
+
+- `test_process_shared_lock_path_is_stable_across_tmpdir_and_root_spellings`
+  uses spawned interpreters with distinct valid `TMPDIR` and working
+  directories. It proves exact same-root path equality, symlink convergence,
+  and different-root separation.
+- `test_different_tmpdir_processes_contend_for_same_coordination_lock` holds
+  the lock in one spawned process, observes the second process attempting but
+  not entering, then releases the holder and observes bounded entry. Events,
+  queues, joins, and explicit timeouts provide synchronization; sleeps are not
+  used as the ordering mechanism.
+- `test_cross_process_failed_cleanup_cannot_delete_committed_mesh_artifacts`
+  now assigns different valid `TMPDIR` values to the failing and successful
+  workers and reports each derived lock path. The failing worker publishes both
+  artifacts, reaches cleanup, and preserves the original
+  `ForcedMeshCreationError`; the successful worker attempts the same boundary,
+  commits after cleanup, and leaves one exact-readable row with both verified
+  blobs. A bounded entered/committed handshake deterministically exposes the
+  old split-lock path.
+- `test_stale_lock_file_is_not_ownership_after_release_or_termination` covers
+  both normal release and forced holder termination, leaves the regular lock
+  file present, and proves a new spawned process can acquire it. Parameterized
+  hazard tests reject a directory symlink, directory-as-file, and lock symlink.
+- Exact required focused commands and results:
+
+  ```text
+  .venv/bin/python -m pytest -p no:cacheprovider \
+    --basetemp=/tmp/r5-lock-identity tests/test_mesh_concurrency.py -q -ra
+  12 passed in 23.58s
+
+  .venv/bin/python -m pytest -p no:cacheprovider \
+    --basetemp=/tmp/r5-cas-atomicity tests/test_mesh_cas_atomicity.py -q -ra
+  9 passed in 2.85s
+
+  .venv/bin/python -m pytest -p no:cacheprovider \
+    --basetemp=/tmp/r5-mesh-all tests/test_mesh_*.py -q -ra
+  405 passed in 35.74s
+  ```
+
+- BlobStore/project persistence, source ingestion, setup invalidation, and
+  source supersession: **96 passed**, one existing Starlette/httpx warning, in
+  **34.08 s**. MeshRevision exact reads: **11 passed, 13 deselected** in
+  **3.53 s**. Request-ID/lineage concurrency: **3 passed, 9 deselected** in
+  **2.37 s**.
+- Explicit migration drift checks: **51 passed**. All payload-version stamp
+  tests: **107 passed**. Schema/OpenAPI: **97 passed**. Frozen fixture,
+  replay-manifest, baseline, and corpus hashes: **6 passed, 162 deselected**.
+  All 13 changed Python files parse as ASTs.
+
+### Third-remediation full-suite and environment evidence
+
+The exact prescribed full suite was:
+
+```bash
+source /home/m2227837/miniforge3/etc/profile.d/conda.sh
+conda activate fea
+
+PYTHONDONTWRITEBYTECODE=1 \
+TMPDIR=/tmp \
+.venv/bin/python -m pytest \
+-p no:cacheprovider \
+--basetemp=/tmp/sim-intent-r5-1-fourth-remediation-full \
+tests -q -ra
+```
+
+Result: **1682 passed, 1 skipped, 0 failed, 0 errors, 1 warning** in
+**171.87 s**. The exact skip was
+`tests/test_r3_2b_browser_editor.py:260`: Node.js is unavailable in this
+Python-only test environment. The warning was the existing
+`StarletteDeprecationWarning` for Starlette TestClient's deprecated httpx
+integration.
+
+The supported `fea` environment reported
+`LD_PRELOAD=/home/m2227837/miniforge3/envs/fea/lib/libstdc++.so.6` and
+`.venv/bin/python` resolved to
+`/home/m2227837/miniforge3/envs/fea/bin/python3.13`.
+`scripts/check_env.py` reported `CCX AVAILABLE: This is Version 2.23` and
+`ENV OK`. An isolated temporary database upgraded with Alembic and reported
+sole head/current `0005_mesh_domain_persistence`.
+`scripts/export_schema.py --check`, `scripts/export_requirements.py --check`,
+and `uv lock --check` passed. Node/npm and gitleaks are unavailable; JavaScript
+syntax and gitleaks execution are not claimed. Docker 29.4.2 and uv 0.11.32 are
+available; no dependency installation or container rebuild was performed.
+
+Final checks found no dependency or lockfile diff, no staged files, no patch
+backup/reject artifact, and no migration beyond `0005`. Gitleaks is unavailable;
+the corrected bounded fallback found no private-key header, provider-token
+prefix outside historical evidence prose, or credential assignment. Added
+absolute paths are limited to prescribed Conda and temporary-directory evidence.
+The sole production scope-term hit is the existing mesh-artifact docstring that
+states CAD and solver identifiers are absent. Generated-artifact scanning found
+only ignored Python caches, which are not worktree blockers. `git diff --check`
+passes.
+
+R5.1 remains uncommitted and unapproved. The remediation is ready only for a
+fourth independent read-only verification.
+
+### Fourth independent verdict and final finding
+
+- A fourth independent read-only review returned **`REJECT`** on 2026-07-31.
+  R5.1 remained unapproved.
+- Stable lock-path derivation, fail-closed path-type handling, lock ordering,
+  cross-process contention, and durable MeshRevision cleanup/commit behavior
+  were intact. However, when `_prepare_lock_path()` succeeded and the external
+  `FileLock.acquire()` operation encountered an unwritable existing
+  coordination directory, its raw filesystem exception escaped the public
+  boundary. The reviewer observed `UNWRITABLE_LOCK_ROOT_ERROR PermissionError`.
+- The failure did not enter the protected section, bypass the lock, or publish
+  a blob, but it violated the typed fail-closed contract: filesystem/path
+  acquisition failures must be `BlobCoordinationPathError`, while lock
+  contention timeouts must remain `BlobCoordinationTimeoutError`.
+
+### Final exception-boundary remediation and lock correctness
+
+- `ProcessSharedCASLock.acquire` now wraps only the external
+  `_process_lock.acquire(timeout=remaining)` operation with ordered handlers:
+  `filelock.Timeout` becomes `BlobCoordinationTimeoutError("CAS coordination
+  lock acquisition timed out")`; `OSError` (including `PermissionError` and
+  `IsADirectoryError`) becomes `BlobCoordinationPathError("CAS coordination
+  lock path is unavailable")`. Both preserve the original exception as
+  `__cause__`.
+- `_prepare_lock_path()` retains its existing typed path-error translation and
+  is not double-wrapped. The successful acquired-path check retains its
+  fail-closed behavior. Stable path derivation and the 10-second bound are
+  unchanged.
+- Both translations raise into the existing outer acquisition cleanup. Because
+  `process_acquired` is still false, it releases the in-process `RLock` exactly
+  once and does not release an unacquired external lock. Failures after a
+  successful external acquisition release both locks once. Normal release and
+  nested re-entrant acquisition are unchanged.
+- The exception boundary does not include the caller's protected block;
+  application exceptions raised inside `with coordination_lock:` remain
+  unmodified.
+- The stale `app/server.py` comment now states that BlobStore combines
+  same-process re-entrant/thread coordination with an external process-shared
+  CAS lock. `docs/environment.md` now documents typed inaccessible-path and
+  timeout failures. Neither edit changes runtime or API behavior.
+
+### Final-remediation named path-hazard regressions
+
+- `test_external_lock_acquisition_oserror_is_typed_and_releases_thread_lock`
+  deterministically injects the exact `PermissionError` object at external
+  acquisition. It asserts the stable `BlobCoordinationPathError` message,
+  identity-preserved `__cause__`, no protected-section entry, and then acquires
+  and releases the same lock successfully from a different thread. This proves
+  the thread lock is not leaked; a double release would also have changed the
+  asserted translated failure.
+- `test_external_lock_timeout_is_typed_and_releases_thread_lock` preserves the
+  distinct `filelock.Timeout` mapping, cause chaining, no-entry behavior, and
+  successful later acquisition from a different thread.
+- `test_coordination_lock_rejects_unwritable_directory` created a real
+  coordination directory, removed owner write permission, confirmed the
+  effective user could not create a probe, and ran without skipping. External
+  acquisition raised chained `BlobCoordinationPathError`; the body did not
+  execute, the lock leaf was not created, and device/inode/type checks proved
+  the directory was neither deleted nor replaced. Its original permissions
+  were restored unconditionally in `finally`.
+- `test_coordination_lock_rejects_lock_path_occupied_by_directory` created the
+  exact lock-file path as a directory and observed typed rejection before body
+  entry. Device/inode/type checks prove that unsafe directory was not removed,
+  followed, or replaced.
+- `test_coordination_lock_success_is_reentrant_and_reusable` preserves nested
+  same-process success and later cross-thread reuse. Existing regressions retain
+  coordination-directory symlink, coordination path occupied by a regular
+  file, lock-file symlink, stale regular lock files after normal/terminated
+  holders, cross-process contention, terminated-holder recovery, and thread
+  serialization.
+
+### Final-remediation focused, affected, and full-suite evidence
+
+Exact focused commands and results:
+
+```text
+.venv/bin/python -m pytest -p no:cacheprovider \
+  --basetemp=/tmp/r5-final-lock-hazards \
+  tests/test_mesh_concurrency.py -q -ra
+17 passed in 24.44s
+
+.venv/bin/python -m pytest -p no:cacheprovider \
+  --basetemp=/tmp/r5-final-cas \
+  tests/test_mesh_cas_atomicity.py -q -ra
+9 passed in 3.16s
+
+.venv/bin/python -m pytest -p no:cacheprovider \
+  --basetemp=/tmp/r5-final-mesh tests/test_mesh_*.py -q -ra
+410 passed in 38.71s
+```
+
+- BlobStore/project persistence, safe ingestion/source storage, MeshRevision
+  persistence/exact reads, setup invalidation, source supersession, and
+  same-process thread serialization: **100 passed, 1 warning** in **33.08 s**.
+- Migration drift selection: **51 passed** in **10.71 s**. Schema/OpenAPI and
+  version-contract selection: **235 passed** in **5.17 s**. All 35 checked-in
+  payload stamps are current. Frozen fixture, replay-manifest, baseline, and
+  evaluation hashes: **6 passed, 1 warning** in **2.48 s**.
+- The full prescribed command used `PYTHONDONTWRITEBYTECODE=1`, `TMPDIR=/tmp`,
+  `-p no:cacheprovider`, and
+  `--basetemp=/tmp/sim-intent-r5-1-fifth-remediation-full`. Result:
+  **1687 passed, 1 skipped, 0 failed, 0 errors, 1 warning** in **173.65 s**.
+  The exact skip was `tests/test_r3_2b_browser_editor.py:260`: Node.js is
+  unavailable in this Python-only test environment. The warning was the
+  existing Starlette/httpx TestClient deprecation.
+- The complete mesh selection includes the different-`TMPDIR` stable-identity,
+  cross-process contention, and
+  `test_cross_process_failed_cleanup_cannot_delete_committed_mesh_artifacts`
+  durability regressions; all remain green.
+
+### Final environment, integrity, and scope evidence
+
+- The supported `fea` environment retained
+  `LD_PRELOAD=/home/m2227837/miniforge3/envs/fea/lib/libstdc++.so.6`;
+  `.venv/bin/python` resolved to
+  `/home/m2227837/miniforge3/envs/fea/bin/python3.13` and reported Python
+  3.13.14. `scripts/check_env.py` reported CCX 2.23 available and `ENV OK`.
+- An isolated temporary database reported sole Alembic head/current
+  `0005_mesh_domain_persistence`. Migration drift tests passed; migration
+  `0005` was not changed by this final remediation, migrations `0001`-`0004`
+  remain untouched, and no `0006` exists. No database schema change is needed.
+- `scripts/export_schema.py --check`, `scripts/stamp_schema_versions.py
+  --check`, `scripts/export_requirements.py --check`, and `uv lock --check`
+  passed. Dependency and lock files have no diff. All 14 changed/untracked
+  Python files parse as ASTs.
+- Frozen hashes remain
+  `47c0d7275b9a065a7f5e3316ed60b7ffff58913e0b1e5045c857f663e1f6775b`
+  for the 15-case manifest and
+  `adb5201a93f4d4619a84f6b56f3e68ec12f975a345cc78e47178b0d7a719ff53`
+  for the version-aware corpus. Raw STEP and JSON fixture hashes also match
+  their frozen checkout/archive evidence.
+- Node/npm and gitleaks are unavailable. JavaScript syntax and gitleaks
+  execution are therefore not claimed. The corrected bounded filename-only
+  fallback found no private-key header, provider-token prefix, credential
+  assignment, `.env`, PEM, or key file. Docker and uv are available; no
+  install, container rebuild, or unnecessary image validation was performed.
+- Added absolute-path hits are only the prescribed Conda/ABI evidence. The
+  production added-line scope scan found no R6, real-meshing, Gmsh, worker,
+  queue, frontend, OpenAPI, solver, or CAD-to-mesh behavior. Patch backup and
+  unexpected generated-untracked scans are empty; ignored Python caches are
+  not blockers. `git diff --check` passes.
+
+Artifact contracts, topology validation, UUID and mesher-profile contracts,
+MeshRevision schema, APIs/OpenAPI/frontend behavior, meshing, CAD mapping,
+solver behavior, and R6 functionality are unchanged by this final remediation.
+R5.1 remains uncommitted and unapproved. It is ready only for a fifth
+independent read-only verification.
+
+### Fifth independent verification approval
+
+- **Verdict:** `APPROVE`
+- **Branch:** `r5-1-mesh-domain-persistence`
+- **Pre-commit HEAD:** `4e0ae349d26429c32aa44262e61ad1606580f0f2`
+- The fifth independent read-only verification completed with no unresolved
+  BLOCKER, HIGH, MEDIUM, or LOW findings. R5.1 is independently approved and
+  safe to commit locally.
+- Acquisition-time `OSError` is translated to `BlobCoordinationPathError`, and
+  timeout is translated to `BlobCoordinationTimeoutError`; both preserve their
+  exception causes. The process-local thread lock is released correctly after
+  every acquisition failure, and later acquisition succeeds after failures.
+- Path hazards fail closed. The unwritable-directory and lock-as-directory
+  regressions passed. Stable coordination-lock identity is independent of
+  `TMPDIR`; cross-process contention and the cross-process durability
+  regression passed.
+- Topology and quality artifacts remained readable. CAS atomicity passed. Prior
+  artifact, UUID, mesher-profile, ownership, currentness, lineage, idempotency,
+  and exact-read protections remained green.
+- Migration `0005_mesh_domain_persistence` remained the sole head; no migration
+  `0006` exists. No R5.2 or R6 scope creep was found, and repository state
+  matched the approved inventory.
+- Focused results: lock/concurrency **17 passed**; CAS atomicity **9 passed**;
+  all mesh tests **410 passed**; affected persistence, ingestion, supersession,
+  migration, schema, OpenAPI, and hash selection **352 passed**.
+- Full suite: **1687 passed, 1 skipped, 0 failed, 0 errors, 1 warning** in
+  **182.24 seconds**. Skip reason:
+  `tests/test_r3_2b_browser_editor.py`: Node.js unavailable in the Python-only
+  test environment. Warning: existing Starlette TestClient/httpx deprecation
+  warning.
+- Tooling limitations: Node/npm unavailable; Gitleaks unavailable. Bounded
+  fallback scans passed.
+- No remote publication was performed. Any subsequent merge or publication
+  remains a separate explicit user decision.
+
 ## Task 16 — Adopt technical-preview governance and freeze V1
 
 **Status:** COMPLETE — MERGED through pull request #1 on 2026-07-24.

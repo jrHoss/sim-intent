@@ -720,8 +720,9 @@ def create_app(
         try:
             # The inter-process root lock is acquired before every operation
             # that can inspect or mutate the database or blob tree. The
-            # BlobStore RLock remains the narrower in-process coordination
-            # boundary for publication/commit/cleanup across threads.
+            # BlobStore lock adds narrower same-process re-entrant/thread
+            # coordination and an external process-shared CAS lock for
+            # publication/commit/cleanup.
             durable_config.root.mkdir(parents=True, exist_ok=True)
             upgrade_database(durable_config.database_url)
             persistence = Persistence(

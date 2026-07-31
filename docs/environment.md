@@ -140,9 +140,24 @@ operating-system lock named `<hash>.lock` under the dedicated
 The lock is held for the complete application lifespan. A second process must
 use a different absolute `SIM_INTENT_DATA_ROOT` or wait for the owner to exit.
 The external lock file can remain after a crash; operating-system lock
-ownership, rather than file existence, determines availability. Thread-level
-blob publication and cleanup are additionally serialized by an in-process
-lock, but that lock is not the cross-process ownership mechanism.
+ownership, rather than file existence, determines availability.
+Blob publication, referencing database commits, and cleanup are additionally
+serialized by a re-entrant, bounded process-shared CAS lock. For a canonical
+blob root, its exact path is
+`<blob-root-parent>/.sim-intent-locks/cas-<sha256(normcase(blob-root))>.lock`.
+The hidden coordination directory is a sibling of `blobs/`, outside the
+`blobs/sha256/` artifact namespace and its cleanup scans. Its identity does
+not depend on `TMPDIR`, the working directory, a process, or a session;
+resolved and symlinked spellings converge, while different canonical blob
+roots retain different digest-named lock files. Unsafe, inaccessible, symlink,
+and non-directory coordination paths fail closed with
+`BlobCoordinationPathError`, while bounded contention fails with
+`BlobCoordinationTimeoutError`. A stale regular lock file is safe because
+operating-system ownership remains authoritative. Lock ordering is CAS lock
+before any persistence-specific lock and SQLite transaction. The application-
+lifespan data-root lock remains the primary single-owner deployment boundary;
+the CAS lock also protects lower-level persistence and maintenance paths
+instantiated outside that lifespan boundary.
 
 Durable STEP/INP uploads are streamed to `quarantine/` under the same data
 root and published to `blobs/` only after isolated parsing succeeds.

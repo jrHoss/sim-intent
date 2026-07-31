@@ -30,7 +30,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
@@ -40,7 +40,7 @@ from sqlalchemy.orm import (
     sessionmaker,
 )
 
-from app.blob_store import BlobStore, SourceStorageLimitExceededError
+from app.blob_store import BlobIntegrityError, BlobStore, SourceStorageLimitExceededError
 from ir.schema import SimulationIntent
 from ir.canonical import canonical_intent_document
 from ir.versioning import load_simulation_intent
@@ -49,6 +49,17 @@ from geom.identity import (
     HASH_DOMAIN as GEOMETRY_IDENTITY_HASH_DOMAIN,
     deserialize_geometry_identity,
     GeometryIdentityError,
+)
+from mesh.artifacts import (
+    MESH_ARTIFACT_SCHEMA_VERSION,
+    MESH_MEDIA_TYPE,
+    MeshArtifactError,
+    artifact_sha256,
+    canonical_quality_bytes,
+    canonical_topology_bytes,
+    load_quality_artifact,
+    load_topology_artifact,
+    validate_mesh_artifact_pair,
 )
 
 
@@ -88,6 +99,26 @@ class GeometryIdentityArtifactError(RuntimeError):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+class MeshPersistenceError(RuntimeError):
+    """Typed failure suitable for later RFC 9457 translation."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+class MeshOwnershipMismatchError(MeshPersistenceError):
+    pass
+
+
+class MeshLineageConflictError(MeshPersistenceError):
+    pass
+
+
+class MeshRequestConflictError(MeshPersistenceError):
+    pass
 
 
 class PersistenceDatabaseError(RuntimeError):
@@ -201,6 +232,43 @@ class SetupRevision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class MeshRevision(Base):
+    """Immutable mesh artifact pair bound to exact source and setup revisions."""
+
+    __tablename__ = "mesh_revisions"
+    __table_args__ = (
+        UniqueConstraint("project_id", "request_id", name="uq_project_mesh_request_id"),
+        UniqueConstraint(
+            "predecessor_mesh_revision_id",
+            name="uq_mesh_revision_predecessor_successor",
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4_string)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    model_id: Mapped[str] = mapped_column(ForeignKey("models.id", ondelete="CASCADE"), nullable=False, index=True)
+    model_version_id: Mapped[str] = mapped_column(ForeignKey("model_versions.id", ondelete="CASCADE"), nullable=False, index=True)
+    setup_id: Mapped[str] = mapped_column(ForeignKey("simulation_setups.id", ondelete="CASCADE"), nullable=False, index=True)
+    setup_revision_id: Mapped[str] = mapped_column(ForeignKey("setup_revisions.id", ondelete="CASCADE"), nullable=False, index=True)
+    predecessor_mesh_revision_id: Mapped[str | None] = mapped_column(ForeignKey("mesh_revisions.id", ondelete="RESTRICT"), nullable=True)
+    topology_artifact_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    topology_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    topology_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    topology_media_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    topology_schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    quality_artifact_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    quality_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    quality_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    quality_media_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    quality_schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_model_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    mesh_settings_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    mesher_profile_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    mesher_profile_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    canonical_request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 @event.listens_for(ModelVersion, "before_update")
 def _immutable_model_version_payload(_mapper, _connection, target) -> None:
     state = sa_inspect(target)
@@ -221,6 +289,11 @@ def _immutable_setup_revision(*_args) -> None:
 @event.listens_for(GeometryIdentityArtifactRecord, "before_update")
 def _immutable_geometry_identity_artifact(*_args) -> None:
     raise ValueError("GeometryIdentityArtifact records are immutable")
+
+
+@event.listens_for(MeshRevision, "before_update")
+def _immutable_mesh_revision(*_args) -> None:
+    raise ValueError("MeshRevision records are immutable")
 
 
 def canonical_intent(intent: SimulationIntent) -> tuple[str, str]:
@@ -346,9 +419,9 @@ class Persistence:
         version_id: str | None = None,
         geometry_identity_bytes: bytes | None = None,
     ) -> tuple[Model, ModelVersion]:
-        # One process-wide lock is shared by every BlobStore for this canonical
+        # One process-shared lock is reused by every BlobStore for this canonical
         # root. It serializes publication + commit with version allocation and
-        # orphan cleanup, including across separate application/engine instances.
+        # orphan cleanup across application/engine instances and OS processes.
         with self.blobs.coordination_lock:
             digest = self.blobs.digest(content)
             allocated_version_id = version_id or uuid4_string()
@@ -900,6 +973,448 @@ class Persistence:
     def revision_intent(revision: SetupRevision) -> SimulationIntent:
         return load_simulation_intent(revision.intent_json, source="setup revision")
 
+    @staticmethod
+    def _raise_mesh_artifact_error(error: MeshArtifactError) -> None:
+        if error.code == "mesh_ownership_mismatch":
+            raise MeshOwnershipMismatchError(error.code) from error
+        raise MeshPersistenceError(error.code) from error
+
+    def _mesh_request_replay(
+        self, *, project_id: str, request_id: str, request_hash: str
+    ) -> MeshRevision | None:
+        with self.sessions() as session:
+            replay = session.scalar(
+                select(MeshRevision).where(
+                    MeshRevision.project_id == project_id,
+                    MeshRevision.request_id == request_id,
+                )
+            )
+        if replay is None:
+            return None
+        if replay.canonical_request_hash != request_hash:
+            raise MeshRequestConflictError("request_id_conflict")
+        return replay
+
+    def _resolve_mesh_integrity_failure(
+        self,
+        error: IntegrityError,
+        *,
+        project_id: str,
+        request_id: str,
+        request_hash: str,
+    ) -> MeshRevision:
+        """Translate only recognized mesh insertion constraints after rollback."""
+
+        message = str(error.orig)
+        request_unique = (
+            "UNIQUE constraint failed: "
+            "mesh_revisions.project_id, mesh_revisions.request_id"
+        )
+        primary_key_unique = "UNIQUE constraint failed: mesh_revisions.id"
+        if request_unique in message or primary_key_unique in message:
+            replay = self._mesh_request_replay(
+                project_id=project_id,
+                request_id=request_id,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                return replay
+            if primary_key_unique in message:
+                raise MeshLineageConflictError(
+                    "mesh_revision_id_conflict"
+                ) from error
+        if (
+            "UNIQUE constraint failed: "
+            "mesh_revisions.predecessor_mesh_revision_id"
+        ) in message:
+            raise MeshLineageConflictError("mesh_lineage_conflict") from error
+        if "mesh source is stale" in message:
+            raise SetupSourceSupersededError("mesh source is superseded") from error
+        if "invalid mesh revision ownership" in message:
+            raise MeshOwnershipMismatchError("mesh_ownership_mismatch") from error
+        if "invalid mesh revision lineage" in message:
+            raise MeshLineageConflictError("mesh_lineage_conflict") from error
+        raise PersistenceDatabaseError("database write failed") from error
+
+    def _cleanup_failed_mesh_publication(
+        self, *, blob_key: str, created_by_operation: bool
+    ) -> None:
+        """Remove one exact newly-created mesh blob only when still unreferenced.
+
+        Re-acquiring the re-entrant process-shared CAS lock makes the final
+        reference check and unlink indivisible with every mesh publication and
+        commit path, even if this private helper is called outside creation.
+        """
+
+        if not created_by_operation:
+            return
+        with self.blobs.coordination_lock:
+            final_path = self.blobs.path_for_key(blob_key)
+            with self.sessions() as session:
+                referenced = session.scalar(
+                    select(ModelVersion.id)
+                    .where(ModelVersion.blob_key == blob_key)
+                    .limit(1)
+                )
+                if referenced is None:
+                    referenced = session.scalar(
+                        select(MeshRevision.id)
+                        .where(
+                            (MeshRevision.topology_artifact_key == blob_key)
+                            | (MeshRevision.quality_artifact_key == blob_key)
+                        )
+                        .limit(1)
+                    )
+            if (
+                referenced is None
+                and final_path.is_file()
+                and not final_path.is_symlink()
+            ):
+                final_path.unlink()
+
+    def _best_effort_cleanup_failed_mesh_publications(
+        self, publications: list[tuple[str, bool, bool]]
+    ) -> None:
+        for blob_key, _existed_before, created_by_operation in reversed(
+            publications
+        ):
+            try:
+                self._cleanup_failed_mesh_publication(
+                    blob_key=blob_key,
+                    created_by_operation=created_by_operation,
+                )
+            except Exception:
+                # Cleanup must never replace the authoritative creation failure.
+                continue
+
+    def create_mesh_revision(
+        self, *, project_id: str, model_id: str, model_version_id: str,
+        setup_id: str, setup_revision_id: str,
+        predecessor_mesh_revision_id: str | None, request_id: str,
+        topology: dict, quality: dict,
+    ) -> MeshRevision:
+        """Validate and atomically persist an exact immutable artifact pair."""
+
+        mesh_revision_id = topology.get("mesh_revision_id")
+        if not isinstance(mesh_revision_id, str):
+            raise MeshPersistenceError("malformed_mesh_artifact")
+        try:
+            if str(uuid.UUID(mesh_revision_id)) != mesh_revision_id:
+                raise ValueError
+        except (ValueError, AttributeError) as exc:
+            raise MeshPersistenceError("malformed_mesh_artifact") from exc
+        try:
+            topology_bytes = canonical_topology_bytes(topology)
+            topology_document = load_topology_artifact(topology_bytes)
+            quality_bytes = canonical_quality_bytes(quality)
+            quality_document = load_quality_artifact(quality_bytes)
+            topology_digest = artifact_sha256(topology_bytes)
+            quality_digest = artifact_sha256(quality_bytes)
+            binding = {
+                "mesh_revision_id": mesh_revision_id,
+                "project_id": project_id,
+                "model_id": model_id,
+                "model_version_id": model_version_id,
+                "setup_id": setup_id,
+                "setup_revision_id": setup_revision_id,
+            }
+            validate_mesh_artifact_pair(
+                topology_document,
+                quality_document,
+                topology_sha256=topology_digest,
+                expected_binding=binding,
+            )
+        except MeshArtifactError as exc:
+            self._raise_mesh_artifact_error(exc)
+            raise AssertionError("unreachable")
+
+        request_hash = canonical_fingerprint({
+            **binding,
+            "predecessor_mesh_revision_id": predecessor_mesh_revision_id,
+            "topology_sha256": topology_digest,
+            "quality_sha256": quality_digest,
+            "source_model_sha256": topology_document.source_model_sha256,
+            "mesh_settings_hash": topology_document.mesh_settings_hash,
+            "mesher_profile_id": topology_document.mesher_profile_id,
+            "mesher_profile_version": topology_document.mesher_profile_version,
+        })
+        publications: list[tuple[str, bool, bool]] = []
+        # Global ordering: process-shared CAS -> process-local setup -> SQLite.
+        # The CAS lock spans publication, ownership/currentness validation,
+        # commit, and operation-scoped failure cleanup.  Consequently another
+        # process cannot commit either digest between cleanup's final reference
+        # check and unlink.
+        with self.blobs.coordination_lock, self._setup_lock:
+            replay = self._mesh_request_replay(
+                project_id=project_id,
+                request_id=request_id,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                return replay
+            try:
+                (
+                    topology_key,
+                    topology_existed_before,
+                    topology_created,
+                ) = self.blobs.publish_with_status(
+                    topology_bytes, topology_digest
+                )
+                publications.append(
+                    (
+                        topology_key,
+                        topology_existed_before,
+                        topology_created,
+                    )
+                )
+                (
+                    quality_key,
+                    quality_existed_before,
+                    quality_created,
+                ) = self.blobs.publish_with_status(
+                    quality_bytes, quality_digest
+                )
+                publications.append(
+                    (
+                        quality_key,
+                        quality_existed_before,
+                        quality_created,
+                    )
+                )
+                try:
+                    with self.transaction() as session:
+                        project = session.get(Project, project_id)
+                        model = session.get(Model, model_id)
+                        version = session.get(ModelVersion, model_version_id)
+                        setup = session.get(SimulationSetup, setup_id)
+                        setup_revision = session.get(
+                            SetupRevision, setup_revision_id
+                        )
+                        if project is None:
+                            raise PersistenceNotFoundError("project")
+                        if model is None:
+                            raise PersistenceNotFoundError("model")
+                        if version is None:
+                            raise PersistenceNotFoundError("model version")
+                        if setup is None:
+                            raise PersistenceNotFoundError("setup")
+                        if setup_revision is None:
+                            raise PersistenceNotFoundError("setup revision")
+                        if not (
+                            model.project_id == project_id
+                            and version.model_id == model_id
+                            and setup.project_id == project_id
+                            and setup.model_id == model_id
+                            and setup.model_version_id == model_version_id
+                            and setup_revision.setup_id == setup_id
+                        ):
+                            raise MeshOwnershipMismatchError(
+                                "mesh_ownership_mismatch"
+                            )
+                        if (
+                            model.current_version_id != model_version_id
+                            or version.is_superseded
+                            or setup.is_stale
+                        ):
+                            raise SetupSourceSupersededError(
+                                "mesh source is superseded"
+                            )
+                        if (
+                            version.source_sha256
+                            != topology_document.source_model_sha256
+                        ):
+                            raise MeshPersistenceError("source_hash_mismatch")
+                        predecessor = None
+                        if predecessor_mesh_revision_id is not None:
+                            predecessor = session.get(
+                                MeshRevision, predecessor_mesh_revision_id
+                            )
+                            if predecessor is None:
+                                raise PersistenceNotFoundError(
+                                    "predecessor mesh revision"
+                                )
+                            if not (
+                                predecessor.project_id == project_id
+                                and predecessor.model_id == model_id
+                                and predecessor.model_version_id
+                                == model_version_id
+                                and predecessor.source_model_sha256
+                                == version.source_sha256
+                            ):
+                                raise MeshLineageConflictError(
+                                    "mesh_lineage_conflict"
+                                )
+                            successor = session.scalar(
+                                select(MeshRevision.id).where(
+                                    MeshRevision.predecessor_mesh_revision_id
+                                    == predecessor.id
+                                )
+                            )
+                            if successor is not None:
+                                raise MeshLineageConflictError(
+                                    "mesh_lineage_conflict"
+                                )
+                        record = MeshRevision(
+                            id=mesh_revision_id,
+                            project_id=project_id,
+                            model_id=model_id,
+                            model_version_id=model_version_id,
+                            setup_id=setup_id,
+                            setup_revision_id=setup_revision_id,
+                            predecessor_mesh_revision_id=(
+                                predecessor_mesh_revision_id
+                            ),
+                            topology_artifact_key=topology_key,
+                            topology_sha256=topology_digest,
+                            topology_size_bytes=len(topology_bytes),
+                            topology_media_type=MESH_MEDIA_TYPE,
+                            topology_schema_version=(
+                                MESH_ARTIFACT_SCHEMA_VERSION
+                            ),
+                            quality_artifact_key=quality_key,
+                            quality_sha256=quality_digest,
+                            quality_size_bytes=len(quality_bytes),
+                            quality_media_type=MESH_MEDIA_TYPE,
+                            quality_schema_version=MESH_ARTIFACT_SCHEMA_VERSION,
+                            source_model_sha256=(
+                                topology_document.source_model_sha256
+                            ),
+                            mesh_settings_hash=(
+                                topology_document.mesh_settings_hash
+                            ),
+                            mesher_profile_id=(
+                                topology_document.mesher_profile_id
+                            ),
+                            mesher_profile_version=(
+                                topology_document.mesher_profile_version
+                            ),
+                            request_id=request_id,
+                            canonical_request_hash=request_hash,
+                            created_at=datetime.now(timezone.utc),
+                        )
+                        session.add(record)
+                        session.flush()
+                except IntegrityError as exc:
+                    return self._resolve_mesh_integrity_failure(
+                        exc,
+                        project_id=project_id,
+                        request_id=request_id,
+                        request_hash=request_hash,
+                    )
+                except SQLAlchemyError as exc:
+                    raise PersistenceDatabaseError(
+                        "database write failed"
+                    ) from exc
+                return record
+            except Exception:
+                self._best_effort_cleanup_failed_mesh_publications(publications)
+                raise
+
+    def read_mesh_revision(
+        self, mesh_revision_id: str, *, project_id: str, model_id: str,
+        model_version_id: str, setup_id: str, setup_revision_id: str,
+    ) -> tuple[MeshRevision, bytes, bytes]:
+        """Fail-closed exact read; never resolves a current or latest parent."""
+
+        binding = {
+            "mesh_revision_id": mesh_revision_id,
+            "project_id": project_id,
+            "model_id": model_id,
+            "model_version_id": model_version_id,
+            "setup_id": setup_id,
+            "setup_revision_id": setup_revision_id,
+        }
+        with self.sessions() as session:
+            record = session.get(MeshRevision, mesh_revision_id)
+            if record is None:
+                raise PersistenceNotFoundError("mesh revision")
+            record_binding = {
+                "mesh_revision_id": record.id,
+                "project_id": record.project_id,
+                "model_id": record.model_id,
+                "model_version_id": record.model_version_id,
+                "setup_id": record.setup_id,
+                "setup_revision_id": record.setup_revision_id,
+            }
+            if record_binding != binding:
+                raise MeshOwnershipMismatchError("mesh_ownership_mismatch")
+            if (
+                record.topology_media_type != MESH_MEDIA_TYPE
+                or record.quality_media_type != MESH_MEDIA_TYPE
+                or record.topology_schema_version
+                != MESH_ARTIFACT_SCHEMA_VERSION
+                or record.quality_schema_version
+                != MESH_ARTIFACT_SCHEMA_VERSION
+            ):
+                raise MeshPersistenceError("unsupported_artifact_version")
+            project = session.get(Project, project_id)
+            model = session.get(Model, model_id)
+            version = session.get(ModelVersion, model_version_id)
+            setup = session.get(SimulationSetup, setup_id)
+            setup_revision = session.get(SetupRevision, setup_revision_id)
+            if (
+                project is None
+                or model is None
+                or version is None
+                or setup is None
+                or setup_revision is None
+                or not (
+                    model.project_id == project_id
+                    and version.model_id == model_id
+                    and setup.project_id == project_id
+                    and setup.model_id == model_id
+                    and setup.model_version_id == model_version_id
+                    and setup_revision.setup_id == setup_id
+                    and version.source_sha256 == record.source_model_sha256
+                )
+            ):
+                raise MeshOwnershipMismatchError("mesh_ownership_mismatch")
+            if record.predecessor_mesh_revision_id is not None:
+                predecessor = session.get(
+                    MeshRevision, record.predecessor_mesh_revision_id
+                )
+                if predecessor is None or not (
+                    predecessor.project_id == project_id
+                    and predecessor.model_id == model_id
+                    and predecessor.model_version_id == model_version_id
+                    and predecessor.source_model_sha256
+                    == record.source_model_sha256
+                ):
+                    raise MeshLineageConflictError("mesh_lineage_conflict")
+        try:
+            topology_bytes = self.blobs.read(
+                record.topology_artifact_key,
+                record.topology_sha256,
+                record.topology_size_bytes,
+            )
+            quality_bytes = self.blobs.read(
+                record.quality_artifact_key,
+                record.quality_sha256,
+                record.quality_size_bytes,
+            )
+            topology_document = load_topology_artifact(topology_bytes)
+            quality_document = load_quality_artifact(quality_bytes)
+            validate_mesh_artifact_pair(
+                topology_document,
+                quality_document,
+                topology_sha256=record.topology_sha256,
+                expected_binding=binding,
+                expected_source_model_sha256=record.source_model_sha256,
+                expected_mesh_settings_hash=record.mesh_settings_hash,
+                expected_mesher_profile_id=record.mesher_profile_id,
+                expected_mesher_profile_version=(
+                    record.mesher_profile_version
+                ),
+            )
+        except (BlobIntegrityError, OSError) as exc:
+            raise MeshPersistenceError(
+                "mesh_artifact_integrity_failure"
+            ) from exc
+        except MeshArtifactError as exc:
+            self._raise_mesh_artifact_error(exc)
+            raise AssertionError("unreachable")
+        return record, topology_bytes, quality_bytes
+
     def read_version_bytes(self, version: ModelVersion) -> bytes:
         return self.blobs.read(version.blob_key, version.source_sha256, version.size_bytes)
 
@@ -910,6 +1425,8 @@ class Persistence:
         with self.blobs.coordination_lock:
             with self.sessions() as session:
                 referenced = set(session.scalars(select(ModelVersion.blob_key)))
+                referenced.update(session.scalars(select(MeshRevision.topology_artifact_key)))
+                referenced.update(session.scalars(select(MeshRevision.quality_artifact_key)))
             candidates = [
                 path
                 for path in self.blobs.iter_final_blobs()
@@ -926,6 +1443,13 @@ class Persistence:
                         .where(ModelVersion.blob_key == key)
                         .limit(1)
                     )
+                    if now_referenced is None:
+                        now_referenced = session.scalar(
+                            select(MeshRevision.id).where(
+                                (MeshRevision.topology_artifact_key == key)
+                                | (MeshRevision.quality_artifact_key == key)
+                            ).limit(1)
+                        )
                 try:
                     if (
                         now_referenced is None
