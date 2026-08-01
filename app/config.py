@@ -20,6 +20,10 @@ class LocalDataConfig:
     max_source_storage_bytes: int = 1024 * 1024 * 1024
     parser_timeout_seconds: float = 30.0
     parser_output_bytes: int = 256 * 1024
+    mesher_timeout_seconds: float = 120.0
+    mesher_output_bytes: int = 64 * 1024 * 1024
+    gmsh_slot_wait_seconds: float = 5.0
+    gmsh_slot_max_pending: int = 2
     stale_quarantine_age_seconds: float = 3600.0
     stale_quarantine_cleanup_limit: int = 100
 
@@ -36,6 +40,18 @@ class LocalDataConfig:
             raise ValueError("maximum source storage bytes must be a positive integer")
         if not math.isfinite(self.parser_timeout_seconds) or self.parser_timeout_seconds <= 0 or self.parser_output_bytes <= 0:
             raise ValueError("parser limits must be positive")
+        if (
+            not math.isfinite(self.mesher_timeout_seconds)
+            or self.mesher_timeout_seconds <= 0
+            or self.mesher_output_bytes <= 0
+        ):
+            raise ValueError("mesher limits must be positive")
+        if (
+            not math.isfinite(self.gmsh_slot_wait_seconds)
+            or self.gmsh_slot_wait_seconds <= 0
+            or self.gmsh_slot_max_pending <= 0
+        ):
+            raise ValueError("Gmsh coordination limits must be positive")
         if not math.isfinite(self.stale_quarantine_age_seconds) or self.stale_quarantine_age_seconds < 0:
             raise ValueError("stale quarantine age must be non-negative")
         if self.stale_quarantine_cleanup_limit <= 0:
@@ -81,6 +97,10 @@ class LocalDataConfig:
             max_source_storage_bytes=_positive_int("SIM_INTENT_MAX_SOURCE_STORAGE_BYTES", 1024 * 1024 * 1024),
             parser_timeout_seconds=_positive_float("SIM_INTENT_PARSER_TIMEOUT_SECONDS", 30.0),
             parser_output_bytes=_positive_int("SIM_INTENT_PARSER_OUTPUT_BYTES", 256 * 1024),
+            mesher_timeout_seconds=_positive_float("SIM_INTENT_MESHER_TIMEOUT_SECONDS", 120.0),
+            mesher_output_bytes=_positive_int("SIM_INTENT_MESHER_OUTPUT_BYTES", 64 * 1024 * 1024),
+            gmsh_slot_wait_seconds=_positive_float("SIM_INTENT_GMSH_SLOT_WAIT_SECONDS", 5.0),
+            gmsh_slot_max_pending=_positive_int("SIM_INTENT_GMSH_SLOT_MAX_PENDING", 2),
             stale_quarantine_age_seconds=_nonnegative_float("SIM_INTENT_STALE_QUARANTINE_AGE_SECONDS", 3600.0),
             stale_quarantine_cleanup_limit=_positive_int("SIM_INTENT_STALE_QUARANTINE_CLEANUP_LIMIT", 100),
         )
@@ -101,6 +121,10 @@ class LocalDataConfig:
             if self.quarantine_directory is not None
             else (self.root / "quarantine").resolve()
         )
+
+    @property
+    def worker_root(self) -> Path:
+        return (self.root / "workers").resolve()
 
     @property
     def database_url(self) -> str:

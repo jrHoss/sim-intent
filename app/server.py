@@ -45,7 +45,9 @@ from app.blob_store import (
     BlobStore, BlobIntegrityError, SourceStorageLimitExceededError,
 )
 from app.config import LocalDataConfig
+from app.gmsh_coordinator import GmshExecutionCoordinator
 from app.ingestion import IngestionService, QuarantinedUpload
+from app.meshing import MeshingService
 from app.data_root_lock import DataRootLock
 from app.migrations import upgrade_database
 from app.persistence import (
@@ -731,8 +733,16 @@ def create_app(
                 max_source_storage_bytes=durable_config.max_source_storage_bytes,
             )
             application.state.persistence = persistence
-            ingestion = IngestionService(durable_config)
+            gmsh_coordinator = GmshExecutionCoordinator(
+                wait_timeout_seconds=durable_config.gmsh_slot_wait_seconds,
+                max_pending=durable_config.gmsh_slot_max_pending,
+            )
+            ingestion = IngestionService(durable_config, gmsh_coordinator)
             application.state.ingestion = ingestion
+            application.state.gmsh_coordinator = gmsh_coordinator
+            application.state.meshing = MeshingService(
+                persistence, gmsh_coordinator, durable_config
+            )
             application.state.data_config = durable_config
             persistence.blobs.cleanup_temporary()
             ingestion.cleanup_stale()
@@ -744,6 +754,10 @@ def create_app(
                 del application.state.persistence
             if hasattr(application.state, "ingestion"):
                 del application.state.ingestion
+            if hasattr(application.state, "meshing"):
+                del application.state.meshing
+            if hasattr(application.state, "gmsh_coordinator"):
+                del application.state.gmsh_coordinator
             root_lock.release()
 
     app = FastAPI(

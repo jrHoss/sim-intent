@@ -18,6 +18,10 @@ from pathlib import Path
 from fastapi import Request
 
 from app.config import LocalDataConfig
+from app.gmsh_coordinator import (
+    GmshCoordinationError,
+    GmshExecutionCoordinator,
+)
 from app.problems import ApiProblem
 
 SUPPORTED = {".step": "step", ".stp": "step", ".inp": "inp"}
@@ -37,10 +41,17 @@ class QuarantinedUpload:
 
 
 class IngestionService:
-    def __init__(self, config: LocalDataConfig):
+    def __init__(
+        self, config: LocalDataConfig,
+        gmsh_coordinator: GmshExecutionCoordinator | None = None,
+    ):
         self.config = config
         self.root = config.quarantine_root.resolve()
         self._worker_command_prefix: list[str] | None = None
+        self.gmsh_coordinator = gmsh_coordinator or GmshExecutionCoordinator(
+            wait_timeout_seconds=config.gmsh_slot_wait_seconds,
+            max_pending=config.gmsh_slot_max_pending,
+        )
 
     def cleanup_stale(self) -> int:
         if not self.root.is_dir() or self.root.is_symlink():
@@ -253,6 +264,25 @@ class IngestionService:
                 path.unlink(missing_ok=True)
 
     async def parse(
+        self, upload: QuarantinedUpload, trace_id: str | None = None
+    ) -> dict:
+        if upload.kind != "step":
+            return await self._parse_isolated(upload, trace_id)
+        try:
+            async with self.gmsh_coordinator.acquire("parse"):
+                return await self._parse_isolated(upload, trace_id)
+        except GmshCoordinationError as exc:
+            title = (
+                "Geometry worker busy"
+                if exc.code == "gmsh_slot_saturated"
+                else "Geometry worker wait timed out"
+            )
+            raise _problem(
+                503, exc.code, title,
+                "The shared geometry execution slot is temporarily unavailable.",
+            ) from exc
+
+    async def _parse_isolated(
         self, upload: QuarantinedUpload, trace_id: str | None = None
     ) -> dict:
         prefix = self._worker_command_prefix or [

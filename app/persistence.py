@@ -848,6 +848,10 @@ class Persistence:
                 SetupRevision.revision == revision,
             ))
 
+    def get_setup_revision_by_id(self, revision_id: str) -> SetupRevision | None:
+        with self.sessions() as session:
+            return session.get(SetupRevision, revision_id)
+
     def get_revision_by_request(self, setup_id: str, request_id: str) -> SetupRevision | None:
         with self.sessions() as session:
             return session.scalar(select(SetupRevision).where(
@@ -994,6 +998,17 @@ class Persistence:
         if replay.canonical_request_hash != request_hash:
             raise MeshRequestConflictError("request_id_conflict")
         return replay
+
+    def get_mesh_revision_by_request(
+        self, *, project_id: str, request_id: str
+    ) -> MeshRevision | None:
+        """Read an existing service request without weakening R5.1 replay."""
+
+        with self.sessions() as session:
+            return session.scalar(select(MeshRevision).where(
+                MeshRevision.project_id == project_id,
+                MeshRevision.request_id == request_id,
+            ))
 
     def _resolve_mesh_integrity_failure(
         self,
@@ -1211,6 +1226,10 @@ class Persistence:
                             raise MeshOwnershipMismatchError(
                                 "mesh_ownership_mismatch"
                             )
+                        if setup.current_revision != setup_revision.revision:
+                            raise SetupRevisionConflictError(
+                                "stale setup revision"
+                            )
                         if (
                             model.current_version_id != model_version_id
                             or version.is_superseded
@@ -1224,33 +1243,79 @@ class Persistence:
                             != topology_document.source_model_sha256
                         ):
                             raise MeshPersistenceError("source_hash_mismatch")
-                        predecessor = None
-                        if predecessor_mesh_revision_id is not None:
-                            predecessor = session.get(
-                                MeshRevision, predecessor_mesh_revision_id
+                        # The outer process-shared CAS lock serializes this
+                        # root/leaf check with every publication, including
+                        # across backend processes. No migration is required.
+                        existing_mesh_identity = session.get(
+                            MeshRevision, mesh_revision_id
+                        )
+                        lineage = list(session.scalars(
+                            select(MeshRevision).where(
+                                MeshRevision.project_id == project_id,
+                                MeshRevision.model_id == model_id,
+                                MeshRevision.model_version_id
+                                == model_version_id,
+                                MeshRevision.source_model_sha256
+                                == version.source_sha256,
                             )
-                            if predecessor is None:
-                                raise PersistenceNotFoundError(
-                                    "predecessor mesh revision"
+                        ))
+                        if existing_mesh_identity is not None:
+                            pass
+                        elif not lineage:
+                            if predecessor_mesh_revision_id is not None:
+                                raise MeshLineageConflictError(
+                                    "mesh_lineage_conflict"
                                 )
-                            if not (
-                                predecessor.project_id == project_id
-                                and predecessor.model_id == model_id
-                                and predecessor.model_version_id
-                                == model_version_id
-                                and predecessor.source_model_sha256
-                                == version.source_sha256
+                        else:
+                            lineage_ids = {item.id for item in lineage}
+                            roots = [
+                                item for item in lineage
+                                if item.predecessor_mesh_revision_id is None
+                            ]
+                            successor_counts: dict[str, int] = {}
+                            successor_by_parent: dict[str, str] = {}
+                            for item in lineage:
+                                parent_id = item.predecessor_mesh_revision_id
+                                if parent_id is None:
+                                    continue
+                                if parent_id not in lineage_ids:
+                                    raise MeshLineageConflictError(
+                                        "mesh_lineage_conflict"
+                                    )
+                                successor_counts[parent_id] = (
+                                    successor_counts.get(parent_id, 0) + 1
+                                )
+                                successor_by_parent[parent_id] = item.id
+                            leaves = [
+                                item for item in lineage
+                                if item.id not in successor_counts
+                            ]
+                            if (
+                                len(roots) != 1
+                                or len(leaves) != 1
+                                or any(
+                                    count != 1
+                                    for count in successor_counts.values()
+                                )
                             ):
                                 raise MeshLineageConflictError(
                                     "mesh_lineage_conflict"
                                 )
-                            successor = session.scalar(
-                                select(MeshRevision.id).where(
-                                    MeshRevision.predecessor_mesh_revision_id
-                                    == predecessor.id
+                            visited: set[str] = set()
+                            cursor: str | None = roots[0].id
+                            while cursor is not None:
+                                if cursor in visited:
+                                    raise MeshLineageConflictError(
+                                        "mesh_lineage_conflict"
+                                    )
+                                visited.add(cursor)
+                                cursor = successor_by_parent.get(cursor)
+                            if visited != lineage_ids:
+                                raise MeshLineageConflictError(
+                                    "mesh_lineage_conflict"
                                 )
-                            )
-                            if successor is not None:
+
+                            if predecessor_mesh_revision_id != leaves[0].id:
                                 raise MeshLineageConflictError(
                                     "mesh_lineage_conflict"
                                 )
