@@ -75,6 +75,12 @@ export const durableApi = {
   readModelVersion: (versionId) => apiRequest(`/api/v1/model-versions/${versionId}`),
   listModelVersions: (modelId) => apiRequest(`/api/v1/models/${modelId}/versions`),
   readInventory: (versionId) => apiRequest(`/api/v1/model-versions/${versionId}/inventory`),
+  // Read-only backend evidence for the live viewer selection. The browser
+  // never resolves stable identities itself; it only displays what this
+  // authoritative endpoint already published.
+  readGeometryIdentity: (versionId) => apiRequest(
+    `/api/v1/model-versions/${versionId}/geometry-identity`,
+  ),
   listSetups: (projectId) => apiRequest(`/api/v1/projects/${projectId}/setups`),
   createSetup: (projectId, body) => apiRequest(
     `/api/v1/projects/${projectId}/setups`,

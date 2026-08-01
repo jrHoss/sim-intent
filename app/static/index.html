@@ -302,7 +302,8 @@
                   </select>
                 </label>
                 <label>Engineering target <select id="bc-target"></select></label>
-                <p class="selection-hint">Viewer selection: <strong id="bc-viewer-selection">None</strong>. Selection is not confirmation.</p>
+                <p class="selection-hint">Viewer selection: <strong id="bc-viewer-selection">None</strong>. Selection is not confirmation. The face tag is local viewer evidence; stable identity is assigned by the backend.</p>
+                <p class="selection-hint" id="bc-selection-evidence" hidden></p>
                 <fieldset id="bc-fixed-fields" class="axis-fields">
                   <legend>Fixed components</legend>
                   <label><input type="checkbox" name="fixed_axis" value="x"> X</label>
@@ -338,7 +339,8 @@
                   </select>
                 </label>
                 <label id="load-target-label">Engineering target <select id="load-target"></select></label>
-                <p class="selection-hint">Viewer selection: <strong id="load-viewer-selection">None</strong>. Selection is not confirmation.</p>
+                <p class="selection-hint">Viewer selection: <strong id="load-viewer-selection">None</strong>. Selection is not confirmation. The face tag is local viewer evidence; stable identity is assigned by the backend.</p>
+                <p class="selection-hint" id="load-selection-evidence" hidden></p>
                 <label>Magnitude
                   <span class="quantity-row">
                     <input id="load-magnitude" type="number" step="any" required>

@@ -225,10 +225,27 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22.14.0"
-      - name: Legacy JavaScript syntax
+      # R4b.3: the durable editor and its API client had no enforced CI
+      # coverage, which is how a stale browser schema version and a forbidden
+      # CAD entity_ids projection reached main. Every browser file is syntax
+      # checked here.
+      - name: Browser JavaScript syntax
         run: |
           node --check app/static/app.js
           node --check app/static/audit.js
+          node --check app/static/engineering.js
+          node --check app/static/durable-api.js
+          node --check app/static/grounding-highlights.js
+      # These harnesses exercise real DOM state. They skip in the Python-only
+      # backend job, so this Node-pinned job is where they must not skip.
+      - name: Executable durable browser DOM harnesses
+        env:
+          SIM_INTENT_ROOT: ${{ github.workspace }}
+        run: |
+          node --no-warnings --experimental-loader ./tests/js/r3_2b_loader.mjs \
+            ./tests/js/r3_2b_harness.mjs
+          node --no-warnings --experimental-loader ./tests/js/r3_2b_loader.mjs \
+            ./tests/js/r4b3_harness.mjs
       # Task 19 (ADR-004): the checked-in generated client types must match the
       # authoritative OpenAPI document exactly. Regenerating and diffing is the
       # drift gate. `npm ci` installs from the committed lockfile only.

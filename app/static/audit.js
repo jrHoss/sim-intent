@@ -49,9 +49,14 @@ function renderRegion(region) {
   card.append(heading);
 
   const ids = regionEntityIds(region).map((id) => String(id)).join(", ");
+  // A CAD source face tag is ModelVersion-local viewer evidence, not entity
+  // membership; labelling it "Entities" would overstate what it authorizes.
+  const entityLabel = region.entity_type === "cad_face"
+    ? "Source face tags (non-authoritative)"
+    : "Entities";
   const facts = element("dl", "audit-facts");
   for (const [label, value] of [
-    ["Entities", ids],
+    [entityLabel, ids],
     ["Source", region.source_instruction],
     ["Method", region.selection_method],
     ["Confidence", Number(region.confidence).toFixed(3)],
