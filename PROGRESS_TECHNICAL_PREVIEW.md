@@ -4,6 +4,53 @@
 > `LEAN_RELEASE_PLAN.md` supersedes the older active task sequence in
 > `TECHNICAL_PREVIEW_PLAN.md`. Historical entries below remain unchanged.
 
+## R5.2 local implementation commit and completion (2026-08-01)
+
+R5.2 is complete locally on branch
+`r5-2-deterministic-step-meshing-service`. Starting from previous HEAD
+`cc6ed16d2e260fb5bb409152da6e14add4a52dd5`, the exact approved implementation
+was committed locally as `63196fac62605ba6944bc56c446891ee9a38528f` with
+subject `feat(mesh): add deterministic STEP meshing service`.
+
+- **Author identity:** Both repository-local and global Git `user.name` and
+  `user.email` were unset. Recent local history consistently identifies the
+  human author name as `jrHoss`, and the exact parent commit was authored and
+  committed by `jrHoss <103708924+jrHoss@users.noreply.github.com>`. That exact
+  parent identity was therefore supplied to the commit command without
+  changing Git configuration.
+- **Exact committed inventory:** Exactly 15 paths were committed: `NOW.md`,
+  `PROGRESS_TECHNICAL_PREVIEW.md`, `app/config.py`,
+  `app/gmsh_coordinator.py`, `app/ingestion.py`, `app/mesh_worker.py`,
+  `app/meshing.py`, `app/persistence.py`, `app/server.py`,
+  `docs/environment.md`, `mesh/generation.py`, `mesh/profile.py`,
+  `tests/fake_mesh_worker.py`, `tests/test_mesh_generation.py`, and
+  `tests/test_meshing_service.py`.
+- **Review completion:** The fourth fresh independent verdict was `APPROVE`.
+  No unresolved BLOCKER, HIGH, MEDIUM, or LOW finding remains, and all
+  historical R5.2 findings are closed.
+- **Frozen production identity:** The current production profile is version 3
+  with fingerprint
+  `80a8bd69b12ac4f132c4231fe7a38dec2dc67d1e6b7f26c8bc5e09b14322a1d5` and
+  resolved identity
+  `gmsh_tet_v1@3:80a8bd69b12ac4f132c4231fe7a38dec2dc67d1e6b7f26c8bc5e09b14322a1d5`.
+- **Final verification evidence:** The independently verified full suite
+  completed with **1,773 passed** and **2 expected skips**, with no failures or
+  errors. Verification found no migration `0006`, dependency or lockfile
+  change, artifact-schema change, API/OpenAPI or generated-TypeScript drift,
+  frontend change, R6 mapping, solver/deck/job/result work, frozen fixture or
+  frozen-evaluation change, or added workstation-specific path. The migration
+  chain remained linear with sole head `0005_mesh_domain_persistence`.
+- **Accepted limitations:** Deterministic byte identity remains scoped to the
+  pinned supported Gmsh/platform/runtime. Gmsh coordination is in-process for
+  the supported one-backend-process deployment. No OS-level CPU, memory, disk,
+  network-namespace, or hostile-upload sandbox is claimed. Distributed jobs
+  remain outside R5.2, and the documented optional CCX and Node-dependent
+  checks may remain unavailable.
+- **Local-only status:** The implementation commit exists only locally on
+  `compass29`. No push, merge, tag, or remote publication occurred. Any future
+  merge, push, publication, or release requires separate explicit
+  authorization.
+
 ## R5.2 — Deterministic STEP meshing service remediation (working tree, 2026-08-01)
 
 ### Fourth independent verification approval and commit readiness

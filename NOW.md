@@ -19,8 +19,8 @@ production profile is version 3 with fingerprint
 resolved identity
 `gmsh_tet_v1@3:80a8bd69b12ac4f132c4231fe7a38dec2dc67d1e6b7f26c8bc5e09b14322a1d5`.
 The fourth independent full suite passed **1,773** tests with **2 expected
-skips**, and R5.2 stayed within its approved scope. Nothing has been staged,
-committed, pushed, merged, or remotely published. The branch is ready for a
-separately authorized local commit, but commit remains unauthorized until the
-user explicitly approves it; any later merge or publication requires a
-separate decision.
+skips**, and R5.2 stayed within its approved scope. The local implementation
+commit is `63196fac62605ba6944bc56c446891ee9a38528f` with subject
+`feat(mesh): add deterministic STEP meshing service`. No push, merge, tag, or
+remote publication occurred. Any future merge, push, publication, or release
+requires separate explicit authorization.
