@@ -1351,6 +1351,162 @@ def test_setup_database_failures_are_sanitized_and_atomic(
             ) == 0
 
 
+def _browser_unresolved_cad_intent(version_id: str, region_id: str) -> dict:
+    """The exact browser payload a STEP viewer click submits.
+
+    No stable identity, no artifact digest and no ``entity_ids`` — only an
+    unresolved claim, which is what forces the route-layer resolution reads.
+    """
+
+    body = intent_payload()
+    body["regions"] = [
+        {
+            "id": region_id,
+            "entity_type": "cad_face",
+            "cad_face_target": {
+                "resolution": "unresolved",
+                "model_version_id": version_id,
+                "source_face_tags": [1],
+            },
+            "selection_method": "user_click",
+            "confidence": 1.0,
+            "source_instruction": "Use selected viewer face_1.",
+            "status": "proposed",
+        }
+    ]
+    body["bcs"] = []
+    body["loads"] = []
+    return body
+
+
+def _durable_counts(persistence, project_id: str) -> tuple[int, int]:
+    with persistence.engine.connect() as connection:
+        setups = connection.scalar(
+            text(
+                "SELECT count(*) FROM simulation_setups "
+                "WHERE project_id=:project_id"
+            ),
+            {"project_id": project_id},
+        )
+        revisions = connection.scalar(
+            text(
+                "SELECT count(*) FROM setup_revisions WHERE setup_id IN "
+                "(SELECT id FROM simulation_setups WHERE project_id=:pid)"
+            ),
+            {"pid": project_id},
+        )
+    return setups, revisions
+
+
+@pytest.mark.parametrize("route", ["create", "mutate"])
+def test_cad_resolution_database_failures_are_sanitized_and_atomic(
+    tmp_path, monkeypatch, route
+):
+    """A database outage on the route-layer CAD resolution reads stays RFC 9457.
+
+    Resolving an unresolved ``cad_face_target`` reads the ModelVersion, the
+    setup and the persisted geometry-identity artifact *before* anything is
+    written. The setup routes recognize ``PersistenceDatabaseError`` alone, so
+    an unwrapped ``SQLAlchemyError`` here answered an unsanitized
+    ``text/plain`` 500 — the one path R4b.3 exists to enable, and the one the
+    INP-shaped parametrisation above can never reach.
+    """
+
+    config = LocalDataConfig(tmp_path / "data")
+    app = create_app(
+        tmp_path / "legacy", mode=RuntimeMode.TEST, data_config=config
+    )
+    with TestClient(app, raise_server_exceptions=False) as client:
+        project_id = _project(client)
+        uploaded = _upload(client, project_id)
+        version_id = uploaded["model_version"]["id"]
+        assert uploaded["model_version"]["model_kind"] == "step"
+        persistence = app.state.persistence
+
+        if route == "mutate":
+            base = intent_payload()
+            base["regions"] = []
+            base["bcs"] = []
+            base["loads"] = []
+            created = client.post(
+                f"/api/v1/projects/{project_id}/setups",
+                json={
+                    "model_id": uploaded["model_id"],
+                    "model_version_id": version_id,
+                    "request_id": "base",
+                    "intent": base,
+                },
+            )
+            assert created.status_code == 201, created.text
+            setup_id = created.json()["setup"]["id"]
+
+        before = _durable_counts(persistence, project_id)
+
+        # Exactly the read the resolution path performs on this route.
+        failing = "ModelVersion" if route == "create" else "SimulationSetup"
+        original_get = Session.get
+
+        def fail_get(session, entity, *args, **kwargs):
+            if getattr(entity, "__name__", "") == failing:
+                raise SQLAlchemyError(
+                    "sensitive resolution read details: "
+                    "SELECT * FROM model_versions WHERE id='...'"
+                )
+            return original_get(session, entity, *args, **kwargs)
+
+        monkeypatch.setattr(Session, "get", fail_get)
+
+        intent = _browser_unresolved_cad_intent(version_id, "clicked_region")
+        if route == "create":
+            response = client.post(
+                f"/api/v1/projects/{project_id}/setups",
+                json={
+                    "model_id": uploaded["model_id"],
+                    "model_version_id": version_id,
+                    "request_id": "resolution-failure",
+                    "intent": intent,
+                },
+            )
+        else:
+            response = client.post(
+                f"/api/v1/setups/{setup_id}/revisions",
+                json={
+                    "expected_revision": 1,
+                    "request_id": "resolution-failure",
+                    "intent": intent,
+                },
+            )
+
+        assert response.status_code == 500, response.text
+        assert response.headers["content-type"].startswith(
+            "application/problem+json"
+        )
+        problem = response.json()
+        assert problem["code"] == "setup_database_write_failed"
+        assert problem["status"] == 500
+        assert problem["retryable"] is True
+        assert isinstance(problem["trace_id"], str) and problem["trace_id"]
+        body = response.text
+        for leaked in (
+            "sensitive",
+            "SELECT",
+            "Traceback",
+            "sqlalchemy",
+            "cad_face_target",
+            str(tmp_path),
+            tmp_path.as_posix(),
+        ):
+            assert leaked not in body, leaked
+
+        monkeypatch.undo()
+        assert _durable_counts(persistence, project_id) == before
+        if route == "mutate":
+            reopened = client.get(f"/api/v1/setups/{setup_id}")
+            assert reopened.status_code == 200
+            assert reopened.json()["current"]["revision"] == 1
+            assert reopened.json()["current"]["intent"]["regions"] == []
+
+
 def test_independent_connection_create_and_mutation_races_are_classified(
     tmp_path,
 ):

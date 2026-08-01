@@ -46,6 +46,7 @@ from ir.schema import (
     AmbiguousCadFaceTarget,
     CAD_ENTITY_IDS_FORBIDDEN_CODE,
     EngineeringConsistencyError,
+    Region,
     ResolvedCadFaceTarget,
     SimulationIntent,
     UnresolvedCadFaceTarget,
@@ -101,10 +102,27 @@ class GeometryIdentityArtifactError(RuntimeError):
 
 
 class CadRegionReferenceError(RuntimeError):
-    """Sanitized durable CAD-region validation failure."""
+    """Sanitized durable CAD-region validation failure.
 
-    def __init__(self, code: str):
+    ``region_id`` is the region whose own evidence failed, and ``region_codes``
+    carries every region-scoped failure found in the same pass. Both stay empty
+    for an artifact-scoped failure — a missing, corrupt, unsupported or
+    mis-bound geometry-identity artifact invalidates every region bound to it,
+    so there is no single offending region to name. Keeping the distinction
+    lets the projection attribute a region-specific code to the region that
+    actually earned it instead of to its healthy neighbours.
+    """
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        region_id: str | None = None,
+        region_codes: dict[str, str] | None = None,
+    ):
         self.code = code
+        self.region_id = region_id
+        self.region_codes = dict(region_codes or {})
         super().__init__(code)
 
 
@@ -301,6 +319,22 @@ class Persistence:
             yield
         except SQLAlchemyError as exc:
             raise PersistenceDatabaseError("database write failed") from exc
+
+    @contextmanager
+    def _database_read(self) -> Iterator[None]:
+        """Sanitize a read failure exactly as the write boundary does.
+
+        Route-layer CAD resolution reads the setup, its exact ModelVersion and
+        the persisted geometry-identity artifact *before* anything is written.
+        The setup routes recognize ``PersistenceDatabaseError`` alone, so a raw
+        ``SQLAlchemyError`` escaping these reads would answer an unsanitized
+        ``text/plain`` 500 instead of the established RFC 9457 problem.
+        """
+
+        try:
+            yield
+        except SQLAlchemyError as exc:
+            raise PersistenceDatabaseError("database read failed") from exc
 
     def _cleanup_failed_publication(
         self, *, blob_key: str, final_path: Path, created_by_operation: bool
@@ -652,7 +686,7 @@ class Persistence:
             return list(session.scalars(select(ModelVersion).where(ModelVersion.model_id == model_id).order_by(ModelVersion.version)))
 
     def get_version(self, version_id: str) -> ModelVersion | None:
-        with self.sessions() as session:
+        with self._database_read(), self.sessions() as session:
             return session.get(ModelVersion, version_id)
 
     def read_geometry_identity(
@@ -660,7 +694,7 @@ class Persistence:
     ) -> tuple[GeometryIdentityArtifactRecord, bytes, dict]:
         """Read and fully verify a durable artifact without regenerating it."""
 
-        with self.sessions() as session:
+        with self._database_read(), self.sessions() as session:
             version = session.get(ModelVersion, version_id)
             if version is None:
                 raise PersistenceNotFoundError("model version")
@@ -828,7 +862,7 @@ class Persistence:
             ).order_by(SimulationSetup.created_at, SimulationSetup.id)))
 
     def get_setup(self, setup_id: str) -> SimulationSetup | None:
-        with self.sessions() as session:
+        with self._database_read(), self.sessions() as session:
             return session.get(SimulationSetup, setup_id)
 
     def get_revision(self, setup_id: str, revision: int) -> SetupRevision | None:
@@ -980,7 +1014,7 @@ class Persistence:
     ) -> None:
         """Revalidate against the exact historical artifact without writes."""
 
-        with self.sessions() as session:
+        with self._database_read(), self.sessions() as session:
             setup = session.get(SimulationSetup, setup_id)
             if setup is None:
                 raise PersistenceNotFoundError("setup")
@@ -1057,7 +1091,13 @@ class Persistence:
             str(group["collision_group_id"])
             for group in artifact.collision_groups
         }
-        for region in cad_regions:
+        def check_region(region: Region) -> None:
+            """Validate one region against the already-verified artifact.
+
+            Every failure raised here is region-scoped: it describes this
+            region's own evidence and says nothing about its neighbours.
+            """
+
             target = region.cad_face_target
             if target is None:
                 raise CadRegionReferenceError("cad_region_stable_target_required")
@@ -1077,11 +1117,11 @@ class Persistence:
                     )
                 if region.status == "confirmed":
                     raise CadRegionReferenceError("cad_region_unresolved")
-                continue
+                return
             if target.resolution == "unresolved":
                 if region.status == "confirmed":
                     raise CadRegionReferenceError("cad_region_unresolved")
-                continue
+                return
             if not hmac.compare_digest(
                 target.artifact_sha256 or "", record.integrity_sha256
             ):
@@ -1124,6 +1164,26 @@ class Persistence:
                     raise CadRegionReferenceError(
                         "cad_region_collision_evidence_inconsistent"
                     )
+
+        # Every region is checked so a healthy neighbour is known to be
+        # healthy rather than merely unreached. The raised code and its order
+        # are unchanged — the first failing region still decides the problem
+        # response — but the full per-region map travels with it.
+        region_codes: dict[str, str] = {}
+        for region in cad_regions:
+            try:
+                check_region(region)
+            except CadRegionReferenceError as exc:
+                region_codes.setdefault(region.id, exc.code)
+        if region_codes:
+            first = next(
+                region.id for region in cad_regions if region.id in region_codes
+            )
+            raise CadRegionReferenceError(
+                region_codes[first],
+                region_id=first,
+                region_codes=region_codes,
+            )
 
     @staticmethod
     def _enforce_cad_entity_ids(intent: SimulationIntent) -> None:

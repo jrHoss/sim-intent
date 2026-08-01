@@ -555,6 +555,108 @@ class SetupSummary(StrictModel):
     stale_at: str | None
 
 
+class CadSelectionEvidence(StrictModel):
+    """Truthful state of one durable CAD-face selection.
+
+    ``stable_identity_authoritative`` and ``viewer_binding_valid`` are
+    deliberately separate statements.  A resolved stable identity stays
+    truthful historical evidence about the exact ModelVersion it was bound
+    to, even after that source has been replaced; at that point the local
+    viewer addressing below no longer describes the geometry on screen.
+    Conflating the two would let a superseded selection read as a live,
+    authoritative boundary.
+    """
+
+    resolution: Literal[
+        "resolved",
+        "ambiguous",
+        "unresolved",
+        "legacy_local_only",
+        "invalid_legacy_evidence",
+        "target_missing",
+    ] = Field(
+        description=(
+            "Backend-assigned resolution state of the durable CAD target. "
+            "``target_missing`` is projected for a CAD region that carries "
+            "no cad_face_target at all."
+        )
+    )
+    stable_identity_authoritative: bool = Field(
+        description=(
+            "True only when the backend uniquely resolved this selection "
+            "against the setup's exact persisted geometry-identity artifact "
+            "and that artifact and this region's identity evidence both "
+            "passed verification on this read. It describes the stable "
+            "identity itself and never asserts that the viewer currently "
+            "displays the bound geometry."
+        )
+    )
+    viewer_binding_valid: bool = Field(
+        description=(
+            "True only while this region's verified target is still bound to "
+            "the setup's live source. It becomes false after source "
+            "replacement, when source_face_tags and viewer_node_names no "
+            "longer address the displayed geometry, while stable_identities "
+            "remain truthful historical evidence that is never rebound to "
+            "the successor. It is also false whenever the evidence "
+            "authorizing the binding failed verification."
+        )
+    )
+    confirmable: bool = Field(
+        description=(
+            "True only when this proposed region may be confirmed now: its "
+            "own evidence carries no blocking problem and the setup's "
+            "durable CAD references all validate. It can therefore be false "
+            "with a null blocking_code when a different region in the same "
+            "setup is what fails."
+        )
+    )
+    blocking_code: str | None = Field(
+        description=(
+            "Existing CAD or geometry-identity problem code explaining why "
+            "this region's own evidence cannot be confirmed, or null when "
+            "nothing about this region blocks. A failure of the single "
+            "shared geometry-identity artifact is reported on every region "
+            "bound to it; an identity, collision or evidence failure is "
+            "reported only on the region that carries it."
+        )
+    )
+    model_version_id: str | None = Field(
+        description=(
+            "Exact ModelVersion the stable identity is scoped to. It is "
+            "never transferable to another ModelVersion."
+        )
+    )
+    artifact_sha256: str | None = Field(
+        description=(
+            "SHA-256 of the exact persisted geometry-identity artifact that "
+            "authorizes stable_identities."
+        )
+    )
+    stable_identities: list[str] = Field(
+        description="Backend-authoritative stable face identities."
+    )
+    collision_group_ids: list[str] = Field(
+        description=(
+            "Backend-authoritative collision groups for an ambiguous target."
+        )
+    )
+    source_face_tags: list[int] = Field(
+        description=(
+            "Non-authoritative source-local face tags for the bound "
+            "ModelVersion. They are viewer evidence only and are never a "
+            "solver, mesh, node, element, set, or surface identifier."
+        )
+    )
+    viewer_node_names: list[str] = Field(
+        description=(
+            "Non-authoritative viewer addressing (face_{tag}) valid only for "
+            "the bound ModelVersion. It is not CAD membership and confers no "
+            "stable identity."
+        )
+    )
+
+
 class SetupRevisionResponse(StrictModel):
     schema_version: int = API_CONTRACT_VERSION
     id: str
@@ -578,8 +680,32 @@ class SetupRevisionResponse(StrictModel):
     created_at: str
     intent: SimulationIntent
     validation: ValidationReport
-    selected_entities: dict[str, list[int] | list[str]]
-    highlight_state: dict[str, SessionHighlight]
+    selected_entities: dict[str, list[int] | list[str]] = Field(
+        description=(
+            "Non-authoritative viewer addressing for the exact ModelVersion "
+            "this setup is bound to. For CAD-face regions these are "
+            "source-local face tags, not authoritative CAD membership and "
+            "not stable identities; consult cad_selection_evidence for the "
+            "authoritative state of each CAD selection."
+        )
+    )
+    highlight_state: dict[str, SessionHighlight] = Field(
+        description=(
+            "Non-authoritative viewer highlight addressing for the exact "
+            "ModelVersion this setup is bound to. A CAD entry addresses "
+            "source-local face tags only; it does not assert that the bound "
+            "geometry is still current. Consult "
+            "cad_selection_evidence.viewer_binding_valid before drawing a "
+            "CAD highlight as a live confirmed boundary."
+        )
+    )
+    cad_selection_evidence: dict[str, CadSelectionEvidence] = Field(
+        default_factory=dict,
+        description=(
+            "Truthful per-CAD-region selection evidence keyed by region id. "
+            "Non-CAD regions are deliberately absent."
+        ),
+    )
     engineering_ready: bool
     artifact_capability: ArtifactCapability
     export_eligible: bool
@@ -1308,15 +1434,108 @@ def create_app(
             stale_at=None if setup.stale_at is None else _utc_isoformat(setup.stale_at),
         )
 
+    # Sanitized per ADR-004: no host paths, source bytes, or artifact
+    # internals — only the stable code and a bounded engineer-readable cause.
+    CAD_REGION_PROBLEM_DETAILS: dict[str, tuple[str, str]] = {
+        "cad_region_entity_ids_forbidden": (
+            "Invalid CAD region reference",
+            "A CAD-face region must not carry entity_ids; "
+            "cad_face_target.source_face_tags is its sole numeric evidence.",
+        ),
+        "cad_region_not_applicable": (
+            "Invalid CAD region reference",
+            "CAD-face regions are not applicable to a native mesh source.",
+        ),
+        "cad_region_stable_target_required": (
+            "Invalid CAD region reference",
+            "A CAD-face region requires a cad_face_target.",
+        ),
+        "cad_region_unresolved": (
+            "CAD region is unresolved",
+            "Only a uniquely resolved stable CAD-face target may be confirmed.",
+        ),
+        "cad_region_model_version_mismatch": (
+            "Invalid CAD region reference",
+            "The CAD-face target names a different ModelVersion than the "
+            "setup's exact bound source; stable identities are never "
+            "transferable between ModelVersions.",
+        ),
+        "cad_region_artifact_mismatch": (
+            "Invalid CAD region reference",
+            "The CAD-face target names a different geometry-identity "
+            "artifact than the one persisted for the bound ModelVersion.",
+        ),
+        "cad_region_artifact_missing": (
+            "Invalid CAD region reference",
+            "No geometry-identity artifact is persisted for the bound "
+            "ModelVersion, so no CAD-face target can be authorized.",
+        ),
+        "cad_region_artifact_integrity_failed": (
+            "Invalid CAD region reference",
+            "The persisted geometry-identity artifact failed integrity "
+            "verification and is never repaired on read.",
+        ),
+        "cad_region_artifact_binding_mismatch": (
+            "Invalid CAD region reference",
+            "The persisted geometry-identity artifact is not bound to the "
+            "setup's exact source version.",
+        ),
+        "cad_region_artifact_invalid": (
+            "Invalid CAD region reference",
+            "The persisted geometry-identity artifact could not be read as a "
+            "valid artifact.",
+        ),
+        "cad_region_artifact_version_unsupported": (
+            "Invalid CAD region reference",
+            "The persisted geometry-identity artifact version is not "
+            "supported.",
+        ),
+        "cad_region_evidence_unknown": (
+            "Invalid CAD region reference",
+            "A source face tag in the CAD-face target does not exist in the "
+            "bound ModelVersion's geometry-identity artifact.",
+        ),
+        "cad_region_identity_unknown": (
+            "Invalid CAD region reference",
+            "A claimed stable identity does not exist in the bound "
+            "ModelVersion's geometry-identity artifact.",
+        ),
+        "cad_region_identity_evidence_inconsistent": (
+            "Invalid CAD region reference",
+            "The claimed stable identities do not match the identities the "
+            "artifact assigns to the claimed source face tags.",
+        ),
+        "cad_region_collision_group_unknown": (
+            "Invalid CAD region reference",
+            "A claimed collision group does not exist in the bound "
+            "ModelVersion's geometry-identity artifact.",
+        ),
+        "cad_region_collision_evidence_inconsistent": (
+            "Invalid CAD region reference",
+            "The claimed collision groups do not match the groups the "
+            "artifact assigns to the claimed source face tags.",
+        ),
+        "cad_region_legacy_client_forbidden": (
+            "Invalid CAD region reference",
+            "Legacy local-only CAD evidence carries no stable authority and "
+            "cannot be submitted by a current client.",
+        ),
+    }
+
     def cad_region_problem(exc: CadRegionReferenceError) -> ApiProblem:
+        title, detail = CAD_REGION_PROBLEM_DETAILS.get(
+            exc.code,
+            (
+                "Invalid CAD region reference",
+                "The CAD-face target is not valid for the setup's exact "
+                "persisted geometry identity artifact.",
+            ),
+        )
         return ApiProblem(
             status=409 if exc.code == "cad_region_unresolved" else 422,
             code=exc.code,
-            title="Invalid CAD region reference",
-            detail=(
-                "The CAD-face target is not valid for the setup's exact "
-                "persisted geometry identity artifact."
-            ),
+            title=title,
+            detail=detail,
         )
 
     def bind_durable_cad_targets(
@@ -1333,6 +1552,134 @@ def create_app(
         except GeometryIdentityArtifactError as exc:
             raise geometry_identity_problem(exc) from exc
 
+    def awaits_cad_resolution(intent: SimulationIntent) -> bool:
+        """Report whether any CAD region still carries an unresolved claim."""
+
+        return any(
+            region.entity_type == "cad_face"
+            and region.cad_face_target is not None
+            and region.cad_face_target.resolution == "unresolved"
+            for region in intent.regions
+        )
+
+    def resolve_durable_cad_intent(
+        intent: SimulationIntent, version_id: str
+    ) -> SimulationIntent:
+        """Resolve viewer-submitted CAD claims before persistence.
+
+        Resolution runs at the route layer because ``_create_setup_once`` and
+        ``mutate_setup`` compute the canonical intent bytes, ``intent_sha256``
+        and the idempotency fingerprint from exactly what they are handed.
+        Resolving afterwards would store bytes that disagree with the recorded
+        digests. It is deterministic — it reads one exact persisted artifact —
+        so replaying a request ID recomputes the identical fingerprint.
+
+        INP versions never reach geometry-identity resolution: doing so would
+        turn every native setup into ``geometry_identity_not_applicable``.
+        Callers reach this only when ``awaits_cad_resolution`` holds, so a
+        request with nothing to resolve performs no extra read at all.
+        """
+
+        version = persistence().get_version(version_id)
+        if version is None or version.model_kind != "step":
+            return intent
+        return bind_durable_cad_targets(intent, version.id)
+
+    def cad_selection_evidence(
+        intent: SimulationIntent,
+        setup: SimulationSetup,
+        *,
+        artifact_error_code: str | None,
+        region_error_codes: dict[str, str],
+    ) -> dict[str, CadSelectionEvidence]:
+        """Project truthful authority state for every CAD-face region.
+
+        ``artifact_error_code`` is a failure of the single shared
+        geometry-identity artifact, so it genuinely blocks every region bound
+        to it. ``region_error_codes`` names the regions whose own identity,
+        collision or evidence claims failed; a healthy neighbour is never
+        given another region's identity-specific code. Either way the setup
+        stays fail-closed: while any reference error stands, no CAD region is
+        confirmable.
+        """
+
+        references_valid = (
+            artifact_error_code is None and not region_error_codes
+        )
+        evidence: dict[str, CadSelectionEvidence] = {}
+        for region in intent.regions:
+            if region.entity_type != "cad_face":
+                continue
+            target = region.cad_face_target
+            resolution = "target_missing" if target is None else target.resolution
+            tags = [] if target is None else list(target.source_face_tags)
+            # Historical invalid v2 evidence is preserved verbatim and is
+            # deliberately not turned into viewer addressing.
+            node_names = (
+                []
+                if resolution == "invalid_legacy_evidence"
+                else [f"face_{tag}" for tag in tags if tag > 0]
+            )
+            region_error = artifact_error_code or region_error_codes.get(
+                region.id
+            )
+            # Neither boolean may outlive the evidence that authorizes it: an
+            # unverifiable artifact or a failed identity check withdraws both.
+            # ``target is not None`` is defence in depth — no write path can
+            # store a CAD region without a durable target, and
+            # ``cad_region_stable_target_required`` refuses one — but a
+            # missing target can never read as a valid viewer binding.
+            verified = region_error is None
+            binding_valid = (
+                target is not None
+                and verified
+                and not setup.is_stale
+                and (
+                    getattr(target, "model_version_id", None) is None
+                    or getattr(target, "model_version_id")
+                    == setup.model_version_id
+                )
+            )
+            if region_error is not None:
+                blocking = region_error
+            elif resolution == "target_missing":
+                blocking = "cad_region_stable_target_required"
+            elif resolution in {"unresolved", "ambiguous"}:
+                blocking = "cad_region_unresolved"
+            elif resolution in {
+                "legacy_local_only",
+                "invalid_legacy_evidence",
+            }:
+                blocking = "cad_region_legacy_client_forbidden"
+            elif not binding_valid:
+                blocking = "setup_source_superseded"
+            else:
+                blocking = None
+            evidence[region.id] = CadSelectionEvidence(
+                resolution=resolution,
+                stable_identity_authoritative=(
+                    resolution == "resolved" and verified
+                ),
+                viewer_binding_valid=binding_valid,
+                confirmable=(
+                    blocking is None
+                    and references_valid
+                    and region.status == "proposed"
+                ),
+                blocking_code=blocking,
+                model_version_id=getattr(target, "model_version_id", None),
+                artifact_sha256=getattr(target, "artifact_sha256", None),
+                stable_identities=list(
+                    getattr(target, "stable_identities", []) or []
+                ),
+                collision_group_ids=list(
+                    getattr(target, "collision_group_ids", []) or []
+                ),
+                source_face_tags=tags,
+                viewer_node_names=node_names,
+            )
+        return evidence
+
     def revision_response(revision: SetupRevision) -> SetupRevisionResponse:
         intent = persistence().revision_intent(revision)
         setup = persistence().get_setup(revision.setup_id)
@@ -1344,6 +1691,11 @@ def create_app(
         engineering_report = validate_intent(
             intent, source_is_stale=setup.is_stale
         )
+        # An artifact-scoped failure invalidates the one shared artifact and
+        # so every region bound to it; a region-scoped failure is attributed
+        # only to the regions that actually failed.
+        artifact_error_code: str | None = None
+        region_error_codes: dict[str, str] = {}
         try:
             persistence().validate_setup_region_references(
                 setup.id,
@@ -1351,6 +1703,10 @@ def create_app(
                 allow_legacy=revision.schema_version < 3,
             )
         except CadRegionReferenceError as exc:
+            if exc.region_id is None:
+                artifact_error_code = exc.code
+            else:
+                region_error_codes = dict(exc.region_codes)
             issues = [
                 *engineering_report.issues,
                 ValidationIssue(
@@ -1416,6 +1772,12 @@ def create_app(
             created_at=_utc_isoformat(revision.created_at), intent=intent,
             validation=report, selected_entities=selected,
             highlight_state=highlights,
+            cad_selection_evidence=cad_selection_evidence(
+                intent,
+                setup,
+                artifact_error_code=artifact_error_code,
+                region_error_codes=region_error_codes,
+            ),
             engineering_ready=engineering_report.engineering_ready,
             artifact_capability=capability,
             # Compatibility field now reflects the selected target rather than
@@ -1450,8 +1812,13 @@ def create_app(
     async def create_setup(project_id: uuid.UUID, payload: SetupCreate) -> SetupView:
         try:
             SelectionSessionStore._validate_client_statuses(None, payload.intent)
-            report = validate_intent(payload.intent)
-            intent = payload.intent.model_copy(
+            submitted = payload.intent
+            if awaits_cad_resolution(submitted):
+                submitted = resolve_durable_cad_intent(
+                    submitted, str(payload.model_version_id)
+                )
+            report = validate_intent(submitted)
+            intent = submitted.model_copy(
                 update={"validation_status": report.validation_status}, deep=True
             )
             setup, revision = persistence().create_setup(
@@ -1526,8 +1893,16 @@ def create_app(
                 raise SetupRevisionConflictError("stale setup revision")
             existing = persistence().revision_intent(current)
             SelectionSessionStore._validate_client_statuses(existing, payload.intent)
-            report = validate_intent(payload.intent)
-            intent = payload.intent.model_copy(update={"validation_status": report.validation_status}, deep=True)
+            submitted = payload.intent
+            if awaits_cad_resolution(submitted):
+                setup = persistence().get_setup(setup_id)
+                if setup is None:
+                    raise PersistenceNotFoundError("setup")
+                submitted = resolve_durable_cad_intent(
+                    submitted, setup.model_version_id
+                )
+            report = validate_intent(submitted)
+            intent = submitted.model_copy(update={"validation_status": report.validation_status}, deep=True)
             revision = persistence().mutate_setup(
                 setup_id=setup_id, expected_revision=payload.expected_revision,
                 request_id=payload.request_id, mutation_type=mutation_type, intent=intent,

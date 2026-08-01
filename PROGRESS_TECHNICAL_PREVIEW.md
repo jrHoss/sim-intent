@@ -2399,3 +2399,98 @@ compilation of every changed file, production import checks, and
 `git diff --check` passed. No production Python file was changed by
 R4B2-AUDIT-05..06, and no dependency, lock, frozen evaluation case, fallback,
 replay body, fixture, commit, merge, tag, push or staged change was created.
+
+## R4b.3 — Truthful durable CAD selection hydration
+
+**Status:** IMPLEMENTED ON BRANCH `r4b3-truthful-cad-selection-hydration`
+(from `b8a6215`). NOT independently reviewed, NOT committed, NOT merged.
+
+### Problem
+
+R4b.2 delivered the SimulationIntent v3 stable-CAD-region contract, but the
+durable browser still spoke the v2 contract, so the completed product path was
+unreachable. Measured against `b8a6215`: `engineering.js` declared
+`SCHEMA_VERSION = 2`, so every new setup was rejected with
+`simulation_intent.schema_version_unsupported_legacy`; viewer-created CAD
+regions carried `entity_ids` and were rejected with
+`cad_region_entity_ids_forbidden`; `sameEntities()` compared
+`JSON.stringify(entity_ids)`, which is `undefined` for every v3 CAD region, so
+two different clicked faces aliased onto one region and the region card and
+confirmed-highlight loop threw `TypeError`; `resolve_cad_regions_for_version`
+was wired only into the LLM interpret route, so no viewer click on a durable
+write path was ever resolved or confirmable; and `SetupRevisionResponse`
+published CAD source face tags as bare `entity_ids`, shape-identical to
+authoritative native membership.
+
+### Change
+
+The API gains an additive `cad_selection_evidence` projection on
+`SetupRevisionResponse` publishing, per CAD region, `resolution`,
+`stable_identity_authoritative`, `viewer_binding_valid`, `confirmable`,
+`blocking_code`, `model_version_id`, `artifact_sha256`, `stable_identities`,
+`collision_group_ids`, `source_face_tags` and `viewer_node_names`.
+`stable_identity_authoritative` and `viewer_binding_valid` are deliberately
+separate: a resolved identity stays truthful historical evidence after source
+replacement while its viewer addressing no longer applies.
+`selected_entities` and `highlight_state` now document in OpenAPI that they are
+non-authoritative viewer addressing for the exact bound ModelVersion.
+`create_setup` and `mutate` resolve unresolved CAD claims at the route layer,
+before canonical hashing and persistence, only for STEP versions and only when
+a claim actually awaits resolution. The `cad_region_*` problem catalogue gained
+specific sanitized titles and details.
+
+The durable browser moves to schema version 3, submits an unresolved
+`cad_face_target` with the exact `model_version_id` and source-local
+`source_face_tags` for a STEP click, omits the `entity_ids` key entirely for
+CAD regions, compares CAD targets by canonicalized source tags instead of
+`JSON.stringify`, copies an existing durable target verbatim so a confirmed
+region round-trips byte-identically, renders resolution and authority for every
+CAD state without throwing, renders a specific message for every established
+CAD and geometry-identity problem code, reads both highlight loops from
+`cad_face_target`, suppresses confirmed CAD highlights whose viewer binding the
+backend reports invalid, and shows live backend selection evidence via the
+existing read-only geometry-identity endpoint. Native INP behaviour is
+unchanged: `entity_ids` remains the membership field for non-CAD regions.
+
+### Boundaries held
+
+No migration and no DDL. Alembic head stays `0005_stable_cad_region_references`;
+`SIMULATION_INTENT_SCHEMA_VERSION` stays 3; `API_CONTRACT_VERSION` stays 1
+(`cad_selection_evidence` is purely additive and `selected_entities` /
+`highlight_state` keep their exact values). No change to `geom/identity.py`, the
+`CadFaceTarget` union, or `_validate_cad_region_references`. No new problem
+codes. No browser-side identity resolution, and no rebinding of a stale setup to
+a successor ModelVersion. R5 meshing and R6 CAD-to-mesh mapping remain
+unimplemented; `artifact.step_meshing_required` and
+`artifact.mapping_not_verified` still block.
+
+### Developer evidence (not independent verification)
+
+`tests/test_r4b3_cad_selection_hydration.py` (18 tests) and
+`tests/js/r4b3_harness.mjs` pass. Directly affected suites re-run on this
+branch: `test_r4b2_stable_region_references.py` + the new file (73 passed);
+`test_r4b1_geometry_identity_findings.py`, `test_geometry_identity_persistence.py`,
+`test_r3_2b_browser_editor.py` (with the R4b.2 file, 119 passed at that point);
+`test_r3_2a_engineering_rules.py`, `test_engineering_setup.py`,
+`test_setup_revisions.py`, `test_project_persistence.py`,
+`test_source_supersession_storage.py`, `test_session.py`, `test_viewer.py`
+(282 passed); `test_openapi_contract.py`, `test_schema_versioning.py`,
+`test_schema_versioned_payloads.py`, `test_schema_version_routes.py`,
+`test_migration_safety.py`, `test_independent_review_remediation.py`
+(303 passed, baseline accounting `executed=49 skipped=0 failed=0`). Both DOM
+harnesses pass. `scripts/export_schema.py --check`,
+`scripts/stamp_schema_versions.py --check`, `compileall`, `node --check` on all
+five browser files, and `git diff --check` pass; TypeScript regeneration is
+idempotent at SHA-256
+`5d034522e3b0166610c8b2d3efb3fb202e3d4cfff5a9bacca6cf7cc68159ebc7`.
+
+### Limitations and reserved verification
+
+Ambiguity is covered **synthetically** — `bracket.step` resolves all 12 faces
+uniquely and produces no collision groups, so no end-to-end ambiguous real-CAD
+demonstration is claimed and no fixture was added to the frozen corpus. The
+full-suite acceptance run, the frozen 15/15 replay evaluation, the populated
+downgrade/re-upgrade verification, the complete hostile-client matrix, the
+multi-fixture restart matrix, the container packaging audit, and the final
+security audit are **reserved for independent review** and were deliberately not
+executed here. Nothing in this entry is independently verified.

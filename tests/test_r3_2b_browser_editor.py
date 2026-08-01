@@ -529,6 +529,23 @@ def test_browser_assets_expose_bounded_durable_editor_without_raw_json():
     assert "engineering_ready" in editor_js
     assert "Selection is not confirmation." in html
     assert "meshing not yet executed" in html
+    # R4b.3: the durable editor speaks the v3 stable-CAD-region contract.
+    # These are structural markers only; tests/js/r4b3_harness.mjs is the
+    # executable gate that actually exercises the behaviour.
+    assert "cad_face_target" in editor_js
+    assert 'resolution: "unresolved"' in editor_js
+    assert "readGeometryIdentity" in api_js
+    assert 'id="bc-selection-evidence"' in html
+    assert 'id="load-selection-evidence"' in html
+    assert "stable identity is assigned by the backend" in html
+    for code in (
+        "cad_region_unresolved",
+        "cad_region_model_version_mismatch",
+        "cad_region_artifact_mismatch",
+        "cad_region_legacy_client_forbidden",
+        "geometry_identity_missing",
+    ):
+        assert code in editor_js
     for code in (
         "analysis.nonlinear_unsupported",
         "analysis.thermal_unsupported",

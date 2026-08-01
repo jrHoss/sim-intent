@@ -1,6 +1,9 @@
 import { ApiError, durableApi, requestId } from "/static/durable-api.js";
 
-const SCHEMA_VERSION = 2;
+// Must equal the server's SIMULATION_INTENT_SCHEMA_VERSION. A stale value here
+// makes every new setup unwritable, so tests/js/r4b3_harness.mjs binds it to
+// the generated contract rather than trusting this constant on its own.
+export const SCHEMA_VERSION = 3;
 const STORAGE_KEY = "sim-intent.durable-workspace.v1";
 const AXES = ["x", "y", "z"];
 
@@ -13,6 +16,47 @@ const CAPABILITY_MESSAGES = {
   "artifact.calculix.surface_traction_unsupported": "The current CalculiX adapter cannot emit surface traction.",
   "artifact.calculix.pressure_mapping_required": "Pressure requires a verified element-face mapping.",
 };
+
+// Every established CAD and geometry-identity problem code renders a specific
+// engineer-readable sentence. A code with no entry here still renders its raw
+// code plus a bounded fallback — never a raw exception and never a green state.
+const CAD_PROBLEM_MESSAGES = {
+  cad_region_entity_ids_forbidden: "A CAD face selection must not carry entity IDs; its only local evidence is the source face tag.",
+  cad_region_not_applicable: "CAD face selections do not apply to a native mesh source.",
+  cad_region_stable_target_required: "This CAD face selection is missing its durable target and cannot be confirmed.",
+  cad_region_unresolved: "The backend could not resolve this face to one unique stable identity, so it cannot be confirmed.",
+  cad_region_model_version_mismatch: "This selection belongs to a different source version. Stable identities are never transferred between versions.",
+  cad_region_artifact_mismatch: "This selection cites a different geometry identity artifact than the one stored for this source version.",
+  cad_region_artifact_missing: "No stored geometry identity artifact is available for this source version.",
+  cad_region_artifact_integrity_failed: "The stored geometry identity artifact failed integrity verification and is never repaired on read.",
+  cad_region_artifact_binding_mismatch: "The stored geometry identity artifact is not bound to this setup's source version.",
+  cad_region_artifact_invalid: "The stored geometry identity artifact could not be read.",
+  cad_region_artifact_version_unsupported: "The stored geometry identity artifact version is not supported.",
+  cad_region_evidence_unknown: "A cited source face tag does not exist in this source version's geometry identity artifact.",
+  cad_region_identity_unknown: "A cited stable identity does not exist in this source version's geometry identity artifact.",
+  cad_region_identity_evidence_inconsistent: "The cited stable identities disagree with the identities the artifact assigns to those faces.",
+  cad_region_collision_group_unknown: "A cited collision group does not exist in this source version's geometry identity artifact.",
+  cad_region_collision_evidence_inconsistent: "The cited collision groups disagree with the groups the artifact assigns to those faces.",
+  cad_region_legacy_client_forbidden: "Legacy local-only face evidence carries no stable authority and cannot be submitted.",
+  setup_source_superseded: "The source was replaced. This selection stays bound to its original version and is never rebound.",
+  "simulation_intent.schema_version_unsupported_legacy": "This setup uses a legacy schema version that the server no longer accepts.",
+  "region.cad_stable_target_missing": "This CAD face selection has no durable target.",
+  "region.cad_unresolved": "This CAD face selection has no unique stable identity yet.",
+  "region.cad_ambiguous": "This CAD face is geometrically indistinguishable from another face in the same collision group.",
+  "region.cad_legacy_local_only": "This CAD face selection predates stable identities and carries only local evidence.",
+  "region.cad_invalid_legacy_evidence": "This historical CAD face evidence is invalid and is preserved read-only.",
+  geometry_identity_missing: "The required geometry identity artifact is missing for this source version.",
+  geometry_identity_integrity_failed: "The stored geometry identity artifact failed integrity verification.",
+  geometry_identity_binding_mismatch: "The stored geometry identity artifact does not match its source version.",
+  geometry_identity_version_unsupported: "The stored geometry identity artifact version is not supported.",
+  geometry_identity_schema_invalid: "The stored geometry identity artifact does not match the required schema.",
+  geometry_identity_not_applicable: "Geometry identity does not apply to a native mesh source.",
+};
+
+export function cadProblemMessage(code) {
+  return CAD_PROBLEM_MESSAGES[code]
+    || "This CAD face selection is blocked by the backend and cannot be confirmed.";
+}
 
 const FORCE_FACTORS = { N: 1, kN: 1e3, MN: 1e6 };
 const STRESS_FACTORS = { Pa: 1e-6, kPa: 1e-3, MPa: 1, GPa: 1e3 };
@@ -78,9 +122,47 @@ function normalizedDirection(values) {
   return vector.map((value) => value / norm);
 }
 
+function isCadFace(candidate) {
+  return candidate?.entity_type === "cad_face";
+}
+
+// Source face tags are ModelVersion-local viewer evidence. Canonicalizing them
+// the way the server does (integer, deduplicated, sorted) is what makes two
+// clicks on the same face compare equal without letting two different faces
+// alias onto one region.
+function canonicalSourceTags(target) {
+  const tags = target?.source_face_tags;
+  if (!Array.isArray(tags)) return [];
+  return [...new Set(tags.filter((value) => Number.isInteger(value)))]
+    .sort((left, right) => left - right);
+}
+
+function sameSourceTags(first, second) {
+  const left = canonicalSourceTags(first);
+  const right = canonicalSourceTags(second);
+  return left.length === right.length
+    && left.every((value, index) => value === right[index]);
+}
+
 function sameEntities(first, second) {
-  return first.entity_type === second.entity_type
-    && JSON.stringify(first.entity_ids) === JSON.stringify(second.entity_ids);
+  if (first.entity_type !== second.entity_type) return false;
+  if (isCadFace(first)) {
+    return sameSourceTags(first.cad_face_target, second.cad_face_target);
+  }
+  return JSON.stringify(first.entity_ids) === JSON.stringify(second.entity_ids);
+}
+
+// The only place the editor reads a region's viewer tags. CAD regions read
+// their source face tags; native regions keep their entity IDs.
+function viewerTags(region) {
+  if (isCadFace(region)) return canonicalSourceTags(region.cad_face_target);
+  return (region.entity_ids || []).filter((value) => Number.isInteger(value));
+}
+
+function truncateIdentity(value) {
+  return typeof value === "string" && value.length > 20
+    ? `${value.slice(0, 20)}…`
+    : String(value ?? "—");
 }
 
 function baseIntent() {
@@ -169,6 +251,8 @@ export function createEngineeringWorkspace({
     latestVersion: null,
     inventory: null,
     viewerSelection: null,
+    identityArtifact: null,
+    identityRequest: null,
     pendingReplay: null,
     proposal: null,
     operationEpoch: 0,
@@ -289,6 +373,8 @@ export function createEngineeringWorkspace({
     state.requestedContext = { ...operation };
     state.contextOpening = true;
     state.viewerSelection = null;
+    state.identityArtifact = null;
+    state.identityRequest = null;
     clearPendingReplay();
     clearDrafts();
     updateSelectionControls();
@@ -788,11 +874,19 @@ export function createEngineeringWorkspace({
     return `region_${suffix}`;
   }
 
+  // A CAD region omits the entity_ids key entirely: key presence alone trips
+  // the server invariant, so a null placeholder would be rejected too.
+  function regionEvidence(candidate) {
+    return isCadFace(candidate)
+      ? { cad_face_target: clone(candidate.cad_face_target) }
+      : { entity_ids: clone(candidate.entity_ids) };
+  }
+
   function newRegion(candidate) {
     return {
       id: regionId(),
       entity_type: candidate.entity_type,
-      entity_ids: candidate.entity_ids,
+      ...regionEvidence(candidate),
       selection_method: "user_click",
       confidence: 1,
       source_instruction: candidate.source_instruction,
@@ -811,14 +905,31 @@ export function createEngineeringWorkspace({
     }));
   }
 
+  // A STEP click submits an unresolved claim only. The backend is the sole
+  // stable-identity authority: this browser never mints a gfi1: identity, a
+  // collision group, or an artifact digest.
   function viewerCandidate() {
     if (!state.viewerSelection || !state.sourceVersion) return null;
-    return {
+    const common = {
       key: "viewer",
-      entity_type: state.sourceVersion.model_kind === "step" ? "cad_face" : "mesh_face",
-      entity_ids: [state.viewerSelection],
       label: `Selected viewer face_${state.viewerSelection}`,
       source_instruction: `Use selected viewer face_${state.viewerSelection}.`,
+    };
+    if (state.sourceVersion.model_kind === "step") {
+      return {
+        ...common,
+        entity_type: "cad_face",
+        cad_face_target: {
+          resolution: "unresolved",
+          model_version_id: state.sourceVersion.id,
+          source_face_tags: [state.viewerSelection],
+        },
+      };
+    }
+    return {
+      ...common,
+      entity_type: "mesh_face",
+      entity_ids: [state.viewerSelection],
     };
   }
 
@@ -882,9 +993,13 @@ export function createEngineeringWorkspace({
         (region) => region.id === value.slice("existing|".length),
       );
       if (!selected) throw new Error("The selected engineering target no longer exists.");
+      // Copy the durable target verbatim: rebuilding it would break the
+      // byte-exact round trip the server requires for a confirmed region.
       candidate = {
         entity_type: selected.entity_type,
-        entity_ids: clone(selected.entity_ids),
+        ...(isCadFace(selected)
+          ? { cad_face_target: clone(selected.cad_face_target) }
+          : { entity_ids: clone(selected.entity_ids) }),
         source_instruction: `Replace target with region ${selected.id}.`,
       };
     } else if (value === "viewer") {
@@ -898,15 +1013,18 @@ export function createEngineeringWorkspace({
     );
     if (replacementIndex >= 0) {
       const rejected = intent.regions[replacementIndex];
-      intent.regions[replacementIndex] = {
-        ...rejected,
+      // Rebuild from the region id alone so an obsolete entity_ids or
+      // cad_face_target key from the replaced evidence cannot survive.
+      const replacement = {
+        id: rejected.id,
         entity_type: candidate.entity_type,
-        entity_ids: clone(candidate.entity_ids),
+        ...regionEvidence(candidate),
         selection_method: "user_click",
         confidence: 1,
         source_instruction: candidate.source_instruction,
         status: "proposed",
       };
+      intent.regions[replacementIndex] = replacement;
       return rejected.id;
     }
     if (value.startsWith("existing|")) {
@@ -1048,16 +1166,59 @@ export function createEngineeringWorkspace({
     card.append(heading);
     if (kind === "region") {
       const facts = element("dl", "audit-facts");
-      for (const [label, value] of [
-        ["Entities", `${item.entity_type}: ${item.entity_ids.join(", ")}`],
+      const rows = [];
+      if (isCadFace(item)) {
+        const evidence = state.current?.cad_selection_evidence?.[item.id] || null;
+        const resolution = evidence?.resolution
+          || item.cad_face_target?.resolution
+          || "target_missing";
+        rows.push(
+          ["Resolution", resolution.replaceAll("_", " ")],
+          [
+            "Stable identity",
+            evidence?.stable_identity_authoritative
+              ? `backend-authoritative · ${(evidence.stable_identities || []).map(truncateIdentity).join(", ")}`
+              : "not authoritative",
+          ],
+          [
+            "Viewer binding",
+            evidence?.viewer_binding_valid === false
+              ? "invalid for the displayed source — never rebound"
+              : "valid for the bound source version",
+          ],
+          [
+            "Source face tags (non-authoritative)",
+            viewerTags(item).join(", ") || "—",
+          ],
+        );
+        if (evidence?.collision_group_ids?.length) {
+          rows.push(["Collision group", evidence.collision_group_ids.map(truncateIdentity).join(", ")]);
+        }
+        if (evidence?.artifact_sha256) {
+          rows.push(["Artifact digest", truncateIdentity(evidence.artifact_sha256)]);
+        }
+        if (evidence?.model_version_id) {
+          rows.push(["Bound source version", truncateIdentity(evidence.model_version_id)]);
+        }
+        if (evidence?.blocking_code) {
+          rows.push([
+            "Blocked",
+            `${evidence.blocking_code} — ${cadProblemMessage(evidence.blocking_code)}`,
+          ]);
+        }
+      } else {
+        rows.push(["Entities", `${item.entity_type}: ${(item.entity_ids || []).join(", ")}`]);
+      }
+      rows.push(
         ["Selection", item.selection_method],
         ["Evidence", item.source_instruction],
-      ]) {
+      );
+      for (const [label, value] of rows) {
         facts.append(element("dt", "", label), element("dd", "", value));
       }
       card.append(facts);
       card.addEventListener("click", () => onHighlight({
-        entity_ids: item.entity_ids.filter((value) => Number.isInteger(value)),
+        entity_ids: viewerTags(item),
         style: item.status,
       }));
     } else {
@@ -1203,26 +1364,32 @@ export function createEngineeringWorkspace({
     if (state.setup.is_stale) {
       return;
     } else {
-      for (const highlight of Object.values(state.current.highlight_state)) {
-        onHighlight(highlight);
-      }
       const regions = new Map(
         state.current.intent.regions.map((region) => [region.id, region]),
       );
+      // Viewer addressing is only meaningful while the region is still bound
+      // to the displayed source. A region whose binding the backend reports
+      // as invalid must never be drawn as an unqualified confirmed boundary.
+      const drawable = (region) => Boolean(region)
+        && (!isCadFace(region)
+          || state.current.cad_selection_evidence?.[region.id]?.viewer_binding_valid !== false);
+      for (const [regionRef, highlight] of Object.entries(state.current.highlight_state)) {
+        if (drawable(regions.get(regionRef))) onHighlight(highlight);
+      }
       for (const bc of state.current.intent.bcs) {
         const region = regions.get(bc.region_ref);
-        if (region?.status === "confirmed") {
+        if (region?.status === "confirmed" && drawable(region)) {
           onHighlight({
-            entity_ids: region.entity_ids.filter((value) => Number.isInteger(value)),
+            entity_ids: viewerTags(region),
             style: "fixed_boundary_condition",
           });
         }
       }
       for (const load of state.current.intent.loads) {
         const region = regions.get(load.region_ref);
-        if (region?.status === "confirmed") {
+        if (region?.status === "confirmed" && drawable(region)) {
           onHighlight({
-            entity_ids: region.entity_ids.filter((value) => Number.isInteger(value)),
+            entity_ids: viewerTags(region),
             style: "load_direction",
             vector: load.vector || load.direction,
           });
@@ -1231,10 +1398,77 @@ export function createEngineeringWorkspace({
     }
   }
 
+  function selectionEvidenceText() {
+    if (!state.viewerSelection) return "";
+    if (state.sourceVersion?.model_kind !== "step") {
+      return "Native mesh face; stable geometry identity does not apply.";
+    }
+    const artifact = state.identityArtifact;
+    if (!artifact || artifact.versionId !== state.sourceVersion.id) {
+      return "Checking backend geometry identity for this face…";
+    }
+    if (artifact.error) {
+      return `${artifact.error} — ${cadProblemMessage(artifact.error)}`;
+    }
+    const face = artifact.faces.get(state.viewerSelection);
+    if (!face) {
+      return "This face tag is not present in the stored geometry identity artifact.";
+    }
+    if (face.ambiguous) {
+      return `Ambiguous: indistinguishable from another face in collision group ${truncateIdentity(face.collision_group_id)}. It cannot be confirmed.`;
+    }
+    return `Resolvable to backend stable identity ${truncateIdentity(face.stable_identity)}`
+      + ` (artifact ${truncateIdentity(artifact.artifact_sha256)}). The tag itself is local evidence only.`;
+  }
+
+  // Read-only display of already-published backend evidence. No identity is
+  // computed here; an unavailable artifact degrades to a stated reason.
+  async function ensureIdentityArtifact() {
+    const version = state.sourceVersion;
+    if (!version || version.model_kind !== "step") return;
+    if (state.identityArtifact?.versionId === version.id) return;
+    if (state.identityRequest === version.id) return;
+    state.identityRequest = version.id;
+    const epoch = state.operationEpoch;
+    try {
+      const payload = await api.readGeometryIdentity(version.id);
+      if (epoch !== state.operationEpoch || state.sourceVersion?.id !== version.id) return;
+      state.identityArtifact = {
+        versionId: version.id,
+        artifact_sha256: payload.artifact_sha256,
+        error: null,
+        faces: new Map((payload.faces || []).map((face) => [face.source_ref, face])),
+      };
+    } catch (error) {
+      if (epoch !== state.operationEpoch || state.sourceVersion?.id !== version.id) return;
+      state.identityArtifact = {
+        versionId: version.id,
+        artifact_sha256: null,
+        error: error instanceof ApiError ? error.code : "geometry_identity_missing",
+        faces: new Map(),
+      };
+    } finally {
+      if (state.identityRequest === version.id) state.identityRequest = null;
+    }
+    if (epoch === state.operationEpoch) renderSelectionEvidence();
+  }
+
+  function renderSelectionEvidence() {
+    const text = selectionEvidenceText();
+    for (const id of ["bc-selection-evidence", "load-selection-evidence"]) {
+      const node = byId(id);
+      if (!node) continue;
+      node.textContent = text;
+      node.hidden = !text;
+    }
+  }
+
   function updateSelectionControls() {
     const label = state.viewerSelection ? `face_${state.viewerSelection}` : "None";
     byId("bc-viewer-selection").textContent = label;
     byId("load-viewer-selection").textContent = label;
+    renderSelectionEvidence();
+    if (state.viewerSelection) ensureIdentityArtifact().catch(() => {});
     fillTargetSelect(
       byId("bc-target"),
       byId("bc-type").value,

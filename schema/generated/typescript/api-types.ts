@@ -847,6 +847,76 @@ export interface components {
             validation_status: "unvalidated" | "valid" | "invalid";
         };
         /**
+         * CadSelectionEvidence
+         * @description Truthful state of one durable CAD-face selection.
+         *
+         *     ``stable_identity_authoritative`` and ``viewer_binding_valid`` are
+         *     deliberately separate statements.  A resolved stable identity stays
+         *     truthful historical evidence about the exact ModelVersion it was bound
+         *     to, even after that source has been replaced; at that point the local
+         *     viewer addressing below no longer describes the geometry on screen.
+         *     Conflating the two would let a superseded selection read as a live,
+         *     authoritative boundary.
+         */
+        CadSelectionEvidence: {
+            /**
+             * Artifact Sha256
+             * @description SHA-256 of the exact persisted geometry-identity artifact that authorizes stable_identities.
+             */
+            artifact_sha256: string | null;
+            /**
+             * Blocking Code
+             * @description Existing CAD or geometry-identity problem code explaining why this region's own evidence cannot be confirmed, or null when nothing about this region blocks. A failure of the single shared geometry-identity artifact is reported on every region bound to it; an identity, collision or evidence failure is reported only on the region that carries it.
+             */
+            blocking_code: string | null;
+            /**
+             * Collision Group Ids
+             * @description Backend-authoritative collision groups for an ambiguous target.
+             */
+            collision_group_ids: string[];
+            /**
+             * Confirmable
+             * @description True only when this proposed region may be confirmed now: its own evidence carries no blocking problem and the setup's durable CAD references all validate. It can therefore be false with a null blocking_code when a different region in the same setup is what fails.
+             */
+            confirmable: boolean;
+            /**
+             * Model Version Id
+             * @description Exact ModelVersion the stable identity is scoped to. It is never transferable to another ModelVersion.
+             */
+            model_version_id: string | null;
+            /**
+             * Resolution
+             * @description Backend-assigned resolution state of the durable CAD target. ``target_missing`` is projected for a CAD region that carries no cad_face_target at all.
+             * @enum {string}
+             */
+            resolution: "resolved" | "ambiguous" | "unresolved" | "legacy_local_only" | "invalid_legacy_evidence" | "target_missing";
+            /**
+             * Source Face Tags
+             * @description Non-authoritative source-local face tags for the bound ModelVersion. They are viewer evidence only and are never a solver, mesh, node, element, set, or surface identifier.
+             */
+            source_face_tags: number[];
+            /**
+             * Stable Identities
+             * @description Backend-authoritative stable face identities.
+             */
+            stable_identities: string[];
+            /**
+             * Stable Identity Authoritative
+             * @description True only when the backend uniquely resolved this selection against the setup's exact persisted geometry-identity artifact and that artifact and this region's identity evidence both passed verification on this read. It describes the stable identity itself and never asserts that the viewer currently displays the bound geometry.
+             */
+            stable_identity_authoritative: boolean;
+            /**
+             * Viewer Binding Valid
+             * @description True only while this region's verified target is still bound to the setup's live source. It becomes false after source replacement, when source_face_tags and viewer_node_names no longer address the displayed geometry, while stable_identities remain truthful historical evidence that is never rebound to the successor. It is also false whenever the evidence authorizing the binding failed verification.
+             */
+            viewer_binding_valid: boolean;
+            /**
+             * Viewer Node Names
+             * @description Non-authoritative viewer addressing (face_{tag}) valid only for the bound ModelVersion. It is not CAD membership and confers no stable identity.
+             */
+            viewer_node_names: string[];
+        };
+        /**
          * CandidateEntitySet
          * @description One highlightable alternative presented to the engineer.
          */
@@ -1806,13 +1876,23 @@ export interface components {
         /** SetupRevisionResponse */
         SetupRevisionResponse: {
             artifact_capability: components["schemas"]["ArtifactCapability"];
+            /**
+             * Cad Selection Evidence
+             * @description Truthful per-CAD-region selection evidence keyed by region id. Non-CAD regions are deliberately absent.
+             */
+            cad_selection_evidence?: {
+                [key: string]: components["schemas"]["CadSelectionEvidence"];
+            };
             /** Created At */
             created_at: string;
             /** Engineering Ready */
             engineering_ready: boolean;
             /** Export Eligible */
             export_eligible: boolean;
-            /** Highlight State */
+            /**
+             * Highlight State
+             * @description Non-authoritative viewer highlight addressing for the exact ModelVersion this setup is bound to. A CAD entry addresses source-local face tags only; it does not assert that the bound geometry is still current. Consult cad_selection_evidence.viewer_binding_valid before drawing a CAD highlight as a live confirmed boundary.
+             */
             highlight_state: {
                 [key: string]: components["schemas"]["SessionHighlight"];
             };
@@ -1837,7 +1917,10 @@ export interface components {
              * @default 1
              */
             schema_version: number;
-            /** Selected Entities */
+            /**
+             * Selected Entities
+             * @description Non-authoritative viewer addressing for the exact ModelVersion this setup is bound to. For CAD-face regions these are source-local face tags, not authoritative CAD membership and not stable identities; consult cad_selection_evidence for the authoritative state of each CAD selection.
+             */
             selected_entities: {
                 [key: string]: number[] | string[];
             };
