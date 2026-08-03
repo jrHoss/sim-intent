@@ -1,4 +1,4 @@
-# NOW — R4 / R5.2 integration remediation
+# NOW — R4 / R5.2 local integration complete
 
 **Active branch:** `integration-r4-r5-2`
 
@@ -8,71 +8,39 @@
 **R5.2 completed baseline:**
 `7e4b7c2dfbec87108c3ec4c4bb6c572aeb181ecb`
 
+**Local integration merge commit:**
+`ec49c6232ba5026385d9f6951635d70148e984f0`
+
+**Merge subject:** `merge: integrate R4 stable CAD and R5.2 meshing`
+
 ## Status
 
+R4 and R5.2 integration is complete locally. The merge commit exists only
+locally on `integration-r4-r5-2`.
+
 The first independent review returned `REQUEST CHANGES`. It identified one
-HIGH migration downgrade-atomicity finding and one LOW stale-documentation
-finding. Both findings have been remediated locally.
+HIGH downgrade-atomicity defect and one LOW documentation defect. The migration
+and documentation findings were both remediated. The second independent review
+returned `APPROVE`, with no BLOCKER, HIGH, MEDIUM, or LOW finding remaining.
 
-Downgrade preflight now refuses to leave the integrated R4/R5 state before any
-destructive R5 schema operation when immutable schema-v3 setup revisions or
-mesh revisions exist. Regression coverage protects both the merged
-`0006_merge_r4_r5_heads` state and a database stamped with both independent
-`0005` heads, without depending on Alembic predecessor traversal order. Safe
-empty-database downgrade to `0004_geometry_identity_artifacts` remains
-verified from both starting states.
+The approved full suite collected 1,891 tests: 1,890 passed, one expected
+optional CalculiX parse-run skipped because `ccx` is not installed, zero failed,
+and zero errored. All five JavaScript syntax checks and both the R3.2b and R4b.3
+DOM harnesses passed. Generated TypeScript, OpenAPI, and JSON Schema are
+drift-free, all 35 schema-versioned payloads are current, and `uv lock --check`
+passed.
 
-`docs/geometry-identity.md` now distinguishes the internal deterministic R5.2
-STEP meshing service and immutable mesh-local artifacts from the still-deferred
-public mesh API, frontend workflow, stable CAD-face-to-mesh-boundary mapping,
-and mapping-dependent export behavior.
-
-The complete staged integration and remediation are ready for a fresh second
-independent review. This is not approval. The merge remains in progress and
-uncommitted. No push, remote publication, or protected-branch update is
-authorized.
-
-## Remediation verification
-
-- Six focused atomicity regressions pass for merged-head and two-head refusal,
-  mesh-only history, schema-v3-only data, complete data/schema/CAS preservation,
-  post-failure exact reads and enforcement, and empty-database safe downgrade.
-- The complete migration-focused selection collected and passed 162 tests with
-  no failures or skips in 36.36 seconds; its one warning is the existing
-  Starlette `httpx` deprecation warning.
-- The semantic R4/R5 integration selection collected and passed 170 tests with
-  no failures or skips in 82.67 seconds. It reported the existing Starlette
-  deprecation warning and two expected SQLAlchemy identity-conflict warnings in
-  CAS rollback tests.
-- Manual post-suite reruns from both `0006_merge_r4_r5_heads` and the two-`0005`
-  state raised the sanitized preflight error and preserved exact Alembic rows,
-  mesh row and schema objects, setup bytes and schema version, geometry identity,
-  source/ownership rows, CAS bytes, exact reads, and mutation enforcement.
-- Alembic structural checks report the sole final head
-  `0006_merge_r4_r5_heads`, the unchanged two-parent merge topology, and no new
-  or renamed revision.
-- All five browser JavaScript syntax checks passed. The R3.2b DOM harness passed
-  with 17 mutation calls; the R4b.3 hydration harness passed at schema version 3
-  with two CAD regions and seven mutations.
-- Checked-in OpenAPI/JSON Schema artifacts match the backend, all 35 versioned
-  payloads are current, and `uv lock --check` resolves the unchanged 41-package
-  lock successfully.
-- The full Python suite collected 1,891 tests: 1,890 passed, one expected
-  optional CalculiX parse-run skipped because no `ccx` executable is installed,
-  zero failed, and zero errored in 245.52 seconds. All 49 required baseline-
-  evidence cases executed; Node-backed tests ran. The three warnings are the
-  existing Starlette deprecation warning and two expected SQLAlchemy warnings
-  from CAS rollback tests.
+Alembic has the sole head `0006_merge_r4_r5_heads`. Downgrade refusal is atomic
+from both the merged-head state and a database stamped with the two independent
+`0005` heads; safe empty-database downgrade remains valid.
 
 ## Integration boundary
 
-R4 stable CAD truth remains authoritative. R5 mesh identity and lineage remain
-exact and immutable. Mesh exterior triangles retain mesh-local identity only;
-CAD-to-mesh boundary mapping remains intentionally deferred.
+R4 stable CAD authority is preserved. R5 exact mesh identity, replay, lineage,
+and compare-and-swap guarantees are preserved. CAD-to-mesh boundary mapping
+remains deferred. No public mesh API, frontend meshing workflow, or CAD-to-mesh
+mapping was added.
 
-No dependency, lockfile, generated-contract, public mesh API, frontend mesh
-control, CAD-to-mesh mapping, solver/deck integration, or unrelated production
-behavior was added by this remediation.
-
-No commit, push, publication, tag, pull request, or merge request is authorized
-before the second independent review.
+No push, tag, protected-branch update, remote merge, publication, or release
+occurred. Any later push, pull request, remote merge, tag, publication, or
+release requires separate explicit authorization.

@@ -3673,3 +3673,48 @@ downgrade/re-upgrade verification, the complete hostile-client matrix, the
 multi-fixture restart matrix, the container packaging audit, and the final
 security audit are **reserved for independent review** and were deliberately not
 executed here. Nothing in this entry is independently verified.
+
+## R4/R5.2 local integration commit and completion
+
+**Date:** 2026-08-03 (Europe/Berlin, UTC+02:00)
+
+**Branch:** `integration-r4-r5-2`
+
+**Merge topology and identity:**
+
+- Merge base: `4e0ae349d26429c32aa44262e61ad1606580f0f2`.
+- R4 first parent: `6b8abf2c24629b8161a38db824ca7de652053866`.
+- R5.2 second parent: `7e4b7c2dfbec87108c3ec4c4bb6c572aeb181ecb`.
+- Local integration merge commit:
+  `ec49c6232ba5026385d9f6951635d70148e984f0`.
+- Commit subject: `merge: integrate R4 stable CAD and R5.2 meshing`.
+- Author identity: `jrHoss <103708924+jrHoss@users.noreply.github.com>`.
+- The exact approved integration inventory contained 35 paths; the committed
+  tree exactly matched the independently approved index tree.
+
+**Independent review and remediation:** The first review returned
+`REQUEST CHANGES` with one HIGH downgrade-atomicity defect and one LOW
+documentation defect. Migration preflight and regression coverage remediated
+the atomicity defect, and the geometry-identity documentation was corrected to
+state the implemented internal meshing boundary and the still-deferred public
+and mapping work. The second independent review returned `APPROVE`; no BLOCKER,
+HIGH, MEDIUM, or LOW finding remains.
+
+**Verification evidence:** The full Python suite collected 1,891 tests: 1,890
+passed, one expected optional CalculiX parse-run skipped because `ccx` is not
+installed, zero failed, and zero errored. Five JavaScript syntax checks passed,
+as did the R3.2b and R4b.3 DOM harnesses. Generated TypeScript had no drift;
+OpenAPI and JSON Schema drift checks passed; all 35 schema-versioned payloads
+were current; and `uv lock --check` passed. Alembic reported the sole head
+`0006_merge_r4_r5_heads`. Downgrade refusal was independently verified as atomic
+from both the merged-head and two-head starting states, while empty-database
+downgrade remained valid.
+
+**Accepted scope boundaries:** R4 stable CAD authority remains preserved. R5
+exact mesh identity, replay, lineage, and compare-and-swap guarantees remain
+preserved. No public mesh API, frontend meshing workflow, or CAD-to-mesh mapping
+was added; CAD-to-mesh boundary mapping remains deferred.
+
+The integration merge commit exists only locally. No push, tag, remote merge,
+publication, or release occurred. Any later push, pull request, remote merge,
+tag, publication, or release requires separate explicit authorization.
