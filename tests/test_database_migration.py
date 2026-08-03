@@ -46,6 +46,7 @@ def test_empty_database_upgrade_duplicate_upgrade_and_model_schema(tmp_path):
         "models",
         "model_versions",
         "geometry_identity_artifacts",
+        "mesh_revisions",
         "simulation_setups",
         "setup_revisions",
     }

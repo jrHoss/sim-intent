@@ -97,12 +97,16 @@ source bytes), and leaves nothing partially persisted:
 
 A corrupt stored artifact is never repaired on read.
 
-## Not implemented
+## Meshing boundary
 
-R5 meshing and R6 CAD-to-mesh mapping are **not implemented**. A stable CAD
-identity does not yet correspond to any mesh entity, element face, or surface
-set. Export of a STEP-sourced setup stays blocked by
-`artifact.step_meshing_required` and `artifact.mapping_not_verified`.
+R5.2 implements an internal deterministic STEP tetrahedral meshing service,
+constructed during application startup, with immutable mesh revisions, exact
+setup and source lineage, and mesh-local exterior triangles. It does not expose
+a public mesh HTTP API or a frontend mesh-generation workflow.
+
+Stable CAD-face-to-mesh-boundary mapping remains deferred. Exterior triangles
+therefore do not correspond to stable CAD faces, and mapping-dependent STEP or
+boundary-target export remains blocked by `artifact.mapping_not_verified`.
 
 ## Ambiguity coverage
 

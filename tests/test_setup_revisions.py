@@ -697,7 +697,7 @@ def test_populated_v2_downgrade_reupgrade_restores_schema_triggers_and_data(
     with engine.connect() as connection:
         assert connection.scalar(
             text("SELECT version_num FROM alembic_version")
-        ) == "0005_stable_cad_region_references"
+        ) == "0006_merge_r4_r5_heads"
         preserved = connection.execute(
             text(
                 "SELECT schema_version, intent_json, intent_sha256 "

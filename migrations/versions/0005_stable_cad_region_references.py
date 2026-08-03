@@ -6,9 +6,10 @@ aggregate. The authoritative 2 -> 3 migration therefore lives in
 historical revision bytes here would invalidate their recorded hashes and
 idempotency fingerprints. This head revision deliberately performs no DDL.
 
-Downgrade is permitted only when no v3 revision exists. A database containing
-v3 durable targets must be restored from a pre-R4b.2 backup rather than stamped
-as R4b.1, whose runtime cannot read those records.
+Downgrade is permitted only when no v3 revision exists. In an integrated
+two-head database it is also refused while immutable mesh revisions exist, so
+safety does not depend on Alembic's predecessor traversal order. Such data must
+be restored from a compatible backup rather than stamped as an older runtime.
 """
 
 from alembic import op
@@ -26,14 +27,20 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     connection = op.get_bind()
-    incompatible = connection.scalar(
+    incompatible_setup = connection.scalar(
         sa.text(
             "SELECT 1 FROM setup_revisions "
             "WHERE schema_version >= 3 LIMIT 1"
         )
     )
-    if incompatible is not None:
+    inspector = sa.inspect(connection)
+    incompatible_mesh = None
+    if inspector.has_table("mesh_revisions"):
+        incompatible_mesh = connection.scalar(
+            sa.text("SELECT 1 FROM mesh_revisions LIMIT 1")
+        )
+    if incompatible_setup is not None or incompatible_mesh is not None:
         raise RuntimeError(
-            "migration 0005 downgrade blocked: v3 setup revisions require "
-            "backup/restore, not an R4b.1 schema stamp"
+            "integrated R4/R5 downgrade blocked: immutable setup or mesh "
+            "revisions require backup/restore"
         )

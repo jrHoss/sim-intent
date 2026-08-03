@@ -42,10 +42,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.record_versions import load_fallback_record
 from app.blob_store import (
-    BlobStore, BlobIntegrityError, SourceStorageLimitExceededError,
+    BlobCoordinationPathError,
+    BlobCoordinationTimeoutError,
+    BlobIntegrityError,
+    BlobStore,
+    SourceStorageLimitExceededError,
 )
 from app.config import LocalDataConfig
+from app.gmsh_coordinator import GmshExecutionCoordinator
 from app.ingestion import IngestionService, QuarantinedUpload
+from app.meshing import MeshingService
 from app.data_root_lock import DataRootLock
 from app.migrations import upgrade_database
 from app.persistence import (
@@ -878,8 +884,9 @@ def create_app(
         try:
             # The inter-process root lock is acquired before every operation
             # that can inspect or mutate the database or blob tree. The
-            # BlobStore RLock remains the narrower in-process coordination
-            # boundary for publication/commit/cleanup across threads.
+            # BlobStore lock adds narrower same-process re-entrant/thread
+            # coordination and an external process-shared CAS lock for
+            # publication/commit/cleanup.
             durable_config.root.mkdir(parents=True, exist_ok=True)
             upgrade_database(durable_config.database_url)
             persistence = Persistence(
@@ -888,8 +895,16 @@ def create_app(
                 max_source_storage_bytes=durable_config.max_source_storage_bytes,
             )
             application.state.persistence = persistence
-            ingestion = IngestionService(durable_config)
+            gmsh_coordinator = GmshExecutionCoordinator(
+                wait_timeout_seconds=durable_config.gmsh_slot_wait_seconds,
+                max_pending=durable_config.gmsh_slot_max_pending,
+            )
+            ingestion = IngestionService(durable_config, gmsh_coordinator)
             application.state.ingestion = ingestion
+            application.state.gmsh_coordinator = gmsh_coordinator
+            application.state.meshing = MeshingService(
+                persistence, gmsh_coordinator, durable_config
+            )
             application.state.data_config = durable_config
             persistence.blobs.cleanup_temporary()
             ingestion.cleanup_stale()
@@ -901,6 +916,10 @@ def create_app(
                 del application.state.persistence
             if hasattr(application.state, "ingestion"):
                 del application.state.ingestion
+            if hasattr(application.state, "meshing"):
+                del application.state.meshing
+            if hasattr(application.state, "gmsh_coordinator"):
+                del application.state.gmsh_coordinator
             root_lock.release()
 
     app = FastAPI(
@@ -1100,6 +1119,48 @@ def create_app(
             retryable=True,
         )
 
+    def storage_failure_problem(
+        error: Exception, *, operation: str
+    ) -> ApiProblem:
+        if isinstance(error, BlobCoordinationTimeoutError):
+            return ApiProblem(
+                status=500,
+                code="storage_coordination_unavailable",
+                title="Storage temporarily unavailable",
+                detail=(
+                    f"The {operation} could not acquire bounded storage "
+                    "coordination; no partial state was published."
+                ),
+                retryable=True,
+            )
+        if isinstance(error, BlobCoordinationPathError):
+            return ApiProblem(
+                status=500,
+                code="storage_coordination_failed",
+                title="Storage coordination failed",
+                detail=(
+                    f"The {operation} failed closed because durable storage "
+                    "coordination is unavailable; no partial state was published."
+                ),
+            )
+        if isinstance(error, BlobIntegrityError):
+            return ApiProblem(
+                status=500,
+                code="source_blob_integrity_failed",
+                title="Stored model unavailable",
+                detail=(
+                    "The source blob failed integrity verification; no model "
+                    "version was published."
+                ),
+            )
+        return ApiProblem(
+            status=500,
+            code="source_storage_write_failed",
+            title="Model publication failed",
+            detail="The model version could not be published to durable storage.",
+            retryable=True,
+        )
+
     def mesh_metadata(
         record: ModelRecord, inventory: MeshInventory
     ) -> MeshModelMetadata:
@@ -1285,6 +1346,15 @@ def create_app(
             raise _not_found_problem(exc.resource) from exc
         except SourceStorageLimitExceededError as exc:
             raise source_storage_problem() from exc
+        except (
+            BlobCoordinationTimeoutError,
+            BlobCoordinationPathError,
+            BlobIntegrityError,
+            OSError,
+        ) as exc:
+            raise storage_failure_problem(
+                exc, operation="model publication"
+            ) from exc
         except GeometryIdentityArtifactError as exc:
             raise geometry_identity_problem(exc) from exc
         except PersistenceDatabaseError as exc:
@@ -1332,6 +1402,15 @@ def create_app(
             raise _not_found_problem(exc.resource) from exc
         except SourceStorageLimitExceededError as exc:
             raise source_storage_problem() from exc
+        except (
+            BlobCoordinationTimeoutError,
+            BlobCoordinationPathError,
+            BlobIntegrityError,
+            OSError,
+        ) as exc:
+            raise storage_failure_problem(
+                exc, operation="model publication"
+            ) from exc
         except PersistenceConflictError as exc:
             raise ApiProblem(
                 status=409,
@@ -1832,6 +1911,13 @@ def create_app(
             raise setup_conflict(exc) from exc
         except CadRegionReferenceError as exc:
             raise cad_region_problem(exc) from exc
+        except (
+            BlobCoordinationTimeoutError,
+            BlobCoordinationPathError,
+        ) as exc:
+            raise storage_failure_problem(
+                exc, operation="setup write"
+            ) from exc
         except PersistenceDatabaseError as exc:
             raise setup_database_problem() from exc
         except (InvalidRegionTransitionError, InvalidAssumptionTransitionError) as exc:
@@ -1914,6 +2000,13 @@ def create_app(
             raise setup_conflict(exc) from exc
         except CadRegionReferenceError as exc:
             raise cad_region_problem(exc) from exc
+        except (
+            BlobCoordinationTimeoutError,
+            BlobCoordinationPathError,
+        ) as exc:
+            raise storage_failure_problem(
+                exc, operation="setup write"
+            ) from exc
         except PersistenceDatabaseError as exc:
             raise setup_database_problem() from exc
         except (InvalidRegionTransitionError, InvalidAssumptionTransitionError) as exc:

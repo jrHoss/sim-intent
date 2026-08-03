@@ -1,5 +1,1184 @@
 # Technical-preview progress
 
+> Current authority clarification (2026-07-30, Europe/Berlin):
+> `LEAN_RELEASE_PLAN.md` supersedes the older active task sequence in
+> `TECHNICAL_PREVIEW_PLAN.md`. Historical entries below remain unchanged.
+
+## R5.2 local implementation commit and completion (2026-08-01)
+
+R5.2 is complete locally on branch
+`r5-2-deterministic-step-meshing-service`. Starting from previous HEAD
+`cc6ed16d2e260fb5bb409152da6e14add4a52dd5`, the exact approved implementation
+was committed locally as `63196fac62605ba6944bc56c446891ee9a38528f` with
+subject `feat(mesh): add deterministic STEP meshing service`.
+
+- **Author identity:** Both repository-local and global Git `user.name` and
+  `user.email` were unset. Recent local history consistently identifies the
+  human author name as `jrHoss`, and the exact parent commit was authored and
+  committed by `jrHoss <103708924+jrHoss@users.noreply.github.com>`. That exact
+  parent identity was therefore supplied to the commit command without
+  changing Git configuration.
+- **Exact committed inventory:** Exactly 15 paths were committed: `NOW.md`,
+  `PROGRESS_TECHNICAL_PREVIEW.md`, `app/config.py`,
+  `app/gmsh_coordinator.py`, `app/ingestion.py`, `app/mesh_worker.py`,
+  `app/meshing.py`, `app/persistence.py`, `app/server.py`,
+  `docs/environment.md`, `mesh/generation.py`, `mesh/profile.py`,
+  `tests/fake_mesh_worker.py`, `tests/test_mesh_generation.py`, and
+  `tests/test_meshing_service.py`.
+- **Review completion:** The fourth fresh independent verdict was `APPROVE`.
+  No unresolved BLOCKER, HIGH, MEDIUM, or LOW finding remains, and all
+  historical R5.2 findings are closed.
+- **Frozen production identity:** The current production profile is version 3
+  with fingerprint
+  `80a8bd69b12ac4f132c4231fe7a38dec2dc67d1e6b7f26c8bc5e09b14322a1d5` and
+  resolved identity
+  `gmsh_tet_v1@3:80a8bd69b12ac4f132c4231fe7a38dec2dc67d1e6b7f26c8bc5e09b14322a1d5`.
+- **Final verification evidence:** The independently verified full suite
+  completed with **1,773 passed** and **2 expected skips**, with no failures or
+  errors. Verification found no migration `0006`, dependency or lockfile
+  change, artifact-schema change, API/OpenAPI or generated-TypeScript drift,
+  frontend change, R6 mapping, solver/deck/job/result work, frozen fixture or
+  frozen-evaluation change, or added workstation-specific path. The migration
+  chain remained linear with sole head `0005_mesh_domain_persistence`.
+- **Accepted limitations:** Deterministic byte identity remains scoped to the
+  pinned supported Gmsh/platform/runtime. Gmsh coordination is in-process for
+  the supported one-backend-process deployment. No OS-level CPU, memory, disk,
+  network-namespace, or hostile-upload sandbox is claimed. Distributed jobs
+  remain outside R5.2, and the documented optional CCX and Node-dependent
+  checks may remain unavailable.
+- **Local-only status:** The implementation commit exists only locally on
+  `compass29`. No push, merge, tag, or remote publication occurred. Any future
+  merge, push, publication, or release requires separate explicit
+  authorization.
+
+## R5.2 — Deterministic STEP meshing service remediation (working tree, 2026-08-01)
+
+### Fourth independent verification approval and commit readiness
+
+The fourth fresh independent reviewer returned **`APPROVE`**. The review found
+no unresolved BLOCKER, HIGH, MEDIUM, or LOW finding and confirmed all
+historical R5.2 findings closed: `R52-V01`, `R52-V02`, `R52-V03`, `R52-V04`,
+`R52-V05`, `R52-V06`, `R52-V07`, `R52-V08`, `R52-V09`, `R52-V10`,
+`R52-2V01`, `R52-3V01`, and `R52-3V02`. No independent finding remains.
+
+- **Git binding:** Review and pre-commit evidence apply to branch
+  `r5-2-deterministic-step-meshing-service` at HEAD
+  `cc6ed16d2e260fb5bb409152da6e14add4a52dd5`, with a clean index. The exact
+  changed-path inventory was `NOW.md`, `PROGRESS_TECHNICAL_PREVIEW.md`,
+  `app/config.py`, `app/ingestion.py`, `app/persistence.py`, `app/server.py`,
+  `docs/environment.md`, `app/gmsh_coordinator.py`, `app/mesh_worker.py`,
+  `app/meshing.py`, `mesh/generation.py`, `mesh/profile.py`,
+  `tests/fake_mesh_worker.py`, `tests/test_mesh_generation.py`, and
+  `tests/test_meshing_service.py`.
+- **Frozen profile identities:** Version 1 remains
+  `95fbbaf870e16c7381e24b9c9fd78bffec2ee3a42be7315ec625e042b0d59b7c`;
+  version 2 remains
+  `c2614c3f75ffcd62bcea35005f1e41dd338695e0d68dbd5c29f702ab789f1357`;
+  current production version 3 is
+  `80a8bd69b12ac4f132c4231fe7a38dec2dc67d1e6b7f26c8bc5e09b14322a1d5`.
+  The current durable identity is
+  `3:80a8bd69b12ac4f132c4231fe7a38dec2dc67d1e6b7f26c8bc5e09b14322a1d5`,
+  and the current resolved identity is
+  `gmsh_tet_v1@3:80a8bd69b12ac4f132c4231fe7a38dec2dc67d1e6b7f26c8bc5e09b14322a1d5`.
+- **Independently verified behavior:** Replay integrity; linear
+  root/successor lineage; scale-invariant degeneracy handling;
+  duplicate-coordinate rejection; typed numeric failures; exact
+  setup-revision provenance; shared ingestion/meshing coordination; the
+  complete output-contract manifest; the provenance-producer contract; the
+  physical tolerance-summary contract; the exact **69-field** generated-output
+  inventory; and fresh-process determinism all passed independent review.
+- **Independent test evidence:** Focused R5.2 passed **87** tests; the mutation
+  selection passed **29** with **39 deselected**; the R5.1/R5.2 regression
+  selection passed **604**; and the affected selection passed **831**. The
+  complete suite collected **1,775** tests: **1,773 passed**, **2 expected
+  skips**, **0 failures**, and **0 errors**. The expected skips were optional
+  CCX execution unavailable and Node.js unavailable for the browser syntax
+  test.
+- **Independent integrity and scope result:** The reviewer found no migration
+  `0006`; dependency or lockfile change; artifact-schema change; OpenAPI or
+  generated-TypeScript drift; frontend change; HTTP route; R6 mapping;
+  solver, deck, job, or result work; fixture or frozen-evaluation change;
+  newly added workstation-specific path; secret; backup, patch, or generated
+  artifact; stale process; or scope expansion.
+- **Accepted limitations:** Deterministic byte identity is scoped to the pinned
+  supported Gmsh/platform/runtime. Gmsh coordination is in-process for the
+  supported one-backend-process deployment. No OS-level CPU, memory, disk,
+  network-namespace, or hostile-upload sandbox is claimed. Distributed jobs
+  remain outside R5.2. Optional CCX and Node-dependent checks may remain
+  skipped or unavailable as documented.
+
+Nothing has been staged or committed, and nothing was pushed, merged, or
+remotely published. No local commit has yet been authorized. A local commit
+requires explicit user authorization; any later merge or publication requires
+a separate authorization decision.
+
+### Third independent-review remediation
+
+**Status:** The third independent review returned `CHANGES REQUIRED` while
+independently verifying every earlier finding remains closed. `R52-3V01`
+(MEDIUM) and `R52-3V02` (LOW) are completed locally. No independent approval
+exists, commit remains unauthorized, and a fourth fresh independent review is
+required.
+
+- **R52-3V01 — complete current profile:** Frozen version 1 remains
+  `95fbbaf870e16c7381e24b9c9fd78bffec2ee3a42be7315ec625e042b0d59b7c`;
+  frozen version 2 remains
+  `c2614c3f75ffcd62bcea35005f1e41dd338695e0d68dbd5c29f702ab789f1357`.
+  Version 3 is the sole current production resolution and freezes independently
+  to `80a8bd69b12ac4f132c4231fe7a38dec2dc67d1e6b7f26c8bc5e09b14322a1d5`.
+  Its durable version is
+  `3:80a8bd69b12ac4f132c4231fe7a38dec2dc67d1e6b7f26c8bc5e09b14322a1d5`
+  and its resolved identity is
+  `gmsh_tet_v1@3:80a8bd69b12ac4f132c4231fe7a38dec2dc67d1e6b7f26c8bc5e09b14322a1d5`.
+  Sorted-key compact UTF-8 JSON with one LF and SHA-256 remains the canonical
+  manifest rule; import-time guards independently verify all three versions.
+- **Version-3 structure:** Version 3 retains version 2's
+  `profile_identity`, `gmsh_execution_contract`,
+  `topology_output_contract`, `quality_output_contract`,
+  `canonical_serialization_contract`, and `provenance_contract`, and adds
+  `provenance_producer_contract`,
+  `physical_tolerance_summary_contract`, and an exact
+  `generated_output_field_contracts` inventory.
+- **Producer contract:** The generated object field is `provenance`, its field
+  is `producer`, and the authoritative helper concatenates the exact prefix
+  `sim-intent.` with the complete resolved identity formatted
+  `<logical-selector>@<profile-version>:<manifest-sha256>`. Topology and
+  quality use the same constructed value. UTF-8 serialization preserves code
+  points without case, whitespace, or Unicode normalization, and no worker
+  time, host, process, temporary path, environment, or other host-derived
+  content is appended.
+- **Physical tolerance contract:** Quality emits
+  `signed_volume.degeneracy_tolerance`; `signed_volume.tolerance_unit` is
+  `mm^3`, meaning cubic millimetres. For each accepted tetrahedron,
+  `local_scale_mm` is the maximum absolute component of the three finite local
+  edge vectors and
+  `threshold_mm3=(DEGENERACY_RELATIVE_TOLERANCE/6)*local_scale_mm^3`, evaluated
+  by the production `frexp`/`ldexp` cube-rescaling policy with underflow to
+  positive zero permitted. Division by six converts the normalized determinant
+  threshold to signed volume before physical rescaling. The summary is the
+  finite nonnegative maximum over accepted tetrahedra; its helper returns
+  `0.0` for an empty set although empty meshes are rejected earlier. Canonical
+  float rules apply. The field is informational and does not independently
+  accept, reject, warn, or reclassify a mesh.
+- **Complete output audit:** The exact inventory contains all **69** generated
+  canonical field paths: **26 topology** and **43 quality**. Each is classified
+  as a direct immutable input binding, derived declared formula, declared
+  constant, canonical ordering output, or provenance field and has one explicit
+  declaration. The exhaustiveness test derives field paths from actual
+  topology and quality output and compares them exactly to both fixed expected
+  sets and the manifest inventory, so a new or missing generated field fails.
+- **Mutation and semantic conformance:** All 17 historical version-2 mutation
+  guards still pass. Twelve independent version-3 mutations cover producer
+  prefix, concatenation, resolved-identity format, topology-only application,
+  tolerance field name, units, formula identifier, formula definition,
+  aggregation, empty-set behavior, finite policy, and informational/acceptance
+  role. Every mutation changes the digest and fails the unchanged-version
+  guard. Dictionary insertion order does not change bytes or hash. Semantic
+  tests prove exact producer construction and topology/quality equality,
+  identity substitution, element-local tolerance formula, maximum aggregation,
+  units, empty/finite behavior, and informational-only acceptance behavior.
+- **Durable behavior and capacity:** Focused service tests verify version-3
+  topology, quality, `MeshRevision` storage, exact read, exact-identity replay,
+  changed-profile `mesh_request_conflict`, corrupt replay
+  `mesh_replay_integrity_failure`, and unchanged root/linear-successor lineage.
+  `mesher_profile_id` remains 11/120 characters and durable version 66/80, so
+  no migration or column change is required.
+- **R52-3V02 — evidence correction:** The interrupted sentence below now
+  records the complete checks actually run: no migration `0006`, dependency or
+  lockfile, artifact-schema, OpenAPI, generated-TypeScript, frontend, HTTP
+  route, R6 mapping, solver/deck/job/result, frozen fixture,
+  evaluation/replay, workstation-specific added path, secret, or backup file
+  change.
+
+### Third-review remediation verification
+
+All pytest commands derived the ABI library from repository-interpreter
+`sys.base_prefix` and used `LD_PRELOAD`, `PYTHONDONTWRITEBYTECODE=1`,
+`TMPDIR=/tmp`, `-p no:cacheprovider`, and a unique `--basetemp`.
+
+- Syntax compilation of every changed Python file completed successfully.
+  Profile/output semantic selection passed **9** tests; the mutation selection
+  passed **29** tests (17 version-2 plus 12 version-3); complete
+  `test_mesh_generation.py` plus `test_meshing_service.py` passed **87** tests
+  in **17.89 s**.
+- R5.1/R5.2 artifact, remediation, persistence, ownership, CAS atomicity,
+  concurrency, migration, mesh-domain, safe-ingestion, and locking selection
+  passed **604** tests with 0 failures/errors in **83.143 s**.
+- Affected parser/ingestion, geometry, project/model/source/setup persistence,
+  application/runtime, schema-versioning, migration, and OpenAPI selection
+  passed **831** tests with 0 failures/errors in **69.096 s**.
+- Fresh-process determinism used the literal `./.venv/bin/python`, two distinct
+  `/tmp` directories per fixture, identical source bytes and 10 mm settings,
+  fixed bindings and timestamp, current version 3, and no persistence replay.
+  Raw current-worker bytes, nodes, tetrahedra, exterior triangles, complete
+  quality data, and canonical artifact bytes matched between processes:
+  - `bracket.step`: current raw
+    `e9e75ecf96e4409e82117dcfa674ea72b6e9e9af316b85e2df1b65428429a801`;
+    topology
+    `e7ff35b9944a1eab79de22ac2397477a06c32fee2d298286d3dfbd58737e5df4`;
+    quality
+    `7d6d3624a767066f47eb914ae80f39f3c7b3413957f332d90e32e90005b307b8`;
+    594 nodes, 1,719 tetrahedra, 1,188 exterior triangles.
+  - `plate_hole.step`: current raw
+    `74b2a2e5259380c89c71b3818586a904f157279a67ce480b412937bb6a4fd34b`;
+    topology
+    `0127d1d353b7ff5bfcd14728095df19bdf08f4cd5df0997ce461ffced8eab1fb`;
+    quality
+    `8475476e16c4a703be5fc44e563b0af62c9cbbd2e4263ffa1d98dee87ea43dc4`;
+    610 nodes, 1,694 tetrahedra, 1,220 exterior triangles.
+  The mandated worker `profile_version` field makes complete version-3 raw
+  protocol bytes differ from version 2. Replacing only that identity field with
+  frozen version 2 exactly reproduces the recorded version-2 raw hashes
+  `4c7298932210c8c5da7a5726be5ee6bbbd183b19954817de7390c535ea84348f`
+  and
+  `72df324c67c93996c18d2348429fbaab2cf33d231659079b6626253ff90b7593`,
+  proving the Gmsh execution and extracted geometry payload are unchanged.
+- Full Python suite passed **1,773**, skipped **2**, with 0 failures/errors in
+  **187.023 s**. The two skips remain optional CCX execution and the
+  Node-dependent browser syntax check.
+- `scripts/check_env.py` returned `ENV OK` with optional CCX unavailable;
+  `scripts/export_schema.py --check` reported checked-in schema artifacts
+  match; Alembic has the sole linear head `0005_mesh_domain_persistence`.
+  Final checks found the exact authorized path set, clean index and diff check,
+  and no migration `0006`, dependency/lock, artifact-schema, API/OpenAPI,
+  generated-TypeScript, frontend, R6, solver/deck/job/result, frozen fixture,
+  frozen evaluation/replay, added workstation path, secret, backup, unexpected
+  generated file, or stale pytest/worker/server process.
+- Remaining deployment limitations are unchanged: deterministic byte identity
+  is scoped to the pinned supported Gmsh/platform/runtime; coordination is
+  in-process for one supported backend process; no OS CPU, memory, disk, or
+  network sandbox is claimed; durable/distributed jobs remain outside R5.2.
+  No finding is intentionally deferred. Nothing was staged, committed, pushed,
+  merged, tagged, rebased, amended, or branch-switched. A fourth fresh
+  independent review is required.
+
+### Second independent-review remediation (historical evidence)
+
+**Status:** The second independent review returned `CHANGES REQUIRED` after
+verifying nine earlier findings closed. `R52-2V01` (MEDIUM) was the sole
+remaining finding. Its local remediation and verification are complete, but no
+independent approval exists. Commit remains unauthorized. A third fresh
+independent review is required.
+
+### Interrupted-session recovery
+
+- **Identity and scope gate:** Recovery began on host `compass29` as
+  `m2227837`, in the expected repository, branch
+  `r5-2-deterministic-step-meshing-service`, and HEAD
+  `cc6ed16d2e260fb5bb409152da6e14add4a52dd5`. The index was clean and the
+  worktree contained exactly the authorized R5.2 path inventory. The literal
+  repository interpreter reported Python 3.13.14, pytest 9.1.1, and the
+  repository `.venv` as `sys.prefix`.
+- **Processes and ports:** The user had already killed the interrupted server.
+  Recovery inspection found no repository server, pytest, parser worker, mesh
+  worker, or monitored listener, so no process was terminated.
+- **Artifacts:** No `.orig`, `.rej`, `.bak`, editor-backup, patch-backup, or
+  unexpected untracked report/script was present. Existing ignored
+  `__pycache__` and `.pytest_cache` directories were preserved because their
+  origin could not be proven. Final inspection identified older task-prefixed
+  `/tmp/sim-intent-r52-*` entries exclusively as pytest base directories and
+  this recovery's newer entries as pytest bases/logs/status files. It also
+  identified patch-fallback `.orig` and `.rej` files. Those exact proven
+  generated paths were removed; no intended source work was removed.
+- **Partial work:** The v2 profile, consumers, focused tests, and governance
+  edits were syntactically complete and were preserved. Inspection found the
+  required mutation matrix missing quality-schema, signed-volume-formula,
+  aspect-ratio-formula, and topology-to-quality-binding cases; those four cases
+  were completed narrowly. One recovery regression run lost its output channel
+  while its pytest process remained active; it was allowed to exit naturally,
+  was not counted as evidence, and was rerun with durable `/tmp` output capture.
+
+### Second independent-review finding and correction
+
+- **Verdict:** `CHANGES REQUIRED`; nine prior findings verified closed;
+  `R52-2V01 — Profile fingerprint omits material output contracts` remained.
+- **Frozen history:** The exact version-1 canonical manifest remains unchanged
+  and still hashes to
+  `95fbbaf870e16c7381e24b9c9fd78bffec2ee3a42be7315ec625e042b0d59b7c`.
+  Version 1 remains historical metadata and is no longer current production
+  resolution for new mesh publication.
+- **Complete version 2:** `mesh/profile.py` now owns immutable structured
+  profile-identity, Gmsh-execution, topology-output, quality-output,
+  canonical-serialization, and provenance contracts. These bind every fixed
+  and request-derived option; configuration, global-size, threading,
+  randomization, OCC-import, element-family and first-order rules; exact worker
+  success/rejection/raw-mesh response schemas; topology artifact/schema,
+  coordinate and negative-zero normalization, duplicate rejection, node/tet
+  ordering and orientation, exterior incidence/canonicalization,
+  non-manifold/empty/unsupported rejection; quality artifact/schema and exact
+  policy/formula identifiers, dimensionless tolerance/classification,
+  numeric-range policy, percentile set/interpolation, and poor-valid
+  acceptance; canonical JSON/key/sequence/float/UTF-8/LF/SHA-256 and
+  topology-to-quality binding; and exact immutable `SetupRevision.created_at`
+  UTC/precision setup-lineage provenance rather than worker wall-clock time.
+- **Canonical guard:** Sorted-key compact UTF-8 JSON with one trailing LF is the
+  single manifest representation. Version 2 freezes independently to
+  `c2614c3f75ffcd62bcea35005f1e41dd338695e0d68dbd5c29f702ab789f1357`.
+  Import-time verification guards both frozen v1 and v2 content. Tests mutate
+  a Gmsh option, topology schema, quality schema, quality-policy version,
+  signed-volume formula identifier, mean-ratio formula identifier,
+  aspect-ratio formula identifier, percentile set, interpolation rule,
+  degeneracy tolerance, timestamp source, timestamp precision, worker-response
+  schema, canonical-serialization policy, node-ordering rule,
+  exterior-extraction rule, and topology-to-quality binding independently.
+  All 17 mutations change the digest and fail the unchanged-version guard.
+  Reversing dictionary insertion order preserves canonical bytes and digest.
+- **Single durable current resolution:** The existing logical setup selector
+  remains `gmsh_tet_v1`; its sole current production resolution is durable
+  version
+  `2:c2614c3f75ffcd62bcea35005f1e41dd338695e0d68dbd5c29f702ab789f1357`
+  and resolved identity
+  `gmsh_tet_v1@2:c2614c3f75ffcd62bcea35005f1e41dd338695e0d68dbd5c29f702ab789f1357`.
+  Worker output validation, topology, quality, MeshRevision publication, exact
+  reads, and request replay use that exact binding. A different resolved
+  profile conflicts rather than replaying. Existing database capacities remain
+  sufficient (`mesher_profile_id` 11/120 characters and durable version 66/80),
+  with no truncation, schema column, or migration required.
+
+### R52-2V01 verification
+
+All pytest commands derived `libstdc++.so.6` from repository-interpreter
+`sys.base_prefix` and used `LD_PRELOAD`, `PYTHONDONTWRITEBYTECODE=1`,
+`TMPDIR=/tmp`, `-p no:cacheprovider`, and unique `--basetemp` directories.
+
+- Profile-focused selection (`tests/test_mesh_generation.py -k 'profile or
+  manifest'`) → **5 passed, 47 deselected** in **0.56 s**. The independent
+  mutation selection (`tests/test_mesh_generation.py -k mutation`) → **17
+  passed, 35 deselected** in **0.42 s**. Complete profile/generation/service
+  selection (`tests/test_mesh_generation.py tests/test_meshing_service.py`) →
+  **71 passed** in **20.11 s**.
+- Complete R5.1 artifact, remediation, persistence, ownership, CAS atomicity,
+  concurrency, migration-remediation, mesh-domain, meshing-service,
+  database-migration, migration-safety, safe-ingestion, and data-root-lock
+  selection → **536 passed** in **77.20 s**. The first attempt's detached
+  output was not counted; this is the fresh captured rerun result.
+- Affected parser/ingestion, geometry identity, project/source/setup
+  persistence, application/lifespan/runtime, migration, schema-version, and
+  OpenAPI selection → **846 passed** in **85.82 s**.
+- Fresh-process, no-persistence-replay determinism used two worker processes and
+  distinct `/tmp` operation directories per fixture, fixed 10 mm settings,
+  fixed ownership/setup bindings, fixed setup timestamp
+  `2026-07-31T12:34:56.123456Z`, and exact durable profile version
+  `2:c2614c3f75ffcd62bcea35005f1e41dd338695e0d68dbd5c29f702ab789f1357`.
+  Raw protocol bytes, nodes, tetrahedra, exterior triangles, complete quality
+  data, canonical topology bytes, and canonical quality bytes all matched:
+  - `bracket.step`: raw
+    `4c7298932210c8c5da7a5726be5ee6bbbd183b19954817de7390c535ea84348f`;
+    topology
+    `1df8c1478ed4357fdd0bc87f9cabb0f734c2fd05a76977d6b327e8b1384fab4a`;
+    quality
+    `f738a4e8253856b2868ebc076b7dd47665b3b3ffba930c5c6694073011d8e3b1`;
+    594 nodes, 1,719 tetrahedra, and 1,188 exterior triangles.
+  - `plate_hole.step`: raw
+    `72df324c67c93996c18d2348429fbaab2cf33d231659079b6626253ff90b7593`;
+    topology
+    `b478e6cb79077acf81f17a73d45a62cf4c95b13276551d202cad0288ae92fb0f`;
+    quality
+    `537a9be8d59bd43d00b2e6a072b4cfe0060c4af3ceea2bfe47c55aca2f9df9bf`;
+    610 nodes, 1,694 tetrahedra, and 1,220 exterior triangles.
+- Full Python suite (`./.venv/bin/python -m pytest -p no:cacheprovider
+  --basetemp=/tmp/sim-intent-r52-full-rerun -q -ra` with the common environment)
+  → **1,757 passed, 2 skipped**, 0 failures/errors in **182.54 s**. Skips remain
+  optional CCX execution and the Node-dependent browser syntax check. Warnings
+  were the known Starlette deprecation and two exercised SQLAlchemy identity
+  conflict paths.
+- `scripts/check_env.py` → `ENV OK` with optional CCX unavailable;
+  `scripts/export_schema.py --check` → checked-in schema artifacts match;
+  `./.venv/bin/alembic heads` → sole head
+  `0005_mesh_domain_persistence`; `./.venv/bin/alembic history` → one linear
+  `0001` through `0005` chain. Git scope checks found no migration `0006`, dependency or lockfile,
+  artifact-schema, OpenAPI, generated-TypeScript, frontend, HTTP-route, R6
+  mapping, solver/deck/job/result, frozen-fixture, frozen-evaluation/replay,
+  workstation-specific added-path, secret, or backup-file change.
+
+This correction has no independent approval. Commit remains unauthorized and a
+third fresh independent review is required.
+
+### First independent-review findings and corrections
+
+- **R52-V01 (HIGH) — replay integrity:** Both the pre-worker replay and the
+  publication-race replay now resolve the stored row through R5.1
+  `read_mesh_revision`. Missing, corrupt, wrong-size, wrong-hash, noncanonical,
+  cross-bound, wrong-profile, or wrong-owner artifacts fail closed as the stable
+  path-free service code `mesh_replay_integrity_failure`. Replay never treats
+  integrity failure as a miss, regenerates, or replaces artifacts.
+- **R52-V02 (HIGH) — one linear source lineage:** While holding the existing
+  process-shared CAS publication lock across the database transaction,
+  persistence selects the exact project/model/model-version/source-hash
+  lineage. A new identity may have no predecessor only when the lineage is
+  empty. Otherwise the graph must have exactly one root, one leaf, no branch,
+  cycle, disconnected component, or external predecessor, and the request must
+  name the unique leaf. The existing database uniqueness constraint remains the
+  final one-successor guard. Reuse of an already-existing mesh UUID still
+  reaches R5.1's established primary-key conflict/cleanup path and cannot create
+  another root. Size-change remeshes may bind a newer current SetupRevision;
+  earlier mesh revisions remain immutable and exactly readable. No migration
+  was required.
+- **R52-V03 (MEDIUM) — scale-invariant degeneracy:** The removed
+  `target_size_mm³ × 1e-12` rule is replaced by the named dimensionless
+  `DEGENERACY_RELATIVE_TOLERANCE = 1e-12`. Each tetrahedron forms three finite
+  local edge vectors, scales them by their maximum absolute component, and
+  evaluates the normalized determinant. Zero scale and absolute determinant at
+  or below the threshold are degenerate; a larger negative determinant is
+  inverted. Physical volume is rescaled with `frexp`/`ldexp` and must be a
+  finite positive float. Mean ratio and aspect ratio use scaled coordinates.
+  The existing physical tolerance summary records the maximum element-local
+  physical cutoff implied by the dimensionless rule, never the target size.
+- **R52-V04 (MEDIUM) — coincident nodes:** Negative zero is normalized, every
+  coordinate must be finite, and distinct source tags with the same exact
+  canonical coordinate triple are rejected as
+  `duplicate_node_coordinates` before sorting or renumbering. Raw tags are no
+  longer a coincident-node tie-breaker.
+- **R52-V05 (MEDIUM) — numeric range:** Coordinate subtraction, normalization,
+  determinant products, cubic volume rescaling, squared distances, lengths,
+  areas, altitudes, quality ratios, and percentile interpolation validate
+  finite results and translate expected overflow/underflow/arithmetic failures
+  to `mesh_numeric_range_failure`. Programming-shape errors are not broadly
+  swallowed. The service publishes no row or artifact on a typed generation
+  failure and cleans the worker directory.
+- **R52-V06 (MEDIUM) — material profile identity:** `mesh/profile.py` now owns
+  an immutable then-reviewed version-1 manifest: logical name, required Gmsh
+  version, every fixed and request-derived option, option ordering and
+  canonicalization, global-size application, extraction expectations,
+  family/order restrictions, deterministic ordering, quality/degeneracy and
+  provenance policies, and worker protocol. Canonical UTF-8 JSON hashes to the
+  frozen SHA-256
+  `95fbbaf870e16c7381e24b9c9fd78bffec2ee3a42be7315ec625e042b0d59b7c`.
+  Import-time verification rejects a changed version-1 manifest. The logical
+  input selector remains `gmsh_tet_v1`; the existing R5.1 artifact and row
+  `mesher_profile_version` binding is
+  `1:95fbbaf870e16c7381e24b9c9fd78bffec2ee3a42be7315ec625e042b0d59b7c`,
+  equivalent to resolved identity
+  `gmsh_tet_v1@1:95fbbaf870e16c7381e24b9c9fd78bffec2ee3a42be7315ec625e042b0d59b7c`.
+- **R52-V07 (LOW) — truthful provenance:** The fabricated calendar literal was
+  removed. Topology and quality now carry the exact selected immutable
+  SetupRevision `created_at` instant, normalized to UTC, as the reproducible
+  input-lineage provenance epoch. It is not presented as worker wall-clock
+  execution time. Replay preserves the original artifact bytes.
+- **R52-V08 (LOW) — portable evidence:** Workstation-specific home paths were
+  removed from this R5.2 entry. ABI verification derives
+  `lib/libstdc++.so.6` from repository-interpreter `sys.base_prefix`.
+- **R52-V09 (LOW) — containment documentation:** `docs/environment.md` now
+  enumerates the enforced fresh-process, argument-vector, timeout,
+  process-group termination, bounded stdout/stderr/response, isolated temporary
+  directory, deterministic cleanup, and shared in-process coordination
+  boundaries. It separately enumerates absent CPU, memory, disk, network
+  namespace, cross-process coordinator, and hostile-upload OS sandboxing, and
+  records the supported one-backend-process deployment assumption.
+- **R52-V10 (LOW) — integrated contention:** A service-level test makes a real
+  `IngestionService.parse` hold the production-shared coordinator while a real
+  `MeshingService.generate_and_publish` reaches deterministic timeout,
+  verifies the typed error and permit count, releases parsing, and proves a
+  subsequent real mesh succeeds. Application construction is asserted to give
+  both services the same coordinator object.
+
+### Focused and affected verification
+
+All pytest commands used `PYTHONDONTWRITEBYTECODE=1`, `TMPDIR=/tmp`,
+`-p no:cacheprovider`, and a unique `--basetemp`. ABI-isolated commands
+derived the preload path with:
+
+```bash
+ABI_LIB="$(
+  ./.venv/bin/python - <<'PY'
+import pathlib
+import sys
+print(pathlib.Path(sys.base_prefix) / "lib" / "libstdc++.so.6")
+PY
+)"
+```
+
+- Focused remediation:
+  `LD_PRELOAD="$ABI_LIB" ./.venv/bin/python -m pytest ... -q -ra
+  tests/test_mesh_generation.py tests/test_meshing_service.py` →
+  **53 passed** in **16.79 s**.
+- Same-UUID cleanup plus all root/leaf/ambiguity concurrency regressions →
+  **5 passed** in **4.34 s**.
+- R5.2, R5.1 artifacts/persistence/CAS/concurrency/ownership/migration, and safe
+  ingestion:
+  `tests/test_mesh_generation.py tests/test_meshing_service.py
+  tests/test_mesh_artifacts.py tests/test_mesh_artifact_remediation.py
+  tests/test_mesh_persistence.py tests/test_mesh_cas_atomicity.py
+  tests/test_mesh_concurrency.py tests/test_mesh_ownership_remediation.py
+  tests/test_mesh_migration_remediation.py tests/test_safe_ingestion.py` →
+  **509 passed** in **61.95 s**.
+- Complete affected parser/ingestion, geometry identity, source/setup/project
+  persistence, migration, application/runtime/lifespan, schema-version, and
+  OpenAPI selection → **743 passed** in **92.79 s**.
+- Collection reconciliation: exact committed R5.1 HEAD collected **1,688**;
+  the reviewed initial R5.2 implementation collected **1,707**; the remediated
+  working tree collects **1,741**, adding 34 finding-focused cases without
+  rewriting R5.1 historical evidence.
+
+The first focused iteration was **50 passed, 3 failed** because three new test
+fixtures used a chained boolean comparison, a coincident rather than distinct
+coplanar point, and a still-representable large volume. The fixtures were
+corrected without changing production behavior. The first combined R5.1 run
+was **508 passed, 1 failed** because the new root precheck intercepted R5.1's
+deliberate same-mesh-UUID conflict test; persistence was narrowed so that an
+existing UUID still reaches the established database conflict/cleanup path,
+while every new identity remains subject to the root rule. Final results above
+are clean.
+
+### Independent fresh-process determinism
+
+A standalone harness used the literal repository `./.venv/bin/python`, the
+same supported STEP bytes and size 10 mm, two new worker processes, two
+different `/tmp` operation directories, fixed bindings and setup timestamp,
+and no persistence replay. Raw response, canonical topology, and canonical
+quality bytes matched exactly:
+
+- `bracket.step`: raw
+  `e3112009aae5705944076d3fd11ffa05eb03d87fe406bd0ae49955777e46ed41`;
+  topology
+  `56c43d6f4d7d4040fd252a182bba694a5af2c903661a83c3e073a2d95df80a84`;
+  quality
+  `894292c672c7f1b7bafa35985ff4acbc67adebe5e9d96006bcd69b9b6a07a16b`.
+- `plate_hole.step`: raw
+  `e5f1ee6ef80b4a63a45d4b20e0c3a2d7552e789b133a84271a19702a98536c9d`;
+  topology
+  `b967ef2351bfb12fe5fee93e4d568df74b7988abef547c19c444771b601e6003`;
+  quality
+  `be35c92b7c81af605304ae02a552b3e2d82631180d9a6ec1eb90761b2e66394b`.
+
+An earlier harness attempt incorrectly resolved the repository interpreter
+symlink to the Conda base interpreter and exited nonzero before producing mesh
+evidence. It changed no repository state and is not counted as verification;
+the compliant literal-repository-interpreter rerun above is the evidence.
+
+### Full suite and repository checks
+
+- Final full command:
+  `LD_PRELOAD="$ABI_LIB" PYTHONDONTWRITEBYTECODE=1 TMPDIR=/tmp
+  ./.venv/bin/python -m pytest -p no:cacheprovider
+  --basetemp=/tmp/sim-intent-r52-remediation-full-exact-final -q -ra` →
+  **1,739 passed, 2 skipped**, 0 failures/errors in **182.91 s**. Skips are the
+  optional CCX execution and Node-dependent browser syntax checks.
+- `./.venv/bin/python scripts/check_env.py` → `ENV OK`; optional CCX
+  unavailable.
+- `./.venv/bin/python scripts/export_schema.py --check` → checked-in schema
+  artifacts match the backend.
+- `./.venv/bin/python -m alembic heads` →
+  `0005_mesh_domain_persistence (head)`.
+- No dependency/lock, migration, schema/OpenAPI, generated TypeScript,
+  frontend, frozen fixture, or frozen evaluation/replay file changed.
+- No migration `0006`, HTTP route, R6 CAD-to-mesh mapping, solver/deck/job/
+  result work, dependency, or artifact-schema change was added.
+- Remaining deployment limitations are explicit: deterministic byte identity
+  is scoped to the pinned supported Gmsh/platform/runtime; coordination is
+  in-process for the supported single backend process; no OS CPU, memory, disk,
+  or network sandbox is claimed; durable/distributed jobs remain out of R5.2.
+- No finding is intentionally deferred. A third fresh independent review is required.
+- No stage, commit, push, merge, rebase, amend, or tag operation was performed.
+
+## R5.1 — Mesh domain and durable persistence
+
+**Status:** FIFTH INDEPENDENT READ-ONLY VERIFICATION `APPROVE` on 2026-07-31
+(Europe/Berlin); approved and ready for a local commit; not published remotely.
+
+### Starting state and independent verdict
+
+- Remediation began on `r5-1-mesh-domain-persistence` at unchanged `HEAD`
+  `4e0ae349d26429c32aa44262e61ad1606580f0f2`, with the uncommitted
+  `0005_mesh_domain_persistence` implementation under review.
+- The independent review rejected the implementation for two HIGH findings:
+  stale/superseded/non-current setup inputs were accepted, and empty or
+  physically inconsistent quality evidence could be accepted.
+- MEDIUM findings covered coercive integer fields, signed-zero hash drift,
+  incomplete exact-read pair validation, unhandled cross-process request races,
+  non-atomic second-artifact publication, cleanup that could mask failures or
+  delete unrelated orphans, and overstated exact-read evidence. The exact
+  ABI-isolation command was also missing (LOW).
+
+### Remediation
+
+- Topology now requires at least four nodes, one tetrahedron, and one exterior
+  triangle, with unique IDs and connectivity, valid references, valid exterior
+  ownership, and no duplicate boundary connectivity.
+- Every integer-valued artifact field uses strict integer validation. Booleans,
+  floats, numeric strings, and other coercible non-integers are rejected.
+- Quality now requires a positive element count, bounded non-positive count,
+  finite and internally consistent signed-volume evidence, mean-ratio values in
+  `[0, 1]` with ordered percentiles, aspect ratios at least one with ordered
+  percentiles, accepted-state positive minima and no rejection codes, and at
+  least one rejection code for rejected state.
+- The shared canonical serializer recursively normalizes every finite floating
+  zero to positive `0.0`; NaN and infinities remain rejected.
+- One `validate_mesh_artifact_pair` function now owns binding, source/settings
+  hashes, topology linkage, non-empty topology, quality/topology cardinality,
+  and pair consistency. Creation and exact read call the same function after
+  independent canonical/integrity validation.
+- The authoritative creation transaction now checks Model/ModelVersion
+  ownership, current-version identity, non-supersession, non-stale Setup,
+  exact Setup-to-ModelVersion binding, and SetupRevision ownership. Updated
+  `0005` insertion triggers repeat ownership and currentness checks, while a
+  separate lineage trigger protects predecessor ownership.
+- Database request-ID races are resolved after rollback by loading the winner
+  with exact Project/request scope and comparing canonical request hashes.
+  Identical requests replay; changed content raises `request_id_conflict`;
+  predecessor races raise `mesh_lineage_conflict`; unrelated integrity failures
+  remain database failures.
+- At the first-remediation stage, CAS publication reported the exact key,
+  pre-operation existence, and exact creation via atomic same-directory links.
+  Publication, SQL commit, and operation-scoped cleanup shared only an
+  in-process failure boundary. The cleanup preserved pre-existing/shared blobs,
+  avoided broad orphan scans, and preserved the original failure, but it was
+  **not cross-process safe**; the second review rejected that overstatement.
+- Migration regressions cover stale/non-current/superseded insertion, every
+  immutable column, request/predecessor uniqueness, ownership and lineage
+  mismatch branches, populated-`0004` preservation, downgrade, re-upgrade, and
+  the sole head.
+
+### Named regression evidence
+
+- HIGH stale/currentness:
+  `test_stale_setup_is_rejected_by_authoritative_creation_transaction`,
+  `test_superseded_model_version_is_rejected_by_creation_transaction`,
+  `test_non_current_model_version_is_rejected_by_creation_transaction`,
+  `test_source_replacement_before_mesh_creation_rejects_old_setup`,
+  `test_invalidation_between_validation_and_insert_is_typed`, and direct-SQL
+  stale/currentness tests all pass.
+- HIGH artifact validity:
+  `test_empty_or_incomplete_topology_is_rejected`,
+  `test_zero_element_quality_is_rejected_for_every_status`, and the
+  parameterized mathematical/status inconsistency tests pass.
+- Strict integers:
+  `test_every_integer_category_rejects_coercible_non_integers` passes for every
+  integer category and `True`, `False`, `1.0`, `"1"`, and `Decimal("1")`.
+- Signed zero: coordinate, signed-volume, mean-ratio, and shared aspect-ratio
+  serializer byte/hash equality tests pass.
+- Exact reads:
+  `test_exact_read_repeats_every_bypassable_pair_invariant` rejects embedded
+  binding, source hash, settings hash, topology link, row mesher-profile
+  identity/version, and element-count bypasses.
+- Races: all four tests in `tests/test_mesh_concurrency.py` pass using
+  independent processes.
+- CAS: all nine tests in `tests/test_mesh_cas_atomicity.py` pass, including
+  second-publication failure, rollback cleanup, cleanup failure, pre-existing
+  blobs, shared references, and unrelated older orphans.
+
+### Validation evidence
+
+- Artifact remediation:
+  `PYTHONDONTWRITEBYTECODE=1 TMPDIR=/tmp .venv/bin/python -m pytest
+  -p no:cacheprovider --basetemp=/tmp/sim-intent-r5-1-artifact-remediation-01
+  tests/test_mesh_artifact_remediation.py -q` → **91 passed**.
+- Complete R5.1 focused selection → **171 passed**.
+- Final ABI-isolated affected persistence selection → **237 passed**.
+- Affected migration selection → **97 passed**. Affected schema/versioning
+  selection → **181 passed**. Frozen fixture/evaluation integrity → **6 passed**.
+- Ordinary host full suite:
+  `PYTHONDONTWRITEBYTECODE=1 TMPDIR=/tmp .venv/bin/python -m pytest
+  -p no:cacheprovider --basetemp=/tmp/sim-intent-r5-1-full-ordinary-final
+  -q -ra --tb=short` → **1176 passed, 180 failed, 91 errors, 2 skipped**.
+  The 91 direct errors are the known order-sensitive
+  `CXXABI_1.3.15` SQLite/ICU import collision; downstream assertion/process
+  failures followed that contaminated environment and do not reproduce in the
+  fresh isolated process.
+- Exact fresh ABI-isolated command (not an ordinary host run):
+
+  `LD_PRELOAD=/home/m2227837/miniforge3/envs/fea/lib/libstdc++.so.6 PYTHONDONTWRITEBYTECODE=1 TMPDIR=/tmp .venv/bin/python -m pytest -p no:cacheprovider --basetemp=/tmp/sim-intent-r5-1-full-abi-isolated-final -q -ra`
+
+  Result: **1447 passed, 2 skipped**, 0 failed, 0 errors (148.49 s).
+- Environment check: `ENV OK`; optional CCX unavailable. Sole migration head:
+  `0005_mesh_domain_persistence`. Schema/OpenAPI and all 35 stamped payload
+  checks pass. Dependency files are unchanged.
+- Docker exists but access to `/var/run/docker.sock` is denied. Node/npm, uv,
+  gitleaks, pip in `.venv`, and CCX are unavailable; JavaScript syntax,
+  generated-TypeScript regeneration, uv requirements export, gitleaks, and
+  container validation were not claimed.
+
+### Scope and disposition
+
+No real meshing, Gmsh production path, worker/queue, API/OpenAPI/generated
+client/frontend change, CAD-to-mesh mapping, solver set/export behavior, INP
+remeshing, R6, or later work entered this slice. R5.1 was not approved; this
+first-remediation disposition was superseded by the second rejection below.
+
+### Second independent verdict and exact reproduction
+
+- A second independent read-only review returned **`REJECT`** on 2026-07-31.
+- The reviewer forced this cross-process sequence: process A published topology
+  and quality, failed its database operation, and observed both unreferenced;
+  process B then committed a MeshRevision with the same hashes before process A
+  unlinked them. The exact reproduced result was:
+
+  ```text
+  ROW_COMMITTED True
+  FINAL_BLOBS_EXIST False False
+  ```
+
+  A durable committed MeshRevision therefore referenced two missing artifacts.
+- The same review found that a triangle incident to two tetrahedra could be
+  declared exterior; artifact ownership accepted non-UUID strings; quality
+  artifacts lacked mesher-profile ID/version; and remediation/environment
+  documentation overstated the prior guarantees.
+
+### Second remediation design
+
+- `app.blob_store.ProcessSharedCASLock` now promotes the existing canonical-CAS
+  `coordination_lock` boundary to a re-entrant thread lock plus an external
+  `filelock` keyed by the canonical CAS-root hash under
+  `/tmp/sim-intent-cas-locks`. Acquisition is bounded to 10 seconds. The global
+  ordering is process-shared CAS lock → process-local setup lock → SQLite
+  transaction. Mesh creation holds it continuously across topology publication,
+  quality publication, ownership/currentness validation, MeshRevision commit,
+  and operation-scoped failure cleanup. Cleanup re-acquires the same re-entrant
+  lock so its final reference check and unlink are indivisible even if the
+  private helper is invoked separately. Pre-existing blobs, committed shared
+  blobs, and unrelated historical orphans retain the earlier protections;
+  cleanup exceptions remain suppressed in favor of the original operation
+  failure.
+- `MeshTopologyArtifact.valid_topology` derives all four sorted triangular faces
+  of every tetrahedron and builds a face-incidence map. A declared exterior face
+  must occur exactly once, name that sole incident tetrahedron as owner, and be
+  declared only once. Zero-incidence, interior/non-manifold, wrong-owner, and
+  duplicate declarations are rejected; partial boundary enumeration remains
+  allowed.
+- One reusable strict `CanonicalUUID` type now owns all six topology and quality
+  domain identifiers. It accepts only lowercase, hyphenated canonical UUID text
+  and rejects text labels, uppercase, braces, whitespace, compact/truncated or
+  non-hex forms, and non-string coercions during direct construction and JSON
+  deserialization.
+- `sim-intent.mesh-quality.v1` now includes `mesher_profile_id` and
+  `mesher_profile_version` with the same strict string semantics as topology and
+  the durable row. `validate_mesh_artifact_pair` enforces topology-quality-row
+  agreement on both values during creation before publication and during exact
+  reads after canonical and CAS integrity validation. This changes artifact
+  bytes only; migration `0005` and its SQL schema are unchanged, and no `0006`
+  exists.
+
+### Second-remediation named regressions
+
+- `test_cross_process_failed_cleanup_cannot_delete_committed_mesh_artifacts`
+  forces the failing creator to publish both artifacts and enter cleanup while
+  a second process attempts the identical hashes. It proves two cleanup
+  attempts, the original `ForcedMeshCreationError`, one committed row, exact
+  MeshRevision read success, both final regular files, and two verified CAS
+  reads. The process-shared lock prevents the successful commit from entering
+  cleanup's check/unlink interval; it commits immediately after failed-operation
+  cleanup and republishes any eligible removed leaves.
+- Exterior incidence is covered by true-exterior acceptance plus shared-face,
+  wrong-owner, non-tetrahedral, and canonical-duplicate rejection tests.
+- The parameterized UUID matrix covers every domain UUID field in both artifact
+  types, all eight malformed/noncanonical categories, and both direct Python and
+  JSON construction, plus canonical round trips.
+- Creation rejects topology/quality profile ID or version disagreement before
+  either final artifact exists. Exact-read regressions reject topology-quality
+  ID/version mismatches and quality/durable-row ID/version mismatches; a valid
+  three-way agreement reopens successfully.
+
+### Supported second-remediation environment
+
+```bash
+source /home/m2227837/miniforge3/etc/profile.d/conda.sh
+conda activate fea
+```
+
+`echo "$LD_PRELOAD"` returns
+`/home/m2227837/miniforge3/envs/fea/lib/libstdc++.so.6`, and
+`readlink -f .venv/bin/python` returns
+`/home/m2227837/miniforge3/envs/fea/bin/python3.13`. `.venv.partial` is not
+required, rebuilt, or used.
+
+### Second-remediation validation evidence
+
+All pytest commands used `PYTHONDONTWRITEBYTECODE=1`, `TMPDIR=/tmp`,
+`-p no:cacheprovider`, and a unique `/tmp` basetemp except the explicitly
+prescribed full-suite basetemp.
+
+- Forced two-process cleanup race: **1 passed**. All CAS atomicity:
+  **9 passed**. Exterior-incidence-only: **5 passed, 307 deselected**.
+  Artifact contracts: **324 passed**. Strict-UUID-only:
+  **216 passed, 96 deselected**. Mesher-profile-only:
+  **7 passed, 13 deselected**. All profile/ownership remediation:
+  **20 passed**. Exact-read corruption and pair validation: **11 passed**.
+  All concurrency: **5 passed**. All `tests/test_mesh_*.py`:
+  **398 passed**.
+- BlobStore, durable project storage, ingestion, and source supersession:
+  **83 passed**. Geometry artifact integrity: **41 passed**. Setup/database
+  migration persistence: **28 passed**. Schema/version/OpenAPI:
+  **204 passed**. Frozen fixture, replay-manifest, baseline, and corpus hashes:
+  **6 passed**.
+- Exact prescribed full suite:
+
+  ```bash
+  source /home/m2227837/miniforge3/etc/profile.d/conda.sh
+  conda activate fea
+  PYTHONDONTWRITEBYTECODE=1 TMPDIR=/tmp .venv/bin/python -m pytest \
+    -p no:cacheprovider \
+    --basetemp=/tmp/sim-intent-r5-1-third-remediation-full \
+    tests -q -ra
+  ```
+
+  Result: **1675 passed, 1 skipped, 0 failed, 0 errors**, one existing
+  Starlette/httpx deprecation warning, in **149.52 s** on the final
+  rerun. The sole skip was the Node-dependent browser-editor test because
+  Node.js is unavailable.
+- `scripts/check_env.py` reported `CCX AVAILABLE: This is Version 2.23` and
+  `ENV OK`. `scripts/export_schema.py --check`, all 35 payload-version stamps,
+  `scripts/export_requirements.py --check`, and `uv lock --check` passed.
+  Alembic sole head and current both equal `0005_mesh_domain_persistence`.
+- No database schema changed during this second remediation: migration `0005`
+  is unchanged by it, its existing populated upgrade/downgrade/re-upgrade tests
+  pass within the mesh/migration groups, migrations `0001`–`0004` are untouched,
+  and no `0006` exists.
+- Dependency/lock files have no diff. Python AST parsing passed for all changed
+  Python files. Node/npm and gitleaks are unavailable, so JavaScript syntax and
+  gitleaks execution are not claimed; the bounded repository scan found no
+  private key, credential assignment, or provider token. Docker 29.4.2 and uv
+  0.11.32 are available, but no unnecessary container rebuild was run.
+- Added absolute paths are only the prescribed Conda/ABI and `/tmp` evidence.
+  Production scope-term, generated/temp-artifact, and unexpected-untracked-file
+  scans are clean. No real meshing, Gmsh production, worker/queue, API,
+  OpenAPI/client/frontend, mapping, solver, INP-remeshing, R6, or later scope
+  entered. `git diff --check` passes. R5.1 remains unapproved and is ready only
+  for a third independent read-only verification.
+
+### Third independent verdict and exact reproduction
+
+- A third independent read-only review returned **`REJECT`** on 2026-07-31.
+  R5.1 remained unapproved.
+- Canonical-root hashing was correct, but
+  `ProcessSharedCASLock.__init__` prefixed the digest-named file with
+  `Path(tempfile.gettempdir()).resolve() / "sim-intent-cas-locks"`.
+  Therefore the same canonical CAS root produced different external paths when
+  two processes selected different temporary directories:
+
+  ```text
+  TMPDIR=/tmp
+  /tmp/sim-intent-cas-locks/<same-digest>.lock
+
+  TMPDIR=/var/tmp
+  /var/tmp/sim-intent-cas-locks/<same-digest>.lock
+  ```
+
+- The reviewer reproduced a failing-cleanup/successful-commit interleaving with:
+
+  ```text
+  ROW_COMMITTED True
+  QUALITY_BLOB_EXISTS False
+  EXACT_READ_SUCCEEDED False
+  ```
+
+  A committed MeshRevision could therefore reference a deleted quality
+  artifact despite the prior process-lock remediation.
+
+### Third-remediation stable lock-path design
+
+- `ProcessSharedCASLock` now resolves the CAS root itself, computes
+  `digest = sha256(normcase(str(canonical_root))).hexdigest()`, and derives
+  the complete path only from that durable identity:
+
+  ```text
+  <canonical-CAS-root-parent>/.sim-intent-locks/cas-<digest>.lock
+  ```
+
+- The hidden coordination directory is a sibling of the canonical CAS root,
+  outside its fixed `sha256/<2>/<2>/<digest>` final-blob namespace. Neither
+  temporary-artifact cleanup nor unreferenced-final-blob cleanup enumerates it.
+  Directory creation is recursive with owner-only mode for a new leaf;
+  symlink/non-directory coordination directories and non-regular lock paths
+  fail closed with `BlobCoordinationPathError`. A stale regular file remains
+  valid metadata because the operating-system lock, not existence, owns the
+  critical section.
+- No lock identity component uses `TMPDIR`, `tempfile.gettempdir()`, the
+  current working directory, process ID, or session state. Independent spawned
+  interpreters using different valid `TMPDIR` and working directories report
+  the exact same path for one canonical root. A symlink spelling resolves to
+  that same identity, and a different canonical root produces a different
+  digest/path.
+- The existing 10-second bounded acquisition and typed
+  `BlobCoordinationTimeoutError`, same-process re-entrancy, thread
+  serialization, process-termination release, and regular stale-file behavior
+  remain intact. Global ordering remains process-shared CAS lock → setup/domain
+  lock → SQLite transaction; no inverse acquisition was introduced.
+- Artifact schemas, topology and UUID validation, mesher-profile contracts,
+  MeshRevision schema, APIs/OpenAPI/frontend, meshing, mappings, solver behavior,
+  and R6 functionality are unchanged by this third remediation. Migration
+  `0005_mesh_domain_persistence` is unchanged, no `0006` exists, and no
+  database change is required.
+
+### Third-remediation named regressions and focused evidence
+
+- `test_process_shared_lock_path_is_stable_across_tmpdir_and_root_spellings`
+  uses spawned interpreters with distinct valid `TMPDIR` and working
+  directories. It proves exact same-root path equality, symlink convergence,
+  and different-root separation.
+- `test_different_tmpdir_processes_contend_for_same_coordination_lock` holds
+  the lock in one spawned process, observes the second process attempting but
+  not entering, then releases the holder and observes bounded entry. Events,
+  queues, joins, and explicit timeouts provide synchronization; sleeps are not
+  used as the ordering mechanism.
+- `test_cross_process_failed_cleanup_cannot_delete_committed_mesh_artifacts`
+  now assigns different valid `TMPDIR` values to the failing and successful
+  workers and reports each derived lock path. The failing worker publishes both
+  artifacts, reaches cleanup, and preserves the original
+  `ForcedMeshCreationError`; the successful worker attempts the same boundary,
+  commits after cleanup, and leaves one exact-readable row with both verified
+  blobs. A bounded entered/committed handshake deterministically exposes the
+  old split-lock path.
+- `test_stale_lock_file_is_not_ownership_after_release_or_termination` covers
+  both normal release and forced holder termination, leaves the regular lock
+  file present, and proves a new spawned process can acquire it. Parameterized
+  hazard tests reject a directory symlink, directory-as-file, and lock symlink.
+- Exact required focused commands and results:
+
+  ```text
+  .venv/bin/python -m pytest -p no:cacheprovider \
+    --basetemp=/tmp/r5-lock-identity tests/test_mesh_concurrency.py -q -ra
+  12 passed in 23.58s
+
+  .venv/bin/python -m pytest -p no:cacheprovider \
+    --basetemp=/tmp/r5-cas-atomicity tests/test_mesh_cas_atomicity.py -q -ra
+  9 passed in 2.85s
+
+  .venv/bin/python -m pytest -p no:cacheprovider \
+    --basetemp=/tmp/r5-mesh-all tests/test_mesh_*.py -q -ra
+  405 passed in 35.74s
+  ```
+
+- BlobStore/project persistence, source ingestion, setup invalidation, and
+  source supersession: **96 passed**, one existing Starlette/httpx warning, in
+  **34.08 s**. MeshRevision exact reads: **11 passed, 13 deselected** in
+  **3.53 s**. Request-ID/lineage concurrency: **3 passed, 9 deselected** in
+  **2.37 s**.
+- Explicit migration drift checks: **51 passed**. All payload-version stamp
+  tests: **107 passed**. Schema/OpenAPI: **97 passed**. Frozen fixture,
+  replay-manifest, baseline, and corpus hashes: **6 passed, 162 deselected**.
+  All 13 changed Python files parse as ASTs.
+
+### Third-remediation full-suite and environment evidence
+
+The exact prescribed full suite was:
+
+```bash
+source /home/m2227837/miniforge3/etc/profile.d/conda.sh
+conda activate fea
+
+PYTHONDONTWRITEBYTECODE=1 \
+TMPDIR=/tmp \
+.venv/bin/python -m pytest \
+-p no:cacheprovider \
+--basetemp=/tmp/sim-intent-r5-1-fourth-remediation-full \
+tests -q -ra
+```
+
+Result: **1682 passed, 1 skipped, 0 failed, 0 errors, 1 warning** in
+**171.87 s**. The exact skip was
+`tests/test_r3_2b_browser_editor.py:260`: Node.js is unavailable in this
+Python-only test environment. The warning was the existing
+`StarletteDeprecationWarning` for Starlette TestClient's deprecated httpx
+integration.
+
+The supported `fea` environment reported
+`LD_PRELOAD=/home/m2227837/miniforge3/envs/fea/lib/libstdc++.so.6` and
+`.venv/bin/python` resolved to
+`/home/m2227837/miniforge3/envs/fea/bin/python3.13`.
+`scripts/check_env.py` reported `CCX AVAILABLE: This is Version 2.23` and
+`ENV OK`. An isolated temporary database upgraded with Alembic and reported
+sole head/current `0005_mesh_domain_persistence`.
+`scripts/export_schema.py --check`, `scripts/export_requirements.py --check`,
+and `uv lock --check` passed. Node/npm and gitleaks are unavailable; JavaScript
+syntax and gitleaks execution are not claimed. Docker 29.4.2 and uv 0.11.32 are
+available; no dependency installation or container rebuild was performed.
+
+Final checks found no dependency or lockfile diff, no staged files, no patch
+backup/reject artifact, and no migration beyond `0005`. Gitleaks is unavailable;
+the corrected bounded fallback found no private-key header, provider-token
+prefix outside historical evidence prose, or credential assignment. Added
+absolute paths are limited to prescribed Conda and temporary-directory evidence.
+The sole production scope-term hit is the existing mesh-artifact docstring that
+states CAD and solver identifiers are absent. Generated-artifact scanning found
+only ignored Python caches, which are not worktree blockers. `git diff --check`
+passes.
+
+R5.1 remains uncommitted and unapproved. The remediation is ready only for a
+fourth independent read-only verification.
+
+### Fourth independent verdict and final finding
+
+- A fourth independent read-only review returned **`REJECT`** on 2026-07-31.
+  R5.1 remained unapproved.
+- Stable lock-path derivation, fail-closed path-type handling, lock ordering,
+  cross-process contention, and durable MeshRevision cleanup/commit behavior
+  were intact. However, when `_prepare_lock_path()` succeeded and the external
+  `FileLock.acquire()` operation encountered an unwritable existing
+  coordination directory, its raw filesystem exception escaped the public
+  boundary. The reviewer observed `UNWRITABLE_LOCK_ROOT_ERROR PermissionError`.
+- The failure did not enter the protected section, bypass the lock, or publish
+  a blob, but it violated the typed fail-closed contract: filesystem/path
+  acquisition failures must be `BlobCoordinationPathError`, while lock
+  contention timeouts must remain `BlobCoordinationTimeoutError`.
+
+### Final exception-boundary remediation and lock correctness
+
+- `ProcessSharedCASLock.acquire` now wraps only the external
+  `_process_lock.acquire(timeout=remaining)` operation with ordered handlers:
+  `filelock.Timeout` becomes `BlobCoordinationTimeoutError("CAS coordination
+  lock acquisition timed out")`; `OSError` (including `PermissionError` and
+  `IsADirectoryError`) becomes `BlobCoordinationPathError("CAS coordination
+  lock path is unavailable")`. Both preserve the original exception as
+  `__cause__`.
+- `_prepare_lock_path()` retains its existing typed path-error translation and
+  is not double-wrapped. The successful acquired-path check retains its
+  fail-closed behavior. Stable path derivation and the 10-second bound are
+  unchanged.
+- Both translations raise into the existing outer acquisition cleanup. Because
+  `process_acquired` is still false, it releases the in-process `RLock` exactly
+  once and does not release an unacquired external lock. Failures after a
+  successful external acquisition release both locks once. Normal release and
+  nested re-entrant acquisition are unchanged.
+- The exception boundary does not include the caller's protected block;
+  application exceptions raised inside `with coordination_lock:` remain
+  unmodified.
+- The stale `app/server.py` comment now states that BlobStore combines
+  same-process re-entrant/thread coordination with an external process-shared
+  CAS lock. `docs/environment.md` now documents typed inaccessible-path and
+  timeout failures. Neither edit changes runtime or API behavior.
+
+### Final-remediation named path-hazard regressions
+
+- `test_external_lock_acquisition_oserror_is_typed_and_releases_thread_lock`
+  deterministically injects the exact `PermissionError` object at external
+  acquisition. It asserts the stable `BlobCoordinationPathError` message,
+  identity-preserved `__cause__`, no protected-section entry, and then acquires
+  and releases the same lock successfully from a different thread. This proves
+  the thread lock is not leaked; a double release would also have changed the
+  asserted translated failure.
+- `test_external_lock_timeout_is_typed_and_releases_thread_lock` preserves the
+  distinct `filelock.Timeout` mapping, cause chaining, no-entry behavior, and
+  successful later acquisition from a different thread.
+- `test_coordination_lock_rejects_unwritable_directory` created a real
+  coordination directory, removed owner write permission, confirmed the
+  effective user could not create a probe, and ran without skipping. External
+  acquisition raised chained `BlobCoordinationPathError`; the body did not
+  execute, the lock leaf was not created, and device/inode/type checks proved
+  the directory was neither deleted nor replaced. Its original permissions
+  were restored unconditionally in `finally`.
+- `test_coordination_lock_rejects_lock_path_occupied_by_directory` created the
+  exact lock-file path as a directory and observed typed rejection before body
+  entry. Device/inode/type checks prove that unsafe directory was not removed,
+  followed, or replaced.
+- `test_coordination_lock_success_is_reentrant_and_reusable` preserves nested
+  same-process success and later cross-thread reuse. Existing regressions retain
+  coordination-directory symlink, coordination path occupied by a regular
+  file, lock-file symlink, stale regular lock files after normal/terminated
+  holders, cross-process contention, terminated-holder recovery, and thread
+  serialization.
+
+### Final-remediation focused, affected, and full-suite evidence
+
+Exact focused commands and results:
+
+```text
+.venv/bin/python -m pytest -p no:cacheprovider \
+  --basetemp=/tmp/r5-final-lock-hazards \
+  tests/test_mesh_concurrency.py -q -ra
+17 passed in 24.44s
+
+.venv/bin/python -m pytest -p no:cacheprovider \
+  --basetemp=/tmp/r5-final-cas \
+  tests/test_mesh_cas_atomicity.py -q -ra
+9 passed in 3.16s
+
+.venv/bin/python -m pytest -p no:cacheprovider \
+  --basetemp=/tmp/r5-final-mesh tests/test_mesh_*.py -q -ra
+410 passed in 38.71s
+```
+
+- BlobStore/project persistence, safe ingestion/source storage, MeshRevision
+  persistence/exact reads, setup invalidation, source supersession, and
+  same-process thread serialization: **100 passed, 1 warning** in **33.08 s**.
+- Migration drift selection: **51 passed** in **10.71 s**. Schema/OpenAPI and
+  version-contract selection: **235 passed** in **5.17 s**. All 35 checked-in
+  payload stamps are current. Frozen fixture, replay-manifest, baseline, and
+  evaluation hashes: **6 passed, 1 warning** in **2.48 s**.
+- The full prescribed command used `PYTHONDONTWRITEBYTECODE=1`, `TMPDIR=/tmp`,
+  `-p no:cacheprovider`, and
+  `--basetemp=/tmp/sim-intent-r5-1-fifth-remediation-full`. Result:
+  **1687 passed, 1 skipped, 0 failed, 0 errors, 1 warning** in **173.65 s**.
+  The exact skip was `tests/test_r3_2b_browser_editor.py:260`: Node.js is
+  unavailable in this Python-only test environment. The warning was the
+  existing Starlette/httpx TestClient deprecation.
+- The complete mesh selection includes the different-`TMPDIR` stable-identity,
+  cross-process contention, and
+  `test_cross_process_failed_cleanup_cannot_delete_committed_mesh_artifacts`
+  durability regressions; all remain green.
+
+### Final environment, integrity, and scope evidence
+
+- The supported `fea` environment retained
+  `LD_PRELOAD=/home/m2227837/miniforge3/envs/fea/lib/libstdc++.so.6`;
+  `.venv/bin/python` resolved to
+  `/home/m2227837/miniforge3/envs/fea/bin/python3.13` and reported Python
+  3.13.14. `scripts/check_env.py` reported CCX 2.23 available and `ENV OK`.
+- An isolated temporary database reported sole Alembic head/current
+  `0005_mesh_domain_persistence`. Migration drift tests passed; migration
+  `0005` was not changed by this final remediation, migrations `0001`-`0004`
+  remain untouched, and no `0006` exists. No database schema change is needed.
+- `scripts/export_schema.py --check`, `scripts/stamp_schema_versions.py
+  --check`, `scripts/export_requirements.py --check`, and `uv lock --check`
+  passed. Dependency and lock files have no diff. All 14 changed/untracked
+  Python files parse as ASTs.
+- Frozen hashes remain
+  `47c0d7275b9a065a7f5e3316ed60b7ffff58913e0b1e5045c857f663e1f6775b`
+  for the 15-case manifest and
+  `adb5201a93f4d4619a84f6b56f3e68ec12f975a345cc78e47178b0d7a719ff53`
+  for the version-aware corpus. Raw STEP and JSON fixture hashes also match
+  their frozen checkout/archive evidence.
+- Node/npm and gitleaks are unavailable. JavaScript syntax and gitleaks
+  execution are therefore not claimed. The corrected bounded filename-only
+  fallback found no private-key header, provider-token prefix, credential
+  assignment, `.env`, PEM, or key file. Docker and uv are available; no
+  install, container rebuild, or unnecessary image validation was performed.
+- Added absolute-path hits are only the prescribed Conda/ABI evidence. The
+  production added-line scope scan found no R6, real-meshing, Gmsh, worker,
+  queue, frontend, OpenAPI, solver, or CAD-to-mesh behavior. Patch backup and
+  unexpected generated-untracked scans are empty; ignored Python caches are
+  not blockers. `git diff --check` passes.
+
+Artifact contracts, topology validation, UUID and mesher-profile contracts,
+MeshRevision schema, APIs/OpenAPI/frontend behavior, meshing, CAD mapping,
+solver behavior, and R6 functionality are unchanged by this final remediation.
+R5.1 remains uncommitted and unapproved. It is ready only for a fifth
+independent read-only verification.
+
+### Fifth independent verification approval
+
+- **Verdict:** `APPROVE`
+- **Branch:** `r5-1-mesh-domain-persistence`
+- **Pre-commit HEAD:** `4e0ae349d26429c32aa44262e61ad1606580f0f2`
+- The fifth independent read-only verification completed with no unresolved
+  BLOCKER, HIGH, MEDIUM, or LOW findings. R5.1 is independently approved and
+  safe to commit locally.
+- Acquisition-time `OSError` is translated to `BlobCoordinationPathError`, and
+  timeout is translated to `BlobCoordinationTimeoutError`; both preserve their
+  exception causes. The process-local thread lock is released correctly after
+  every acquisition failure, and later acquisition succeeds after failures.
+- Path hazards fail closed. The unwritable-directory and lock-as-directory
+  regressions passed. Stable coordination-lock identity is independent of
+  `TMPDIR`; cross-process contention and the cross-process durability
+  regression passed.
+- Topology and quality artifacts remained readable. CAS atomicity passed. Prior
+  artifact, UUID, mesher-profile, ownership, currentness, lineage, idempotency,
+  and exact-read protections remained green.
+- Migration `0005_mesh_domain_persistence` remained the sole head; no migration
+  `0006` exists. No R5.2 or R6 scope creep was found, and repository state
+  matched the approved inventory.
+- Focused results: lock/concurrency **17 passed**; CAS atomicity **9 passed**;
+  all mesh tests **410 passed**; affected persistence, ingestion, supersession,
+  migration, schema, OpenAPI, and hash selection **352 passed**.
+- Full suite: **1687 passed, 1 skipped, 0 failed, 0 errors, 1 warning** in
+  **182.24 seconds**. Skip reason:
+  `tests/test_r3_2b_browser_editor.py`: Node.js unavailable in the Python-only
+  test environment. Warning: existing Starlette TestClient/httpx deprecation
+  warning.
+- Tooling limitations: Node/npm unavailable; Gitleaks unavailable. Bounded
+  fallback scans passed.
+- No remote publication was performed. Any subsequent merge or publication
+  remains a separate explicit user decision.
+
 ## Task 16 — Adopt technical-preview governance and freeze V1
 
 **Status:** COMPLETE — MERGED through pull request #1 on 2026-07-24.
