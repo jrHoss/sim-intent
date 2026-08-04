@@ -5,10 +5,11 @@
 Repository work follows this authority order:
 
 1. `release-goal.md` is the authoritative technical-preview release definition.
-2. `TECHNICAL_PREVIEW_PLAN.md` is the active execution plan. Execute its tasks in order and do not begin a task until its dependencies and the preceding gate are complete.
-3. `PROGRESS_TECHNICAL_PREVIEW.md` is the evidence ledger for Tasks 16–45.
-4. `docs/roadmap/PRODUCT_V2_ROADMAP.md` is preserved as non-blocking future direction. It does not authorize work, expand the active release, or override the technical-preview plan.
-5. `sprint-goal.md`, `EXECUTION_PLAN.md`, and `PROGRESS.md` are the frozen historical V1 scope, plan, and evidence.
+2. `LEAN_RELEASE_PLAN.md` is the active execution roadmap.
+3. `TECHNICAL_PREVIEW_PLAN.md` is retained as architectural and backlog reference only.
+4. `PROGRESS_TECHNICAL_PREVIEW.md` is the implementation-evidence ledger.
+5. `docs/roadmap/PRODUCT_V2_ROADMAP.md` is preserved as non-blocking future direction. It does not authorize work, expand the active release, or override the Lean release plan.
+6. `sprint-goal.md`, `EXECUTION_PLAN.md`, and `PROGRESS.md` are the frozen historical V1 scope, plan, and evidence.
 
 The completed V1 prototype is frozen at commit
 `154fe6ad0ac1336600d6ca5ec908d1b6c6e7401d` and local annotated tag
@@ -21,7 +22,7 @@ opportunistically.
 
 For every technical-preview task:
 
-1. Read this file, `release-goal.md`, `TECHNICAL_PREVIEW_PLAN.md`, the relevant approved decisions, and `PROGRESS_TECHNICAL_PREVIEW.md`.
+1. Read this file, `release-goal.md`, `LEAN_RELEASE_PLAN.md`, the relevant approved decisions, and `PROGRESS_TECHNICAL_PREVIEW.md`.
 2. Verify the exact branch, worktree, baseline, declared dependencies, and previous-task evidence before editing.
 3. Work on a dedicated task branch and change only the task’s approved scope.
 4. Preserve one authoritative owner for every model, unit, geometry, setup, mapping, artifact, job, and result contract. Extend or wrap existing owners; do not create parallel truth.
@@ -60,7 +61,7 @@ explicitly authorizes it.
 ## Active scope guards
 
 The technical preview is limited to the supported envelope in
-`release-goal.md` and `TECHNICAL_PREVIEW_PLAN.md`: single-solid STEP or
+`release-goal.md` and `LEAN_RELEASE_PLAN.md`: single-solid STEP or
 supported first-order solid INP input, linear-elastic isotropic small-
 displacement static structural analysis, explicit engineer review, automatic
 STEP tetrahedral meshing, existing INP meshes without remeshing, isolated local

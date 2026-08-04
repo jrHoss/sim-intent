@@ -1,33 +1,46 @@
-# NOW — R4b.3: truthful CAD selection hydration
+# NOW — R4 / R5.2 local integration complete
 
-**Branch:** `r4b3-truthful-cad-selection-hydration` (from `b8a6215`)
+**Active branch:** `integration-r4-r5-2`
 
-## Goal
+**R4 completed baseline:**
+`6b8abf2c24629b8161a38db824ca7de652053866`
 
-Reconcile the durable browser and the durable API's selection projection with
-the R4b.2 SimulationIntent v3 stable-CAD-region contract, so an engineer can
-click a STEP face, see truthful evidence of what was selected and whether it is
-authoritative, confirm it, and reopen it unchanged after restart — with the
-backend remaining the sole stable-identity authority.
+**R5.2 completed baseline:**
+`7e4b7c2dfbec87108c3ec4c4bb6c572aeb181ecb`
 
-## In scope
+**Local integration merge commit:**
+`ec49c6232ba5026385d9f6951635d70148e984f0`
 
-- Additive `cad_selection_evidence` projection on `SetupRevisionResponse`.
-- Route-layer resolution of unresolved CAD claims on durable create and mutate.
-- Browser: schema version 3, unresolved `cad_face_target` on STEP clicks, no CAD
-  `entity_ids`, canonical source-tag comparison, v3-safe rendering, specific
-  problem-code messages, live selection evidence.
-- Executable browser harness and non-skippable frontend CI coverage.
+**Merge subject:** `merge: integrate R4 stable CAD and R5.2 meshing`
 
-## Out of scope
+## Status
 
-- R5 meshing and R6 CAD-to-mesh mapping.
-- Any change to the geometry fingerprint algorithm or identity authority.
-- Any migration or DDL change. Alembic head stays `0005`, SimulationIntent stays
-  schema version 3, `API_CONTRACT_VERSION` stays 1.
+R4 and R5.2 integration is complete locally. The merge commit exists only
+locally on `integration-r4-r5-2`.
 
-## Done when
+The first independent review returned `REQUEST CHANGES`. It identified one
+HIGH downgrade-atomicity defect and one LOW documentation defect. The migration
+and documentation findings were both remediated. The second independent review
+returned `APPROVE`, with no BLOCKER, HIGH, MEDIUM, or LOW finding remaining.
 
-A viewer-created CAD region is resolved by the backend, confirmable, and
-byte-identical after restart and reopen; source replacement reports an invalid
-viewer binding without rebinding; and no browser path emits CAD `entity_ids`.
+The approved full suite collected 1,891 tests: 1,890 passed, one expected
+optional CalculiX parse-run skipped because `ccx` is not installed, zero failed,
+and zero errored. All five JavaScript syntax checks and both the R3.2b and R4b.3
+DOM harnesses passed. Generated TypeScript, OpenAPI, and JSON Schema are
+drift-free, all 35 schema-versioned payloads are current, and `uv lock --check`
+passed.
+
+Alembic has the sole head `0006_merge_r4_r5_heads`. Downgrade refusal is atomic
+from both the merged-head state and a database stamped with the two independent
+`0005` heads; safe empty-database downgrade remains valid.
+
+## Integration boundary
+
+R4 stable CAD authority is preserved. R5 exact mesh identity, replay, lineage,
+and compare-and-swap guarantees are preserved. CAD-to-mesh boundary mapping
+remains deferred. No public mesh API, frontend meshing workflow, or CAD-to-mesh
+mapping was added.
+
+No push, tag, protected-branch update, remote merge, publication, or release
+occurred. Any later push, pull request, remote merge, tag, publication, or
+release requires separate explicit authorization.

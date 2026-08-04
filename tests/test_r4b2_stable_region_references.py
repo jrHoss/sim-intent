@@ -1946,7 +1946,7 @@ def test_populated_v2_downgrade_and_reupgrade_are_safe(tmp_path):
     with engine.connect() as connection:
         assert connection.scalar(
             text("SELECT version_num FROM alembic_version")
-        ) == "0005_stable_cad_region_references"
+        ) == "0006_merge_r4_r5_heads"
         after_triggers = _trigger_snapshot(connection)
         after_data = _data_snapshot(connection)
     assert after_triggers == before_triggers

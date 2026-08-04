@@ -5,11 +5,14 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import stat
 import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Iterator
+
+from filelock import FileLock, Timeout
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 ENTRY_RACE_ERRORS = (
@@ -19,7 +22,9 @@ ENTRY_RACE_ERRORS = (
     PermissionError,
 )
 _LOCKS_GUARD = threading.Lock()
-_STORAGE_LOCKS: dict[str, threading.RLock] = {}
+_STORAGE_LOCKS: dict[str, "ProcessSharedCASLock"] = {}
+CAS_LOCK_TIMEOUT_SECONDS = 10.0
+CAS_LOCK_DIRECTORY_NAME = ".sim-intent-locks"
 
 
 class BlobIntegrityError(RuntimeError):
@@ -30,13 +35,119 @@ class SourceStorageLimitExceededError(RuntimeError):
     pass
 
 
+class BlobCoordinationTimeoutError(RuntimeError):
+    """The bounded process-shared CAS coordination lock was unavailable."""
+
+
+class BlobCoordinationPathError(RuntimeError):
+    """The durable CAS coordination path is not a safe local file path."""
+
+
+class ProcessSharedCASLock:
+    """Re-entrant thread and process coordination for one canonical CAS root.
+
+    Lock ordering is always this CAS lock before persistence-specific locks and
+    database transactions.  The in-process RLock makes one shared FileLock
+    instance safe for threads and preserves nested BlobStore call paths; the
+    external advisory lock closes the same publication/commit/cleanup race
+    across independent processes.  Lock files are siblings of the canonical
+    CAS root, outside its ``sha256`` namespace, and may remain after release
+    because operating-system ownership is authoritative.
+    """
+
+    def __init__(self, root: Path):
+        self.root = Path(root).resolve()
+        identity = os.path.normcase(str(self.root))
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        self.lock_directory = self.root.parent / CAS_LOCK_DIRECTORY_NAME
+        self.path = self.lock_directory / f"cas-{digest}.lock"
+        self._thread_lock = threading.RLock()
+        self._process_lock = FileLock(
+            self.path, timeout=CAS_LOCK_TIMEOUT_SECONDS
+        )
+
+    def _prepare_lock_path(self) -> None:
+        try:
+            self.lock_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            directory_mode = self.lock_directory.lstat().st_mode
+            if not stat.S_ISDIR(directory_mode):
+                raise BlobCoordinationPathError(
+                    "CAS coordination lock directory is not a real directory"
+                )
+            try:
+                lock_mode = self.path.lstat().st_mode
+            except FileNotFoundError:
+                return
+            if not stat.S_ISREG(lock_mode):
+                raise BlobCoordinationPathError(
+                    "CAS coordination lock path is not a regular file"
+                )
+        except BlobCoordinationPathError:
+            raise
+        except OSError as exc:
+            raise BlobCoordinationPathError(
+                "CAS coordination lock path is unavailable"
+            ) from exc
+
+    def _verify_acquired_lock_path(self) -> None:
+        try:
+            lock_mode = self.path.lstat().st_mode
+        except OSError as exc:
+            raise BlobCoordinationPathError(
+                "CAS coordination lock path is unavailable"
+            ) from exc
+        if not stat.S_ISREG(lock_mode):
+            raise BlobCoordinationPathError(
+                "CAS coordination lock path is not a regular file"
+            )
+
+    def acquire(self) -> None:
+        deadline = time.monotonic() + CAS_LOCK_TIMEOUT_SECONDS
+        if not self._thread_lock.acquire(timeout=CAS_LOCK_TIMEOUT_SECONDS):
+            raise BlobCoordinationTimeoutError(
+                "CAS coordination lock acquisition timed out"
+            )
+        process_acquired = False
+        try:
+            self._prepare_lock_path()
+            remaining = max(0.0, deadline - time.monotonic())
+            try:
+                self._process_lock.acquire(timeout=remaining)
+            except Timeout as exc:
+                raise BlobCoordinationTimeoutError(
+                    "CAS coordination lock acquisition timed out"
+                ) from exc
+            except OSError as exc:
+                raise BlobCoordinationPathError(
+                    "CAS coordination lock path is unavailable"
+                ) from exc
+            process_acquired = True
+            self._verify_acquired_lock_path()
+        except Exception:
+            if process_acquired:
+                self._process_lock.release()
+            self._thread_lock.release()
+            raise
+
+    def release(self) -> None:
+        self._process_lock.release()
+        self._thread_lock.release()
+
+    def __enter__(self) -> "ProcessSharedCASLock":
+        self.acquire()
+        return self
+
+    def __exit__(self, *_args) -> None:
+        self.release()
+
+
 class BlobStore:
     def __init__(self, root: str | Path):
         self.root = Path(root).resolve()
         lock_key = os.path.normcase(str(self.root))
         with _LOCKS_GUARD:
             self.coordination_lock = _STORAGE_LOCKS.setdefault(
-                lock_key, threading.RLock()
+                lock_key, ProcessSharedCASLock(self.root)
             )
 
     @staticmethod
@@ -86,6 +197,43 @@ class BlobStore:
                     raise
             self._verify_path(final, expected_digest)
             return key
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def publish_with_status(
+        self, content: bytes, expected_digest: str
+    ) -> tuple[str, bool, bool]:
+        """Return key, pre-operation existence, and exact creation status."""
+
+        self._validate_digest(expected_digest)
+        if self.digest(content) != expected_digest:
+            raise BlobIntegrityError("content does not match expected SHA-256")
+        key = self.key(expected_digest)
+        final = self.path_for_key(key)
+        final.parent.mkdir(parents=True, exist_ok=True)
+        existed_before = final.exists()
+        if existed_before:
+            self._verify_path(final, expected_digest)
+            return key, True, False
+
+        fd, temporary_name = tempfile.mkstemp(prefix=".upload-", dir=final.parent)
+        temporary = Path(temporary_name)
+        created = False
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            self._verify_path(temporary, expected_digest)
+            try:
+                # Same-directory hard-link creation is atomic and, unlike
+                # replacement, identifies exactly which process created the leaf.
+                os.link(temporary, final)
+                created = True
+            except FileExistsError:
+                created = False
+            self._verify_path(final, expected_digest)
+            return key, existed_before, created
         finally:
             temporary.unlink(missing_ok=True)
 

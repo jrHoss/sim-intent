@@ -140,9 +140,24 @@ operating-system lock named `<hash>.lock` under the dedicated
 The lock is held for the complete application lifespan. A second process must
 use a different absolute `SIM_INTENT_DATA_ROOT` or wait for the owner to exit.
 The external lock file can remain after a crash; operating-system lock
-ownership, rather than file existence, determines availability. Thread-level
-blob publication and cleanup are additionally serialized by an in-process
-lock, but that lock is not the cross-process ownership mechanism.
+ownership, rather than file existence, determines availability.
+Blob publication, referencing database commits, and cleanup are additionally
+serialized by a re-entrant, bounded process-shared CAS lock. For a canonical
+blob root, its exact path is
+`<blob-root-parent>/.sim-intent-locks/cas-<sha256(normcase(blob-root))>.lock`.
+The hidden coordination directory is a sibling of `blobs/`, outside the
+`blobs/sha256/` artifact namespace and its cleanup scans. Its identity does
+not depend on `TMPDIR`, the working directory, a process, or a session;
+resolved and symlinked spellings converge, while different canonical blob
+roots retain different digest-named lock files. Unsafe, inaccessible, symlink,
+and non-directory coordination paths fail closed with
+`BlobCoordinationPathError`, while bounded contention fails with
+`BlobCoordinationTimeoutError`. A stale regular lock file is safe because
+operating-system ownership remains authoritative. Lock ordering is CAS lock
+before any persistence-specific lock and SQLite transaction. The application-
+lifespan data-root lock remains the primary single-owner deployment boundary;
+the CAS lock also protects lower-level persistence and maintenance paths
+instantiated outside that lifespan boundary.
 
 Durable STEP/INP uploads are streamed to `quarantine/` under the same data
 root and published to `blobs/` only after isolated parsing succeeds.
@@ -154,6 +169,10 @@ root and published to `blobs/` only after isolated parsing succeeds.
 | `SIM_INTENT_QUARANTINE_DIR` | `<data-root>/quarantine` |
 | `SIM_INTENT_PARSER_TIMEOUT_SECONDS` | 30 |
 | `SIM_INTENT_PARSER_OUTPUT_BYTES` | 262144 per output stream |
+| `SIM_INTENT_MESHER_TIMEOUT_SECONDS` | 120 |
+| `SIM_INTENT_MESHER_OUTPUT_BYTES` | 67108864 per output stream |
+| `SIM_INTENT_GMSH_SLOT_WAIT_SECONDS` | 5 |
+| `SIM_INTENT_GMSH_SLOT_MAX_PENDING` | 2 (one active plus one waiter) |
 | `SIM_INTENT_STALE_QUARANTINE_AGE_SECONDS` | 3600 |
 | `SIM_INTENT_STALE_QUARANTINE_CLEANUP_LIMIT` | 100 |
 
@@ -171,11 +190,31 @@ evicted automatically.
 Integer limits must be positive and the stale age non-negative; invalid values
 must also be finite. Quarantine must be an absolute directory beneath the data
 root, but outside the blob/CAS tree, SQLite path, and external lock tree;
-invalid settings fail startup configuration. The parser uses a controlled argument vector, a
-minimal environment, a deterministic working directory, and no shell. This
-fresh-process boundary contains parser crashes and global library state, but
-is not a hostile sandbox. OS-level CPU and memory quotas remain deferred
-reliability/security work.
+invalid settings fail startup configuration.
+
+R5.2 enforces these parser/mesher worker boundaries:
+
+- a fresh subprocess for each operation;
+- argument-vector execution without a shell;
+- a configured timeout with process-group termination;
+- independently bounded captured stdout and stderr;
+- a bounded structured response;
+- an isolated temporary operation directory with deterministic cleanup; and
+- shared single-process Gmsh coordination for STEP parsing and meshing.
+
+R5.2 does not enforce:
+
+- an operating-system CPU quota;
+- an operating-system memory quota;
+- a filesystem or disk quota;
+- a network namespace or no-network sandbox;
+- a cross-process/global coordinator spanning multiple backend processes; or
+- hostile-upload operating-system sandboxing.
+
+The supported deployment currently uses one backend process, so the shared
+in-process coordinator applies to the supported configuration. Fresh workers
+contain worker crashes and Gmsh global library state, but this boundary is not
+a hostile sandbox and must not be described as stronger isolation.
 
 ### Supported Linux container (release environment)
 
